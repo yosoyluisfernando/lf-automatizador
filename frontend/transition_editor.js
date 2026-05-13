@@ -225,3 +225,31 @@ document.getElementById('btn-cancel').addEventListener('click', () => window.clo
 document.getElementById('btn-save').addEventListener('click', () => {
     ipcRenderer.send('save-transition', { trackA: trackData.trackA, mixPoint: (bufferA.duration + mixPointA).toFixed(3) });
 });
+
+
+// Control de Scroll para inputs numéricos (Global)
+document.addEventListener('wheel', (e) => {
+    if (e.target.tagName === 'INPUT' && e.target.type === 'number') {
+        e.preventDefault();
+        const input = e.target;
+        if (input.disabled || input.readOnly) return;
+        
+        const step = parseFloat(input.getAttribute('step')) || 1;
+        let val = parseFloat(input.value) || 0;
+        
+        if (e.deltaY < 0) val += step;
+        else val -= step;
+        
+        const min = input.getAttribute('min');
+        if (min !== null && val < parseFloat(min)) val = parseFloat(min);
+        const max = input.getAttribute('max');
+        if (max !== null && val > parseFloat(max)) val = parseFloat(max);
+        
+        const stepStr = step.toString();
+        const decimalPlaces = stepStr.includes('.') ? stepStr.split('.')[1].length : 0;
+        input.value = val.toFixed(decimalPlaces);
+        
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+}, { passive: false });

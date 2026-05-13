@@ -355,7 +355,7 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
 .setting-row.indent { padding-left: 20px; }
 .setting-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
-.dark-number { background: #111; color: #fff; border: 1px solid #444; padding: 4px 6px; border-radius: 3px; width: 58px; text-align: right; outline: none; }
+.dark-number { background: #111; color: #fff; border: 1px solid #444; padding: 4px 2px; padding-left: 6px; border-radius: 3px; width: 68px; text-align: center; outline: none; }
 .dark-number:focus { border-color: #00a8ff; }
 .dark-select { background: #111; color: #fff; border: 1px solid #444; padding: 5px; border-radius: 3px; outline: none; width: 100%; font-size: 13px; }
 

@@ -5518,18 +5518,27 @@ function dbToLinear(db) {
 
 function getCrossfadeConfig(typeData, filePath) {
     const mc = filePath ? (manualCuesDB[filePath] || {}) : {};
-    const fadein = typeData?.fadeinActive ? (parseFloat(typeData.fadein) || 0)
-        : (generalPrefs.chk_mus_fadein ? (parseFloat(generalPrefs.num_mus_fadein) || 0) : 0);
-    const fadeoutStop = typeData?.fadeoutStopActive ? (parseFloat(typeData.fadeoutStop) || 0)
-        : (generalPrefs.chk_mus_fadeout_stop ? (parseFloat(generalPrefs.num_mus_fadeout_stop) || 0) : 0);
-    const fadeoutNext = typeData?.fadeoutNextActive ? (parseFloat(typeData.fadeoutNext) || 0)
-        : (generalPrefs.chk_mus_fadeout_next ? (parseFloat(generalPrefs.num_mus_fadeout_next) || 0) : 0);
-    const mixTrigger = typeData?.mixActive ? (parseFloat(typeData.mix) || 0)
-        : (generalPrefs.chk_mus_mix ? (parseFloat(generalPrefs.num_mus_mix) || 0) : 0);
-    const mixFadeout = typeData?.mixFadeoutActive ? (parseFloat(typeData.fadeoutNext) || fadeoutNext)
-        : (generalPrefs.chk_mus_mix_fadeout ? (parseFloat(generalPrefs.num_mus_fadeout_next) || fadeoutNext) : fadeoutNext);
-    const ampDb = parseFloat(typeData?.amp) || 0;
+    
+    let fadein = 0, fadeoutStop = 0, fadeoutNext = 0, mixTrigger = 0, mixFadeout = 0, ampDb = 0;
+
+    if (typeData) {
+        fadein = typeData.fadeinActive ? (parseFloat(typeData.fadein) || 0) : 0;
+        fadeoutStop = typeData.fadeoutStopActive ? (parseFloat(typeData.fadeoutStop) || 0) : 0;
+        fadeoutNext = typeData.fadeoutNextActive ? (parseFloat(typeData.fadeoutNext) || 0) : 0;
+        mixTrigger = typeData.mixActive ? (parseFloat(typeData.mix) || 0) : 0;
+        mixFadeout = fadeoutNext;
+        ampDb = parseFloat(typeData.amp) || 0;
+    } else {
+        fadein = generalPrefs.chk_mus_fadein ? (parseFloat(generalPrefs.num_mus_fadein) || 0) : 0;
+        fadeoutStop = generalPrefs.chk_mus_fadeout_stop ? (parseFloat(generalPrefs.num_mus_fadeout_stop) || 0) : 0;
+        fadeoutNext = generalPrefs.chk_mus_fadeout_next ? (parseFloat(generalPrefs.num_mus_fadeout_next) || 0) : 0;
+        mixTrigger = generalPrefs.chk_mus_mix ? (parseFloat(generalPrefs.num_mus_mix) || 0) : 0;
+        mixFadeout = fadeoutNext;
+        ampDb = 0;
+    }
+
     const mixAbsolute = parseFiniteCueValue(mc.mix);
+    
     return { fadein, fadeoutStop, fadeoutNext, mixTrigger, mixFadeout, ampDb, mixAbsolute };
 }
 
