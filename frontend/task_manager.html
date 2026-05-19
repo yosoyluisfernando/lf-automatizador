@@ -87,11 +87,24 @@
         }
         .active { color: #2ecc71; font-weight: 700; }
         .idle { color: #8795a3; }
+        .badge-dev {
+            display: inline-block;
+            padding: 2px 6px;
+            background: #d35400;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            border-radius: 4px;
+            text-transform: uppercase;
+            margin-left: 8px;
+            vertical-align: middle;
+            letter-spacing: 0.05em;
+        }
     </style>
 </head>
 <body>
     <header>
-        <h2>Administrador de tareas LF</h2>
+        <h2>Administrador de tareas LF <span class="badge-dev">En desarrollo</span></h2>
         <div class="sub">Vista de diagnostico. Solo lectura, se cierra al perder foco.</div>
     </header>
     <section class="summary">
@@ -129,6 +142,9 @@
             <tbody id="worker-body"></tbody>
         </table>
     </main>
+    <footer style="padding: 10px 16px; font-size: 11px; color: #8795a3; border-top: 1px solid #252d36; background: #111419; line-height: 1.4; text-align: justify;">
+        * Nota: Los valores de uso de CPU y RAM son estimaciones del motor interno de Chromium (Electron) y pueden no ser 100% exactos con respecto a los medidos de manera nativa por el Administrador de tareas de Windows.
+    </footer>
     <script src="task_manager.js"></script>
 </body>
 </html>
