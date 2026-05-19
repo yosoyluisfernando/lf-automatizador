@@ -8309,7 +8309,11 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             //   4) Escucha `timeLocutionEnded` (listener IPC al final del
             //      archivo) para avanzar la playlist.
             const folder = generalPrefs.timeFolder;
-            if (!folder || !fs.existsSync(folder)) { haltPlaybackOnFatalError('La carpeta de Hora no existe.'); return; }
+            if (!folder || !fs.existsSync(folder)) { 
+                logSystem(`[SKIP] La carpeta de Hora no existe. Saltando...`);
+                setTimeout(() => playNext(false), 500);
+                return; 
+            }
 
             currentTrackConfig = getCrossfadeConfig(getTrackTypeData('dummy.saytime'), null);
             setPlayerPlaybackMeta(activePlayer, {
@@ -8411,7 +8415,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             if (!result?.ok) {
                 rustTimeLocutionContext = null;
                 isPlaylistTimeActive = false;
-                haltPlaybackOnFatalError(`Rust no pudo lanzar la locucion de hora: ${result?.error || 'sin detalle'}`);
+                logSystem(`[SKIP] Rust no pudo lanzar la locucion de hora: ${result?.error || 'sin detalle'}. Saltando...`);
+                setTimeout(() => playNext(false), 500);
                 return;
             }
             const startedMsg = result.result?.message || {};
@@ -8478,8 +8483,16 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     delete tr.dataset.resolvedRandomPath;
                     delete tr.dataset.resolvedRandomName;
                     delete tr.dataset.resolvedRandomDuration;
-                } else { haltPlaybackOnFatalError('No se pudo resolver la pista aleatoria.'); return; }
-            } catch (e) { haltPlaybackOnFatalError(`Error resolviendo pista aleatoria: ${e.message || e}`); return; }
+                } else { 
+                    logSystem('[SKIP] No se pudo resolver la pista aleatoria. Saltando...');
+                    setTimeout(() => playNext(false), 500);
+                    return; 
+                }
+            } catch (e) { 
+                logSystem(`[SKIP] Error resolviendo pista aleatoria: ${e.message || e}. Saltando...`);
+                setTimeout(() => playNext(false), 500);
+                return; 
+            }
         }
 
         if (!manualCuesDB[rutaFisica] || manualCuesDB[rutaFisica].is_remix === undefined) {
