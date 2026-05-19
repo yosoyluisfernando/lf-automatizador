@@ -467,16 +467,25 @@ impl Default for DspParams {
             //   Post-comp:                    -16.3 dB
             //   Makeup +14 dB:                -2.3 dB ← cerca de -1 dBFS
             //
-            // Con picos en -6 dBFS:
-            //   Exceso: 12 dB → reducción 8 dB → post-comp -14 dB
-            //   Makeup +14 dB → 0 dB → Limitador lo topa en -0.3 dBFS
-            comp_threshold_db_bits: AtomicU32::new((-18.0_f32).to_bits()),
-            comp_ratio_bits: AtomicU32::new(3.0_f32.to_bits()),
+            // Matemática con música típica a -13 dBFS:
+            //   Exceso sobre threshold (-22): 9 dB
+            //   Reducción (ratio 4:1):        9 × (3/4) = 6.75 dB
+            //   Post-comp:                    -19.75 dBFS
+            //   Makeup +15.5 dB:              -4.25 dBFS (RMS muy lleno y rico)
+            //
+            // Con música ya saturada/fuerte en picos de -1 dBFS:
+            //   Exceso sobre threshold (-22): 21 dB
+            //   Reducción (ratio 4:1):        21 × (3/4) = 15.75 dB
+            //   Post-comp:                    -16.75 dBFS
+            //   Makeup +15.5 dB:              -1.25 dBFS ← ¡Se mantiene estable bajo -1 dBFS sin distorsionar ni comprimir de forma destructiva!
+            //   El Limitador protector de -1.0 dBFS nunca se activa con clipping duro.
+            comp_threshold_db_bits: AtomicU32::new((-22.0_f32).to_bits()),
+            comp_ratio_bits: AtomicU32::new(4.0_f32.to_bits()),
             comp_attack_ms_bits: AtomicU32::new(30.0_f32.to_bits()),
             comp_release_ms_bits: AtomicU32::new(800.0_f32.to_bits()),
             comp_knee_db_bits: AtomicU32::new(6.0_f32.to_bits()),
-            comp_makeup_db_bits: AtomicU32::new(14.0_f32.to_bits()),
-            limiter_ceiling_db_bits: AtomicU32::new((-0.3_f32).to_bits()),
+            comp_makeup_db_bits: AtomicU32::new(15.5_f32.to_bits()),
+            limiter_ceiling_db_bits: AtomicU32::new((-1.0_f32).to_bits()),
             limiter_release_ms_bits: AtomicU32::new(100.0_f32.to_bits()),
             // postFx por defecto (consistente con state.encoder_source_mode).
             encoder_tap_mode: AtomicU8::new(1),
