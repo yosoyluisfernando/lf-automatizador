@@ -1,3 +1,9 @@
+// ATENCION PARA PROGRAMADORES Y ASISTENTES DE IA:
+// Este renderer esta en proceso de reduccion y debe actuar como vista/control
+// remoto. Eviten agregar aqui trabajo pesado, calculos de flujo o decisiones
+// de motor. Si un cambio depende de esa logica, corrijan lo urgente y
+// recomienden migrarlo a Rust, al backend o a la dependencia especializada que
+// corresponda.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
