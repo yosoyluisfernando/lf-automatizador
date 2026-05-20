@@ -1,4 +1,4 @@
-// ATENCION PARA PROGRAMADORES Y ASISTENTES DE IA:
+// ATENCION PROGRAMADORES Y ASISTENTES DE IA:
 // Este renderer esta en proceso de reduccion y debe actuar como vista/control
 // remoto. Eviten agregar aqui trabajo pesado, calculos de flujo o decisiones
 // de motor. Si un cambio depende de esa logica, corrijan lo urgente y
