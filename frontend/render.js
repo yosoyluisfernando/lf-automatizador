@@ -598,7 +598,7 @@ function syncRustPlaylistMode() {
 function syncRustPlaylistPlaybackContext(playerIdOverride = null) {
     commandRustControlPlane('playlistPlaybackContext', {
         currentRowId: currentPlayingRow ? ensurePlaylistRowId(currentPlayingRow) : '',
-        currentPlayer: playerIdOverride || getPlaylistPlayerId(activePlayer),
+        currentPlayer: playerIdOverride || activeRustPlaylistDeckId || getPlaylistPlayerId(activePlayer),
         queuedRowId: queuedNextRow ? ensurePlaylistRowId(queuedNextRow) : '',
         pgmTab
     }).catch(() => {});
@@ -1305,6 +1305,7 @@ const RUST_PLAYLIST_DECK_IDS = ['player-a', 'player-b', 'player-c'];
 const rustMonitorMirrorState = new Map();
 let currentPlaybackStartCause = 'idle';
 let rustPlaylistDeckCursor = 0;
+let activeRustPlaylistDeckId = '';
 
 function getActivePlaybackFilePath() {
     const metaPath = getPlayerPlaybackMeta(activePlayer)?.filePath;
@@ -8765,6 +8766,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         cancelPendingPlayerStop(fadingPlayer);
         cancelPendingPlayerStop(activePlayer);
         const currentRustPlayerId = isRustPlaylistOwnerEnabled() ? reserveRustPlaylistDeckId() : '';
+        activeRustPlaylistDeckId = currentRustPlayerId;
         assignPlayerToPlaylistBus(activePlayer, getPlaylistIndexFromRow(tr));
         assignPlayerToPlaylistBus(fadingPlayer, getPlaylistIndexFromRow(previousPlayingRow || tr));
         clearPlayerPlaybackMeta(activePlayer);
@@ -9520,7 +9522,7 @@ function stopAll() {
     } else if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
         currentPlayingRow.classList.remove('row-active');
     }
-    currentPlayingRow = null; trackStartTime = null; crossfadeTriggered = false; crossfadeTriggeredForRow = null; isPlaylistTimeActive = false; rustTimeLocutionContext = null;
+    currentPlayingRow = null; trackStartTime = null; crossfadeTriggered = false; crossfadeTriggeredForRow = null; isPlaylistTimeActive = false; rustTimeLocutionContext = null; activeRustPlaylistDeckId = '';
     queuedNextRow = preservedQueuedNextRow && document.body.contains(preservedQueuedNextRow) ? preservedQueuedNextRow : null;
     const txtT = document.getElementById('txt-tiempo'); if (txtT) { txtT.innerText = "00:00.0"; txtT.classList.remove('time-warning-blue', 'time-warning-red', 'time-flash'); }
     clearAirTimeSegmentState();
