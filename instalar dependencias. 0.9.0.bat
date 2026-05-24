@@ -212,7 +212,6 @@ echo Todas las dependencias han sido instaladas correctamente.
 echo Ya puedes disfrutar de LF Automatizador.
 echo.
 echo Iniciando programa en 3 segundos...
-timeout /t 3 >nul
+ping 127.0.0.1 -n 4 >nul
 start "" "Iniciar automatizador 0.9.0.bat"
 exit
-
