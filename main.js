@@ -138,12 +138,8 @@ try { db.prepare("ALTER TABLE tracks ADD COLUMN file_mtime_ms INTEGER").run(); }
 
 let ffmpegPath = 'ffmpeg';
 try { 
-    if (process.platform === 'win32') {
-        ffmpegPath = require('ffmpeg-static') || 'ffmpeg'; 
-        ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-    } else {
-        ffmpegPath = 'ffmpeg'; // Usar el nativo del sistema en Linux/Mac
-    }
+    ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
+    ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
 } catch (e) {}
 const rustAudioEngine = new RustAudioEngineProbe({
     rootDir: __dirname,

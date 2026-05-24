@@ -7,22 +7,22 @@ const db = require('../database');
 
 let ffmpegPath = 'ffmpeg';
 try { 
-    if (process.platform === 'win32') {
-        ffmpegPath = require('ffmpeg-static') || 'ffmpeg'; 
-        ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-    } else {
-        ffmpegPath = 'ffmpeg'; // Usar el nativo del sistema en Linux/Mac
-    }
+    ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
+    ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
 } catch (err) {}
 
 function resolveRustAudioEnginePath() {
     const rootDir = path.resolve(__dirname, '..');
     const ext = process.platform === 'win32' ? '.exe' : '';
+    const resourcesDir = process.resourcesPath ? path.resolve(process.resourcesPath) : '';
     const candidates = [
+        resourcesDir ? path.join(resourcesDir, 'bin', `lf-audio-engine${ext}`) : '',
+        path.join(rootDir.replace('app.asar', 'app.asar.unpacked'), 'bin', `lf-audio-engine${ext}`),
+        path.join(rootDir, 'bin', `lf-audio-engine${ext}`),
         path.join(rootDir, 'audio-engine-rust', 'target', 'release', `lf-audio-engine${ext}`),
         path.join(rootDir, 'audio-engine-rust', 'target', 'debug', `lf-audio-engine${ext}`)
     ];
-    return candidates.find(candidate => fs.existsSync(candidate)) || '';
+    return candidates.find(candidate => candidate && fs.existsSync(candidate)) || '';
 }
 
 const rustAudioEnginePath = resolveRustAudioEnginePath();

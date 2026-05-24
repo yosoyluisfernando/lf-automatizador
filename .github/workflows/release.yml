@@ -11,8 +11,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform: win
+            npm_script: dist:win
+          - os: ubuntu-latest
+            platform: linux
+            npm_script: dist:linux
 
     steps:
       - name: Checkout Code
@@ -22,22 +29,38 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install Linux Dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config fakeroot dpkg libx11-dev libxkbfile-dev
+          sudo apt-get install -y \
+            build-essential \
+            python3 \
+            make \
+            g++ \
+            pkg-config \
+            fakeroot \
+            dpkg \
+            libasound2-dev \
+            libx11-dev \
+            libxkbfile-dev \
+            libxi-dev \
+            libxtst-dev \
+            libudev-dev
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          workspaces: audio-engine-rust
 
       - name: Compile Rust Engine (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.platform == 'win'
         shell: bash
         run: |
           cd audio-engine-rust
@@ -46,26 +69,31 @@ jobs:
           cp target/release/lf-audio-engine.exe ../bin/
 
       - name: Compile Rust Engine (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.platform == 'linux'
         shell: bash
         run: |
           cd audio-engine-rust
           cargo build --release
           mkdir -p ../bin
           cp target/release/lf-audio-engine ../bin/
+          chmod +x ../bin/lf-audio-engine
 
       - name: Install NPM Dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Build Electron App
+      - name: Rebuild Native Node Modules
+        run: npx electron-rebuild -f -w better-sqlite3
+
+      - name: Build Electron App (${{ matrix.platform }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist
+        run: npm run ${{ matrix.npm_script }}
         
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lf-automatizador-${{ matrix.os }}
+          name: lf-automatizador-${{ matrix.platform }}-${{ runner.arch }}
+          if-no-files-found: error
           path: |
             dist/*.exe
             dist/*.deb

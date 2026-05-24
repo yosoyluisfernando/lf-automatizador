@@ -6,7 +6,9 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage deb"
   },
   "author": "Luis Fernando",
   "license": "ISC",
@@ -30,19 +32,65 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "database.js",
+      "backend/**/*",
+      "frontend/**/*",
+      "assets/**/*",
+      "Documentación/**/*",
+      "bin/**/*",
+      "icon.ico",
+      "icon.png",
+      "package.json"
+    ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**/*",
+      "node_modules/better-sqlite3/**/*",
       "bin/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "AudioVideo"
+      "category": "AudioVideo",
+      "icon": "icon.png",
+      "executableName": "lf-automatizador",
+      "maintainer": "Luis Fernando"
+    },
+    "deb": {
+      "depends": [
+        "libasound2 | libasound2t64",
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "libnotify4",
+        "libayatana-appindicator3-1 | libappindicator3-1",
+        "xdg-utils"
+      ]
     }
   }
 }

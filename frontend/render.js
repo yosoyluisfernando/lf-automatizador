@@ -8352,17 +8352,49 @@ setInterval(updateClock, 1000);
 updateClock();
 
 // --- Weather Update Logic ---
+const weatherJsonPath = path.join(configDir, 'weather.json');
+const WEATHER_REFRESH_MS = 15 * 60 * 1000;
 window.currentWeather = { temp: null, hum: null, lastUpdate: 0, unitSym: '' };
 
-async function fetchWeatherBackground() {
+function updateWeatherWidgets() {
+    const tempW = document.getElementById('temp-widget');
+    const humW = document.getElementById('hum-widget');
+    if (tempW && window.currentWeather.temp !== null) tempW.innerText = `\u{1f321}\ufe0f ${window.currentWeather.temp} ${window.currentWeather.unitSym}`;
+    if (humW && window.currentWeather.hum !== null) humW.innerText = `\u{1f4a7} ${window.currentWeather.hum} %`;
+}
+
+function loadCachedWeather() {
+    try {
+        if (!fs.existsSync(weatherJsonPath)) return;
+        const cached = JSON.parse(fs.readFileSync(weatherJsonPath, 'utf8'));
+        if (cached && cached.temp !== null && cached.hum !== null) {
+            window.currentWeather = { ...window.currentWeather, ...cached };
+            updateWeatherWidgets();
+        }
+    } catch (err) { }
+}
+
+async function resolveWeatherCoordinates(city) {
+    const lat = Number(generalPrefs.weatherLatitude);
+    const lon = Number(generalPrefs.weatherLongitude);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return { latitude: lat, longitude: lon };
+    const queryCity = String(city || '').split(',')[0].trim();
+    if (!queryCity) return null;
+    const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(queryCity)}&count=1&language=es&format=json`);
+    const geoData = await geoRes.json();
+    if (!geoData.results || geoData.results.length === 0) return null;
+    return geoData.results[0];
+}
+
+async function fetchWeatherBackground(force = false) {
     if (!generalPrefs.weatherCity) return;
+    if (!force && Date.now() - window.currentWeather.lastUpdate <= WEATHER_REFRESH_MS) return;
     try {
         const city = generalPrefs.weatherCity.trim();
-        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=es&format=json`);
-        const geoData = await geoRes.json();
+        const coords = await resolveWeatherCoordinates(city);
 
-        if (geoData.results && geoData.results.length > 0) {
-            const { latitude, longitude } = geoData.results[0];
+        if (coords) {
+            const { latitude, longitude } = coords;
             const unitStr = generalPrefs.weatherUnit === 'imperial' ? 'fahrenheit' : 'celsius';
             const unitSym = generalPrefs.weatherUnit === 'imperial' ? '°F' : '°C';
 
@@ -8376,7 +8408,7 @@ async function fetchWeatherBackground() {
                     lastUpdate: Date.now(),
                     unitSym: unitSym
                 };
-                try { require('fs').writeFileSync(require('path').join(__dirname, '..', 'config', 'weather.json'), JSON.stringify(window.currentWeather)); } catch (err) { }
+                try { fs.writeFileSync(weatherJsonPath, JSON.stringify(window.currentWeather)); } catch (err) { }
 
                 const tempW = document.getElementById('temp-widget');
                 const humW = document.getElementById('hum-widget');
@@ -8389,21 +8421,23 @@ async function fetchWeatherBackground() {
     }
 }
 
-// Check weather every 20 minutes (1200000 ms)
+loadCachedWeather();
+
+// Check weather every 15 minutes.
 setInterval(() => {
-    if (Date.now() - window.currentWeather.lastUpdate > 1200000) {
-        fetchWeatherBackground();
-    }
+    fetchWeatherBackground();
 }, 60000);
 
 // Initial fetch attempt after a small delay to ensure prefs are loaded
 setTimeout(() => {
-    fetchWeatherBackground();
+    fetchWeatherBackground(true);
 }, 2000);
 
 // Also listen for settings updates to refetch immediately if city changes
-ipcRenderer.on('update-general-prefs', () => {
-    setTimeout(fetchWeatherBackground, 1000);
+ipcRenderer.on('settings-updated', () => {
+    generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, generalPrefs));
+    window.currentWeather.lastUpdate = 0;
+    setTimeout(() => fetchWeatherBackground(true), 1000);
 });
 
 

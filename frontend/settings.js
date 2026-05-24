@@ -220,6 +220,10 @@ const selWeatherUnit = document.getElementById('sel-weather-unit');
 const txtWeatherFolder = document.getElementById('txt-weather-folder');
 const lblWeatherTemp = document.getElementById('lbl-weather-temp');
 const lblWeatherHum = document.getElementById('lbl-weather-humidity');
+let selectedWeatherCoords = {
+    lat: generalPrefs.weatherLatitude || null,
+    lon: generalPrefs.weatherLongitude || null
+};
 
 if (txtWeatherCity) {
     txtWeatherCity.value = generalPrefs.weatherCity || '';
@@ -249,6 +253,7 @@ if (txtWeatherCity) {
     let weatherSuggestionsMap = new Map();
     txtWeatherCity.addEventListener('input', () => {
         clearTimeout(suggestTimeout);
+        selectedWeatherCoords = { lat: null, lon: null };
         const query = txtWeatherCity.value.trim();
         if (query.length < 3) return;
         suggestTimeout = setTimeout(async () => {
@@ -299,6 +304,7 @@ if (txtWeatherCity) {
                 latitude = geoData.results[0].latitude;
                 longitude = geoData.results[0].longitude;
             }
+            selectedWeatherCoords = { lat: latitude, lon: longitude };
             
             const unitStr = selWeatherUnit.value === 'imperial' ? 'fahrenheit' : 'celsius';
             const unitSym = selWeatherUnit.value === 'imperial' ? '°F' : '°C';
@@ -701,6 +707,8 @@ function saveAll() {
         generalPrefs.weatherCity = document.getElementById('txt-weather-city').value;
         generalPrefs.weatherUnit = document.getElementById('sel-weather-unit').value;
         generalPrefs.weatherFolder = document.getElementById('txt-weather-folder').value;
+        generalPrefs.weatherLatitude = selectedWeatherCoords.lat;
+        generalPrefs.weatherLongitude = selectedWeatherCoords.lon;
     }
     generalPrefs = normalizeAudioPrefs(generalPrefs);
     delete generalPrefs.num_mus_mix_fadeout;
