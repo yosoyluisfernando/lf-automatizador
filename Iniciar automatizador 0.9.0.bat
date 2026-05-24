@@ -4,11 +4,16 @@ cd /d "%~dp0"
 
 echo Iniciando LF Automatizador 0.9.0...
 
-:: Arrancar en segundo plano y guardar salida en log
-start /B cmd /c "npm start > error_log.txt 2>&1"
+:: Crear un script VBS temporal para lanzar npm de forma completamente invisible
+echo Set WshShell = CreateObject("WScript.Shell") > "%temp%\run_hidden.vbs"
+echo WshShell.Run "cmd /c npm start > error_log.txt 2>&1", 0, False >> "%temp%\run_hidden.vbs"
 
-:: Esperar 4 segundos para ver si logra mantenerse abierto
-timeout /t 4 >nul
+:: Ejecutar el VBS y borrarlo
+cscript //nologo "%temp%\run_hidden.vbs"
+del "%temp%\run_hidden.vbs"
+
+:: Esperar 4 segundos para dar tiempo a que inicie
+ping 127.0.0.1 -n 5 >nul
 
 :: Revisar si el proceso electron sigue vivo
 tasklist /FI "IMAGENAME eq electron.exe" 2>NUL | find /I "electron.exe" >NUL
