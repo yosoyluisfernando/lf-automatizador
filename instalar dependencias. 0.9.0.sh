@@ -30,6 +30,17 @@ fi
 
 echo "[1/5] Instalando dependencias de Node.js..."
 echo "Por favor espera, esto descargará paquetes y puede tardar varios minutos..."
+
+# Solución preventiva: Reparar permisos rotos de npm y electron (Error EACCES)
+if [ -d "$HOME/.cache/electron" ] && [ ! -w "$HOME/.cache/electron" ]; then
+    echo "[INFO] Permisos bloqueados en la caché de Electron. Solicitando acceso para reparar..."
+    sudo chown -R "$USER:$USER" "$HOME/.cache/electron"
+fi
+if [ -d "$HOME/.npm" ] && [ ! -w "$HOME/.npm" ]; then
+    echo "[INFO] Permisos bloqueados en la caché de NPM. Solicitando acceso para reparar..."
+    sudo chown -R "$USER:$USER" "$HOME/.npm"
+fi
+
 if ! npm install; then
     echo "[ERROR] Falló la instalación de dependencias de Node.js."
     pause_exit
