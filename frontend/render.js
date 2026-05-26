@@ -1564,11 +1564,15 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
     // ceder el paso a contenido nuevo.
     let bestCandidate = '';
     let oldestAssignedAt = Infinity;
+    let bestProtectedTailCandidate = '';
+    let oldestProtectedTailAssignedAt = Infinity;
     const deckDiagnostics = [];
     for (const playerId of RUST_PLAYLIST_DECK_IDS) {
         if (excluded.has(playerId)) continue;
         const state = rustPlaylistMirrorState.get(playerId) || {};
         const assignedAt = Number(state.assignedAt) || 0;
+        const tailUntil = Number(state.tailUntil) || 0;
+        const hasProtectedTail = tailUntil > now;
         const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, playerId);
         const posMs = Number(rustPlayer?.positionMs) || 0;
         const durMs = Number(rustPlayer?.durationMs) || 0;
@@ -1576,14 +1580,18 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
         deckDiagnostics.push({
             playerId,
             path: state.path || rustPlayer?.path || '?',
-            posMs, durMs, assignedAt, ageMs
+            posMs, durMs, assignedAt, ageMs, hasProtectedTail
         });
         // Elegir el de assignedAt más antiguo (el que sonó primero)
-        if (assignedAt > 0 && assignedAt < oldestAssignedAt) {
+        if (assignedAt > 0 && hasProtectedTail && assignedAt < oldestProtectedTailAssignedAt) {
+            oldestProtectedTailAssignedAt = assignedAt;
+            bestProtectedTailCandidate = playerId;
+        } else if (assignedAt > 0 && assignedAt < oldestAssignedAt) {
             oldestAssignedAt = assignedAt;
             bestCandidate = playerId;
         }
     }
+    if (!bestCandidate) bestCandidate = bestProtectedTailCandidate;
 
     // Fallback: si ninguno tiene assignedAt, elegir el de mayor positionMs
     if (!bestCandidate) {
@@ -7658,6 +7666,58 @@ function getFadeOutPlanForTransition(player, trackConfig, isAutoMix, forcedSecon
     return { seconds: fadeSeconds, stopDelaySeconds: fadeSeconds, scheduleStop: true, holdTail: false };
 }
 
+function scheduleRustOutgoingTransition(playerId, fadePlan, previousGain) {
+    if (!playerId || !fadePlan) return;
+    const fromGain = Number.isFinite(Number(previousGain))
+        ? Number(previousGain)
+        : Number(rustPlaylistMirrorState.get(playerId)?.gain);
+    const safeFromGain = Number.isFinite(fromGain) ? fromGain : 1;
+
+    if (fadePlan.seconds > 0) {
+        const stopWithRamp = fadePlan.scheduleStop
+            && (fadePlan.stopDelaySeconds || fadePlan.seconds) <= fadePlan.seconds + 0.05;
+        scheduleRustPlaylistGainRamp(playerId, safeFromGain, 0.0001, fadePlan.seconds, { stopAfter: stopWithRamp });
+        if (fadePlan.scheduleStop && !stopWithRamp) {
+            scheduleRustPlaylistStop(playerId, fadePlan.stopDelaySeconds || fadePlan.seconds);
+        }
+        return;
+    }
+
+    if (fadePlan.scheduleStop && fadePlan.holdTail) {
+        scheduleRustPlaylistStop(playerId, fadePlan.stopDelaySeconds);
+        return;
+    }
+
+    if (fadePlan.holdTail && !fadePlan.scheduleStop) {
+        const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, playerId);
+        const posMs = Number(rustPlayer?.positionMs) || 0;
+        const durMs = Number(rustPlayer?.durationMs) || 0;
+        const remainMs = Math.max(0, durMs - posMs);
+        if (remainMs > 100) {
+            scheduleRustPlaylistStop(playerId, remainMs / 1000);
+        }
+    }
+}
+
+function scheduleRustOutgoingProgramTransition({ player, previousRow, outgoingConfig, isAutoMix, forcedFadeOutSeconds, exceptPlayerId = '' } = {}) {
+    if (!isRustPlaylistOwnerEnabled() || !player) return null;
+    const fadePlan = getFadeOutPlanForTransition(player, outgoingConfig, isAutoMix, forcedFadeOutSeconds);
+    const previousPlayerId = getPlaylistPlayerId(player);
+    const previousAuxPlayerId = previousPlayerId && previousRow
+        ? getRustPlaylistAuxPlayerId(previousPlayerId, previousRow)
+        : '';
+    const apply = (playerId) => {
+        if (!playerId || playerId === exceptPlayerId) return;
+        const state = rustPlaylistMirrorState.get(playerId) || {};
+        const gain = Number.isFinite(Number(state.gain)) ? Number(state.gain) : 1;
+        cancelRustPlaylistGainRamp(playerId);
+        scheduleRustOutgoingTransition(playerId, fadePlan, gain);
+    };
+    apply(previousPlayerId);
+    apply(previousAuxPlayerId);
+    return fadePlan;
+}
+
 function getRustTransitionPlan({ row, filePath, currentConfig, outgoingConfig, playbackWindow, isAutoMix, forcedFadeOutSeconds, targetGain, previousGain }) {
     const customMix = parseFiniteCueValue(row?.dataset?.customMix);
     const mixSource = customMix !== null
@@ -9341,14 +9401,11 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         activeGain = (activeGain === gainA) ? gainB : gainA;
         cancelPendingPlayerStop(fadingPlayer);
         cancelPendingPlayerStop(activePlayer);
-        const repeatSameRow = options.startCause === 'repeat-track' && previousPlayingRow === tr;
-        const excludedRustDecks = repeatSameRow
-            ? [
-                getPlaylistPlayerId(fadingPlayer),
-                activeRustPlaylistDeckId,
-                rustPlaylistStandbyPreload?.playerId
-            ]
-            : [];
+        const excludedRustDecks = [
+            getPlaylistPlayerId(fadingPlayer),
+            activeRustPlaylistDeckId,
+            rustPlaylistStandbyPreload?.playerId
+        ].filter(Boolean);
         let currentRustPlayerId = isRustPlaylistOwnerEnabled() ? reserveRustPlaylistDeckId(excludedRustDecks) : '';
         activeRustPlaylistDeckId = currentRustPlayerId;
         assignPlayerToPlaylistBus(activePlayer, getPlaylistIndexFromRow(tr));
@@ -9356,6 +9413,21 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         clearPlayerPlaybackMeta(activePlayer);
 
         activeGain.gain.cancelScheduledValues(audioCtx.currentTime);
+        let earlyOutgoingRustTransitionScheduled = false;
+        if (fadingPlayer && !isPlayerClockPaused(fadingPlayer) && currentRustPlayerId) {
+            const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
+            if (previousPlayerId && previousPlayerId !== currentRustPlayerId) {
+                scheduleRustOutgoingProgramTransition({
+                    player: fadingPlayer,
+                    previousRow: previousPlayingRow,
+                    outgoingConfig: outgoingTrackConfig,
+                    isAutoMix,
+                    forcedFadeOutSeconds,
+                    exceptPlayerId: currentRustPlayerId
+                });
+                earlyOutgoingRustTransitionScheduled = true;
+            }
+        }
 
         const batchIdToKeep = tr.dataset.batchId || null;
         const originalIdx = parseInt(tr.dataset.originalTbodyIndex, 10);
@@ -9439,21 +9511,18 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 }
                 if (fadePlan.scheduleStop) schedulePlayerStop(fadingPlayer, (fadePlan.stopDelaySeconds || fadePlan.seconds) * 1000);
 
-                // Rust: enviar fade solo si el usuario configuró uno.
-                // Si seconds == 0, el track termina naturalmente en Rust.
-                if (isRustPlaylistOwnerEnabled() && fadePlan.seconds > 0) {
-                    const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
-                    const previousState = previousPlayerId ? (rustPlaylistMirrorState.get(previousPlayerId) || {}) : {};
-                    const previousGain = Number.isFinite(Number(previousState.gain)) ? Number(previousState.gain) : 1;
-                    if (previousPlayerId && previousPlayerId !== earlyClimatePlayerId) {
-                        cancelRustPlaylistGainRamp(previousPlayerId);
-                        const stopWithRamp = fadePlan.scheduleStop
-                            && (fadePlan.stopDelaySeconds || fadePlan.seconds) <= fadePlan.seconds + 0.05;
-                        scheduleRustPlaylistGainRamp(previousPlayerId, previousGain, 0.0001, fadePlan.seconds, { stopAfter: stopWithRamp });
-                        if (fadePlan.scheduleStop && !stopWithRamp) {
-                            scheduleRustPlaylistStop(previousPlayerId, fadePlan.stopDelaySeconds || fadePlan.seconds);
-                        }
-                    }
+                // Rust: plan completo de salida; en auto-mix puede conservar
+                // la cola sin fade y protegerla del sincronizador.
+                if (!earlyOutgoingRustTransitionScheduled) {
+                    scheduleRustOutgoingProgramTransition({
+                        player: fadingPlayer,
+                        previousRow: previousPlayingRow,
+                        outgoingConfig: outgoingTrackConfig,
+                        isAutoMix,
+                        forcedFadeOutSeconds,
+                        exceptPlayerId: earlyClimatePlayerId
+                    });
+                    earlyOutgoingRustTransitionScheduled = true;
                 }
             }
 
@@ -9502,6 +9571,11 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 logSystem(`[SKIP] Rust no pudo lanzar la locucion de clima: ${result?.error || 'sin detalle'}. Saltando...`);
                 setTimeout(() => playNext(false), 500);
                 return;
+            }
+            const rustClimatePlayer = findRustStatusPlayer(result.result?.status, climatePlaylistPlayerId);
+            const rustClimateDurationMs = Number(rustClimatePlayer?.durationMs) || 0;
+            if (rustClimateDurationMs > 0) {
+                currentDuration = Math.max(0.25, rustClimateDurationMs / 1000);
             }
 
             const durationMs = Math.round(currentDuration * 1000);
@@ -9582,33 +9656,16 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     fadingGain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + fadePlan.seconds);
                 }
                 if (fadePlan.scheduleStop) schedulePlayerStop(fadingPlayer, (fadePlan.stopDelaySeconds || fadePlan.seconds) * 1000);
-                // En modo rustAudio el gain HTML está silenciado: hay que aplicar
-                // la misma rampa al player Rust real para que el fade se oiga.
-                if (isRustPlaylistOwnerEnabled()) {
-                    const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
-                    const previousAuxPlayerId = previousPlayerId && previousPlayingRow
-                        ? getRustPlaylistAuxPlayerId(previousPlayerId, previousPlayingRow)
-                        : '';
-                    const applyRustFade = (playerId) => {
-                        if (!playerId) return;
-                        const mirrorState = rustPlaylistMirrorState.get(playerId) || {};
-                        const fromGain = Number.isFinite(Number(mirrorState.gain)) ? Number(mirrorState.gain) : 1;
-                        cancelRustPlaylistGainRamp(playerId);
-                        if (fadePlan.seconds > 0) {
-                            const stopWithRamp = fadePlan.scheduleStop
-                                && (fadePlan.stopDelaySeconds || fadePlan.seconds) <= fadePlan.seconds + 0.05;
-                            scheduleRustPlaylistGainRamp(playerId, fromGain, 0.0001, fadePlan.seconds, { stopAfter: stopWithRamp });
-                            if (fadePlan.scheduleStop && !stopWithRamp) {
-                                scheduleRustPlaylistStop(playerId, fadePlan.stopDelaySeconds || fadePlan.seconds);
-                            }
-                        } else if (fadePlan.scheduleStop && fadePlan.holdTail) {
-                            scheduleRustPlaylistStop(playerId, fadePlan.stopDelaySeconds);
-                        }
-                        // Si seconds == 0 y no hay stop programado, el track
-                        // termina naturalmente en Rust sin intervencion.
-                    };
-                    applyRustFade(previousPlayerId);
-                    applyRustFade(previousAuxPlayerId);
+                // Rust: usar el mismo plan compartido que usa clima.
+                if (!earlyOutgoingRustTransitionScheduled) {
+                    scheduleRustOutgoingProgramTransition({
+                        player: fadingPlayer,
+                        previousRow: previousPlayingRow,
+                        outgoingConfig: outgoingTrackConfig,
+                        isAutoMix,
+                        forcedFadeOutSeconds
+                    });
+                    earlyOutgoingRustTransitionScheduled = true;
                 }
             }
 
@@ -9858,6 +9915,15 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             const previousFadePlan = previousPlayerId && previousPlayerId !== nextPlayerId
                 ? getFadeOutPlanForTransition(fadingPlayer, outgoingTrackConfig, isAutoMix, forcedFadeOutSeconds)
                 : { seconds: 0, stopDelaySeconds: 0, scheduleStop: false, holdTail: false };
+            const outgoingTransitionScheduled = earlyOutgoingRustTransitionScheduled || (previousPlayerId && previousPlayerId !== nextPlayerId);
+            if (!earlyOutgoingRustTransitionScheduled && outgoingTransitionScheduled) {
+                scheduleRustOutgoingTransition(previousPlayerId, previousFadePlan, previousRustGain);
+                if (previousAuxPlayerId) {
+                    const previousAuxState = rustPlaylistMirrorState.get(previousAuxPlayerId) || {};
+                    const previousAuxGain = Number.isFinite(Number(previousAuxState.gain)) ? Number(previousAuxState.gain) : previousRustGain;
+                    scheduleRustOutgoingTransition(previousAuxPlayerId, previousFadePlan, previousAuxGain);
+                }
+            }
             const nextAuxPlayerId = getRustPlaylistAuxPlayerId(nextPlayerId, tr);
             const nextAuxBus = getRustPlaylistAuxBus(tr);
             const rustTransitionPlan = getRustTransitionPlan({
@@ -9951,39 +10017,12 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     }
                 }
 
-                const fadeOrStopPreviousRustPlayer = (playerId, previousGain) => {
-                    if (!playerId) return;
-                    if (previousFadePlan.seconds > 0) {
-                        const stopWithRamp = previousFadePlan.scheduleStop
-                            && (previousFadePlan.stopDelaySeconds || previousFadePlan.seconds) <= previousFadePlan.seconds + 0.05;
-                        scheduleRustPlaylistGainRamp(playerId, previousGain, 0.0001, previousFadePlan.seconds, { stopAfter: stopWithRamp });
-                        if (previousFadePlan.scheduleStop && !stopWithRamp) {
-                            scheduleRustPlaylistStop(playerId, previousFadePlan.stopDelaySeconds || previousFadePlan.seconds);
-                        }
-                    } else if (previousFadePlan.scheduleStop && previousFadePlan.holdTail) {
-                        scheduleRustPlaylistStop(playerId, previousFadePlan.stopDelaySeconds);
-                    } else if (previousFadePlan.holdTail && !previousFadePlan.scheduleStop) {
-                        // holdTail sin scheduleStop: el track debe seguir hasta su fin
-                        // natural. Consultar posición real de Rust para estimar cuánto queda.
-                        const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, playerId);
-                        const posMs = Number(rustPlayer?.positionMs) || 0;
-                        const durMs = Number(rustPlayer?.durationMs) || 0;
-                        const remainMs = Math.max(0, durMs - posMs);
-                        if (remainMs > 100) {
-                            scheduleRustPlaylistStop(playerId, remainMs / 1000);
-                        }
-                        // Si ya terminó o sin datos, el track termina naturalmente.
-                    }
-                    // Si seconds == 0 y no hay holdTail ni scheduleStop,
-                    // el track termina naturalmente en Rust. No se fuerza
-                    // ningun fade — se respeta la configuracion del usuario.
-                };
-                if (previousPlayerId && previousPlayerId !== nextPlayerId) {
-                    fadeOrStopPreviousRustPlayer(previousPlayerId, previousRustGain);
+                if (!outgoingTransitionScheduled && previousPlayerId && previousPlayerId !== nextPlayerId) {
+                    scheduleRustOutgoingTransition(previousPlayerId, previousFadePlan, previousRustGain);
                     if (previousAuxPlayerId) {
                         const previousAuxState = rustPlaylistMirrorState.get(previousAuxPlayerId) || {};
                         const previousAuxGain = Number.isFinite(Number(previousAuxState.gain)) ? Number(previousAuxState.gain) : previousRustGain;
-                        fadeOrStopPreviousRustPlayer(previousAuxPlayerId, previousAuxGain);
+                        scheduleRustOutgoingTransition(previousAuxPlayerId, previousFadePlan, previousAuxGain);
                     }
                 }
 
