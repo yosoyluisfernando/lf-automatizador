@@ -1383,6 +1383,7 @@ function isRustPlaylistOwnerActive() {
         && rustPlaylistOwnerHealth.fallbackUntil <= Date.now();
 }
 
+
 function isRustPlaylistStopGuardActive() {
     return rustPlaylistStopGuardUntil > Date.now();
 }
@@ -1420,6 +1421,22 @@ function getRustVirtualCurrentTime() {
 
 function getPlayerClockTime(player) {
     if (isRustVirtualPlayer(player)) return getRustVirtualCurrentTime();
+    if (isRustPlaylistOwnerEnabled()) {
+        const deckId = getPlaylistPlayerId(player);
+        if (deckId) {
+            const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, deckId);
+            const posMs = Number(rustPlayer?.positionMs);
+            if (Number.isFinite(posMs) && posMs >= 0) {
+                const posSeconds = posMs / 1000;
+                if (rustPlayer.status === 'playing' && rustPlayer.audioReady !== false) {
+                    const updatedAt = Number(rustAudioProbeStatus.lastStatus?.updatedAt) || 0;
+                    const drift = updatedAt > 0 ? Math.max(0, (Date.now() - updatedAt) / 1000) : 0;
+                    return posSeconds + Math.min(0.5, drift);
+                }
+                return posSeconds;
+            }
+        }
+    }
     return Number.isFinite(player?.currentTime) ? Number(player.currentTime) : 0;
 }
 
@@ -1439,6 +1456,17 @@ function getPlayerClockDuration(player) {
 
 function isPlayerClockPaused(player) {
     if (isRustVirtualPlayer(player)) return rustPlaylistVirtualClock.paused;
+    // En modo Rust, el <audio> HTML siempre está pausado. Verificar si el
+    // deck Rust real de este player sigue activo (reproduciéndose o en fade).
+    if (isRustPlaylistOwnerEnabled()) {
+        const deckId = getPlaylistPlayerId(player);
+        if (deckId) {
+            const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, deckId);
+            if (rustPlayer && (rustPlayer.status === 'playing' || rustPlayer.status === 'fading')) {
+                return false;
+            }
+        }
+    }
     return !player || player.paused;
 }
 
@@ -1496,9 +1524,16 @@ function clearRustPlaylistGainRamps() {
 function setRustPlaylistMirrorGain(playerId, gain, extra = {}) {
     if (!playerId) return;
     const previous = rustPlaylistMirrorState.get(playerId) || {};
+    // Cuando un deck pasa a ser "owner" (recién asignado), marcar el
+    // timestamp de asignación para saber cuál es el más viejo en caso
+    // de saturación de decks.
+    const assignedAt = extra.owner && !previous.assignedAt
+        ? Date.now()
+        : previous.assignedAt;
     rustPlaylistMirrorState.set(playerId, {
         ...previous,
         ...extra,
+        assignedAt,
         gain: Math.max(0, Math.min(2, Number(gain) || 0))
     });
 }
@@ -1506,23 +1541,101 @@ function setRustPlaylistMirrorGain(playerId, gain, extra = {}) {
 function reserveRustPlaylistDeckId(excludeIds = []) {
     const now = Date.now();
     const excluded = new Set((Array.isArray(excludeIds) ? excludeIds : [excludeIds]).filter(Boolean));
+
+    // Paso 1: buscar un deck libre (sin cola activa ni audio vivo)
     for (let offset = 0; offset < RUST_PLAYLIST_DECK_IDS.length; offset++) {
         const idx = (rustPlaylistDeckCursor + offset) % RUST_PLAYLIST_DECK_IDS.length;
         const playerId = RUST_PLAYLIST_DECK_IDS[idx];
         if (excluded.has(playerId)) continue;
         const state = rustPlaylistMirrorState.get(playerId);
         const tailUntil = Number(state?.tailUntil) || 0;
-        const busy = state && state.status !== 'stopped' && tailUntil > now;
+        const status = String(state?.status || '').toLowerCase();
+        const hasLiveAudio = !!state?.path && status !== 'stopped';
+        const busy = state && (tailUntil > now || hasLiveAudio);
         if (!busy) {
             rustPlaylistDeckCursor = (idx + 1) % RUST_PLAYLIST_DECK_IDS.length;
             return playerId;
         }
     }
-    const fallbackFree = RUST_PLAYLIST_DECK_IDS.find(playerId => !excluded.has(playerId));
-    if (fallbackFree) return fallbackFree;
-    const fallback = RUST_PLAYLIST_DECK_IDS[rustPlaylistDeckCursor % RUST_PLAYLIST_DECK_IDS.length];
-    rustPlaylistDeckCursor = (rustPlaylistDeckCursor + 1) % RUST_PLAYLIST_DECK_IDS.length;
-    return fallback;
+
+    // Paso 2: todos los decks están ocupados — elegir el MÁS VIEJO
+    // (el que sonó primero, tiene el assignedAt más antiguo) para
+    // evictarlo. Este es el que ya tuvo más tiempo al aire y debe
+    // ceder el paso a contenido nuevo.
+    let bestCandidate = '';
+    let oldestAssignedAt = Infinity;
+    const deckDiagnostics = [];
+    for (const playerId of RUST_PLAYLIST_DECK_IDS) {
+        if (excluded.has(playerId)) continue;
+        const state = rustPlaylistMirrorState.get(playerId) || {};
+        const assignedAt = Number(state.assignedAt) || 0;
+        const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, playerId);
+        const posMs = Number(rustPlayer?.positionMs) || 0;
+        const durMs = Number(rustPlayer?.durationMs) || 0;
+        const ageMs = assignedAt > 0 ? (now - assignedAt) : posMs;
+        deckDiagnostics.push({
+            playerId,
+            path: state.path || rustPlayer?.path || '?',
+            posMs, durMs, assignedAt, ageMs
+        });
+        // Elegir el de assignedAt más antiguo (el que sonó primero)
+        if (assignedAt > 0 && assignedAt < oldestAssignedAt) {
+            oldestAssignedAt = assignedAt;
+            bestCandidate = playerId;
+        }
+    }
+
+    // Fallback: si ninguno tiene assignedAt, elegir el de mayor positionMs
+    if (!bestCandidate) {
+        let maxPos = -1;
+        for (const d of deckDiagnostics) {
+            if (d.posMs > maxPos) {
+                maxPos = d.posMs;
+                bestCandidate = d.playerId;
+            }
+        }
+    }
+
+    if (!bestCandidate) {
+        bestCandidate = RUST_PLAYLIST_DECK_IDS.find(id => !excluded.has(id))
+            || RUST_PLAYLIST_DECK_IDS[rustPlaylistDeckCursor % RUST_PLAYLIST_DECK_IDS.length];
+    }
+
+    // Log de diagnóstico de saturación
+    const diagLines = deckDiagnostics.map(d => {
+        const name = (d.path || '').split(/[\\/]/).pop() || '?';
+        const pos = (d.posMs / 1000).toFixed(1);
+        const dur = d.durMs > 0 ? (d.durMs / 1000).toFixed(1) : '?';
+        const age = (d.ageMs / 1000).toFixed(1);
+        const evicted = d.playerId === bestCandidate ? ' \u2190 EVICT' : '';
+        return `  ${d.playerId}: ${name}, pos=${pos}s/${dur}s, edad=${age}s${evicted}`;
+    }).join(' | ');
+    logSystem(`[DECK SATURACION] 3/3 ocupados. ${diagLines}`);
+
+    // Paso 3: forzar limpieza del deck más viejo
+    evictRustPlaylistDeck(bestCandidate);
+
+    rustPlaylistDeckCursor = (RUST_PLAYLIST_DECK_IDS.indexOf(bestCandidate) + 1) % RUST_PLAYLIST_DECK_IDS.length;
+    return bestCandidate;
+}
+
+function evictRustPlaylistDeck(playerId) {
+    if (!playerId) return;
+    cancelRustPlaylistGainRamp(playerId);
+    const currentGain = Number(rustPlaylistMirrorState.get(playerId)?.gain) || 1;
+    // Micro-fade de 30ms para evitar pop audible, luego stop
+    commandRustPlaylist('fade', {
+        player: playerId,
+        fromGain: currentGain,
+        toGain: 0.0001,
+        durationMs: 30,
+        stopAfter: true
+    }).catch(() => { });
+    // Stop explícito como respaldo por si el fade no lo detiene a tiempo
+    setTimeout(() => {
+        commandRustPlaylist('stop', { player: playerId }).catch(() => { });
+    }, 50);
+    rustPlaylistMirrorState.delete(playerId);
 }
 
 function pickRustStandbyDeckId() {
@@ -1583,7 +1696,11 @@ function scheduleRustPlaylistGainRamp(playerId, fromGain, toGain, seconds, { sto
     if (!playerId) return;
     const startGain = Math.max(0, Math.min(2, Number(fromGain) || 0));
     const endGain = Math.max(0, Math.min(2, Number(toGain) || 0));
-    const durationMs = Math.max(0, Number(seconds) || 0) * 1000;
+    // Mínimo 30ms cuando stopAfter para evitar el shortcut de Rust que
+    // ejecuta stop inmediato cuando durationMs <= 25. Esto previene el
+    // corte en seco audible.
+    const rawMs = Math.max(0, Number(seconds) || 0) * 1000;
+    const durationMs = stopAfter ? Math.max(30, rawMs) : rawMs;
     commandRustPlaylist('fade', {
         player: playerId,
         fromGain: startGain,
@@ -8157,21 +8274,36 @@ function handleTimeUpdate(player) {
     // locución. En modo Rust `fadingPlayer.paused` siempre es true (el HTML
     // está silenciado), entonces este auto-stop nunca se disparaba y la pista
     // fantasma quedaba colgada hasta que el siguiente swap la pisara.
-    if (fadingPlayer && !isPlayerClockPaused(fadingPlayer)) {
-        const fadingMeta = getPlayerPlaybackMeta(fadingPlayer);
-        let finFantasma = parseFiniteCueValue(fadingMeta?.playbackEndAbsolute);
-        if (finFantasma === null) {
-            const rutaFantasma = fileURLToPath(fadingPlayer.src);
-            finFantasma = resolveTrackPlaybackWindow(rutaFantasma, {
-                baseDuration: parseFiniteCueValue(fadingPlayer.duration),
-                mixAbsolute: parseFiniteCueValue(fadingMeta?.mixAbsolute)
-            }).effectiveEndAbsolute;
-        }
-        if (finFantasma !== null && getPlayerClockTime(fadingPlayer) >= finFantasma) {
-            fadingPlayer.pause();
-            fadingPlayer.currentTime = 0;
-            clearPlayerPlaybackMeta(fadingPlayer);
-            stopRustVirtualPlayback(fadingPlayer);
+    if (fadingPlayer) {
+        // En modo Rust el <audio> HTML está siempre pausado, así que
+        // isPlayerClockPaused del DOM siempre daba true y este bloque nunca
+        // se ejecutaba. Ahora isPlayerClockPaused consulta el status del
+        // deck Rust real, lo que permite detectar que el fading sigue vivo.
+        const fadingStillLive = !isPlayerClockPaused(fadingPlayer);
+        if (fadingStillLive) {
+            const fadingMeta = getPlayerPlaybackMeta(fadingPlayer);
+            let finFantasma = parseFiniteCueValue(fadingMeta?.playbackEndAbsolute);
+            if (finFantasma === null) {
+                const rutaFantasma = fileURLToPath(fadingPlayer.src);
+                finFantasma = resolveTrackPlaybackWindow(rutaFantasma, {
+                    baseDuration: parseFiniteCueValue(fadingPlayer.duration),
+                    mixAbsolute: parseFiniteCueValue(fadingMeta?.mixAbsolute)
+                }).effectiveEndAbsolute;
+            }
+            if (finFantasma !== null && getPlayerClockTime(fadingPlayer) >= finFantasma) {
+                fadingPlayer.pause();
+                fadingPlayer.currentTime = 0;
+                // Solo limpiar estado del frontend. No enviar stop/fade a
+                // Rust — el track terminó naturalmente y Rust lo maneja
+                // solo. Enviar un comando aquí interfería con los fades
+                // configurados por el usuario.
+                const fadingDeckId = getPlaylistPlayerId(fadingPlayer);
+                if (fadingDeckId) {
+                    rustPlaylistMirrorState.delete(fadingDeckId);
+                }
+                clearPlayerPlaybackMeta(fadingPlayer);
+                stopRustVirtualPlayback(fadingPlayer);
+            }
         }
     }
 
@@ -9278,6 +9410,53 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         delete tr.dataset.resumeStart;
 
         if (isClimateLocutionType(type)) {
+            // Establecer el rustPlayerId en el meta ANTES de cualquier await
+            // para que el guard de salud (watchRustPlaylistOwnerHealth) vigile
+            // el deck correcto. Sin esto, getPlaylistPlayerId(activePlayer)
+            // devuelve el deck DOM (player-a) del track anterior, y el guard
+            // detecta un stall falso que causa skip de este track.
+            const earlyClimatePlayerId = currentRustPlayerId || getDomPlaylistPlayerId(activePlayer);
+            setPlayerPlaybackMeta(activePlayer, {
+                row: tr,
+                filePath: null,
+                rustPlayerId: earlyClimatePlayerId
+            });
+            resetRustPlaylistOwnerWatch(earlyClimatePlayerId);
+
+            // ─── Fade-out del track saliente ───────────────────────────
+            // Ejecutar ANTES de cualquier await para que el track saliente
+            // todavía esté en estado 'playing'. Se respeta el fade
+            // configurado por el usuario (fadePlan.seconds). Si el fade
+            // configurado es 0, no se envía ningún comando: el track
+            // llega a su fin natural sin intervención.
+            if (fadingPlayer && !isPlayerClockPaused(fadingPlayer)) {
+                const fadePlan = getFadeOutPlanForTransition(fadingPlayer, outgoingTrackConfig, isAutoMix, forcedFadeOutSeconds);
+                if (fadePlan.seconds > 0) {
+                    const currentVol = fadingGain.gain.value;
+                    fadingGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                    fadingGain.gain.setValueAtTime(currentVol, audioCtx.currentTime);
+                    fadingGain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + fadePlan.seconds);
+                }
+                if (fadePlan.scheduleStop) schedulePlayerStop(fadingPlayer, (fadePlan.stopDelaySeconds || fadePlan.seconds) * 1000);
+
+                // Rust: enviar fade solo si el usuario configuró uno.
+                // Si seconds == 0, el track termina naturalmente en Rust.
+                if (isRustPlaylistOwnerEnabled() && fadePlan.seconds > 0) {
+                    const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
+                    const previousState = previousPlayerId ? (rustPlaylistMirrorState.get(previousPlayerId) || {}) : {};
+                    const previousGain = Number.isFinite(Number(previousState.gain)) ? Number(previousState.gain) : 1;
+                    if (previousPlayerId && previousPlayerId !== earlyClimatePlayerId) {
+                        cancelRustPlaylistGainRamp(previousPlayerId);
+                        const stopWithRamp = fadePlan.scheduleStop
+                            && (fadePlan.stopDelaySeconds || fadePlan.seconds) <= fadePlan.seconds + 0.05;
+                        scheduleRustPlaylistGainRamp(previousPlayerId, previousGain, 0.0001, fadePlan.seconds, { stopAfter: stopWithRamp });
+                        if (fadePlan.scheduleStop && !stopWithRamp) {
+                            scheduleRustPlaylistStop(previousPlayerId, fadePlan.stopDelaySeconds || fadePlan.seconds);
+                        }
+                    }
+                }
+            }
+
             const folder = resolveClimateLocutionFolder(type);
             if (!folder || !folderHasClimateFiles(folder, type)) {
                 logSystem(`[SKIP] La carpeta de clima no existe. Saltando...`);
@@ -9307,7 +9486,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             document.getElementById('txt-acaba').innerText = '';
             drawWaveform(null);
 
-            const climatePlaylistPlayerId = getPlaylistPlayerId(activePlayer);
+            const climatePlaylistPlayerId = currentRustPlayerId || getPlaylistPlayerId(activePlayer);
             const climatePlaylistBus = getRustPlaylistPrimaryBus(tr);
             try { activePlayer.pause(); activePlayer.currentTime = 0; activePlayer.removeAttribute('src'); activePlayer.load(); } catch (err) {}
 
@@ -9323,37 +9502,6 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 logSystem(`[SKIP] Rust no pudo lanzar la locucion de clima: ${result?.error || 'sin detalle'}. Saltando...`);
                 setTimeout(() => playNext(false), 500);
                 return;
-            }
-
-            if (fadingPlayer && !isPlayerClockPaused(fadingPlayer)) {
-                const currentVol = fadingGain.gain.value;
-                fadingGain.gain.cancelScheduledValues(audioCtx.currentTime);
-                fadingGain.gain.setValueAtTime(currentVol, audioCtx.currentTime);
-                const fadePlan = getFadeOutPlanForTransition(fadingPlayer, outgoingTrackConfig, isAutoMix, forcedFadeOutSeconds);
-                if (fadePlan.seconds > 0) {
-                    fadingGain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + fadePlan.seconds);
-                }
-                if (fadePlan.scheduleStop) schedulePlayerStop(fadingPlayer, (fadePlan.stopDelaySeconds || fadePlan.seconds) * 1000);
-                if (isRustPlaylistOwnerEnabled()) {
-                    const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
-                    const previousState = previousPlayerId ? (rustPlaylistMirrorState.get(previousPlayerId) || {}) : {};
-                    const previousGain = Number.isFinite(Number(previousState.gain)) ? Number(previousState.gain) : 1;
-                    if (previousPlayerId && previousPlayerId !== climatePlaylistPlayerId) {
-                        cancelRustPlaylistGainRamp(previousPlayerId);
-                        if (fadePlan.seconds > 0) {
-                            const stopWithRamp = fadePlan.scheduleStop
-                                && (fadePlan.stopDelaySeconds || fadePlan.seconds) <= fadePlan.seconds + 0.05;
-                            scheduleRustPlaylistGainRamp(previousPlayerId, previousGain, 0.0001, fadePlan.seconds, { stopAfter: stopWithRamp });
-                            if (fadePlan.scheduleStop && !stopWithRamp) {
-                                scheduleRustPlaylistStop(previousPlayerId, fadePlan.stopDelaySeconds || fadePlan.seconds);
-                            }
-                        } else {
-                            commandRustPlaylist('setGain', { player: previousPlayerId, gain: 0 }).catch(() => { });
-                            commandRustPlaylist('stop', { player: previousPlayerId }).catch(() => { });
-                            rustPlaylistMirrorState.delete(previousPlayerId);
-                        }
-                    }
-                }
             }
 
             const durationMs = Math.round(currentDuration * 1000);
@@ -9386,7 +9534,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             publishRustTransport({ force: true, syncPosition: false });
 
             calcularHorasPlaylist(); updateNextTrackVisuals();
-            logSystem(`${ICON_AIR_PREFIX} ${climateTitle} (Rust, ${(durationMs/1000).toFixed(1)}s, bus=${climatePlaylistBus})`);
+            logSystem(`${ICON_AIR_PREFIX} ${climateTitle} (Rust, ${(durationMs/1000).toFixed(1)}s, bus=${climatePlaylistBus}, deck=${climatePlaylistPlayerId})`);
             return;
         }
 
@@ -9415,6 +9563,9 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 startOffset: 0,
                 rustPlayerId: currentRustPlayerId || ''
             });
+            // Resetear el watch para que no detecte stall del track anterior
+            // mientras se carga la locución horaria.
+            resetRustPlaylistOwnerWatch(currentRustPlayerId || getDomPlaylistPlayerId(activePlayer));
 
             // Fade-out de la canción saliente al disparar la locución horaria.
             // BUG FIX FASE D 7.4-bis: la guarda original `!fadingPlayer.paused`
@@ -9452,11 +9603,9 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                             }
                         } else if (fadePlan.scheduleStop && fadePlan.holdTail) {
                             scheduleRustPlaylistStop(playerId, fadePlan.stopDelaySeconds);
-                        } else {
-                            commandRustPlaylist('setGain', { player: playerId, gain: 0 }).catch(() => { });
-                            commandRustPlaylist('stop', { player: playerId }).catch(() => { });
-                            rustPlaylistMirrorState.delete(playerId);
                         }
+                        // Si seconds == 0 y no hay stop programado, el track
+                        // termina naturalmente en Rust sin intervencion.
                     };
                     applyRustFade(previousPlayerId);
                     applyRustFade(previousAuxPlayerId);
@@ -9559,7 +9708,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             publishRustTransport({ force: true, syncPosition: false });
 
             calcularHorasPlaylist(); updateNextTrackVisuals();
-            logSystem(`${ICON_AIR_PREFIX} ${ICON_CLOCK_LABEL} (Rust, ${segments} archivo(s), ${(durationMs/1000).toFixed(1)}s, bus=${timePlaylistBus})`);
+            logSystem(`${ICON_AIR_PREFIX} ${ICON_CLOCK_LABEL} (Rust, ${segments} archivo(s), ${(durationMs/1000).toFixed(1)}s, bus=${timePlaylistBus}, deck=${timePlaylistPlayerId})`);
             return;
         }
 
@@ -9700,6 +9849,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 haltPlaybackOnFatalError('Rust no pudo resolver el player activo.');
                 return;
             }
+            syncRustPlaylistPlaybackContext(nextPlayerId);
 
             const previousPlayerId = getPlaylistPlayerId(fadingPlayer);
             const previousAuxPlayerId = previousPlayerId && previousPlayingRow ? getRustPlaylistAuxPlayerId(previousPlayerId, previousPlayingRow) : '';
@@ -9812,11 +9962,21 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                         }
                     } else if (previousFadePlan.scheduleStop && previousFadePlan.holdTail) {
                         scheduleRustPlaylistStop(playerId, previousFadePlan.stopDelaySeconds);
-                    } else {
-                        commandRustPlaylist('setGain', { player: playerId, gain: 0 }).catch(() => { });
-                        commandRustPlaylist('stop', { player: playerId }).catch(() => { });
-                        rustPlaylistMirrorState.delete(playerId);
+                    } else if (previousFadePlan.holdTail && !previousFadePlan.scheduleStop) {
+                        // holdTail sin scheduleStop: el track debe seguir hasta su fin
+                        // natural. Consultar posición real de Rust para estimar cuánto queda.
+                        const rustPlayer = findRustStatusPlayer(rustAudioProbeStatus.lastStatus, playerId);
+                        const posMs = Number(rustPlayer?.positionMs) || 0;
+                        const durMs = Number(rustPlayer?.durationMs) || 0;
+                        const remainMs = Math.max(0, durMs - posMs);
+                        if (remainMs > 100) {
+                            scheduleRustPlaylistStop(playerId, remainMs / 1000);
+                        }
+                        // Si ya terminó o sin datos, el track termina naturalmente.
                     }
+                    // Si seconds == 0 y no hay holdTail ni scheduleStop,
+                    // el track termina naturalmente en Rust. No se fuerza
+                    // ningun fade — se respeta la configuracion del usuario.
                 };
                 if (previousPlayerId && previousPlayerId !== nextPlayerId) {
                     fadeOrStopPreviousRustPlayer(previousPlayerId, previousRustGain);
@@ -9834,8 +9994,12 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 publishRustTransport({ force: true, syncPosition: false });
                 scheduleAirWaveform(rutaFisica, currentSessionId);
                 handleTimeUpdate(nextPlayer);
-                logSystem(`[RUST TRANSICION] fuente=${rustTransitionPlan.settingsSource}, mix=${rustTransitionPlan.mixSource}, fadeIn=${rustTransitionPlan.fadeInSeconds}s, fadeOut=${rustTransitionPlan.fadeOutSeconds}s, cola=${rustTransitionPlan.holdTail ? 'hasta-fin' : 'fade'}, gain=${rustTransitionPlan.targetGain.toFixed(3)}`);
-                logSystem(`Sonando por Rust: ${nombreMostrar}`);
+                logSystem(`[RUST TRANSICION] entrante=${nextPlayerId}, saliente=${previousPlayerId || 'ninguno'}, ` +
+                    `fadePlan={s:${previousFadePlan.seconds.toFixed(2)}, stopDelay:${previousFadePlan.stopDelaySeconds.toFixed(2)}, ` +
+                    `hold:${previousFadePlan.holdTail}, sched:${previousFadePlan.scheduleStop}}, ` +
+                    `fuente=${rustTransitionPlan.settingsSource}, mix=${rustTransitionPlan.mixSource}, ` +
+                    `fadeIn=${rustTransitionPlan.fadeInSeconds}s, gain=${rustTransitionPlan.targetGain.toFixed(3)}`);
+                logSystem(`${ICON_AIR_PREFIX} ${nombreMostrar} (Rust, deck=${nextPlayerId})`);
                 return;
             } catch (err) {
                 refreshAirIncidentStatus();

@@ -3573,7 +3573,7 @@ fn resolve_output_for_bus(state: &EngineState, bus_id: &str, fallback_output_id:
 
 fn default_bus_for_player(player_id: &str) -> &'static str {
     match player_id {
-        "player-a" | "player-b" => "master",
+        "player-a" | "player-b" | "player-c" => "master",
         "jingle-player" | "jingle" => "jingle",
         "cue-player" | "preview-player" | "editor-player" => "cue",
         // Editores avanzados — siempre van al bus de pre-escucha (cue),
