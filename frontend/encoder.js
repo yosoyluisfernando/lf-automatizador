@@ -17,7 +17,10 @@ if (fs.existsSync(encoderPrefsPath)) {
 }
 
 function normalizeEncoderPrefs(raw = {}) {
-    const serverType = raw.serverType || raw.type || 'icecast';
+    // Tipos válidos: 'icecast' (PUT moderno), 'shoutcast' (SOURCE legacy clásico),
+    // 'shoutcast2' (PUT moderno DNAS 2.x). Cualquier otro cae a 'icecast'.
+    const rawType = raw.serverType || raw.type || 'icecast';
+    const serverType = ['icecast', 'shoutcast', 'shoutcast2'].includes(rawType) ? rawType : 'icecast';
     const password = raw.password || raw.pass || '';
     const micId = raw.micId || raw.mic || '';
     const bitrate = String(raw.bitrate || '128').replace(/[^\d]/g, '') || '128';
@@ -419,8 +422,11 @@ document.getElementById('tab-btn-config').addEventListener('click', (e) => {
     document.getElementById('tab-config').classList.add('active');
 });
 
-typeSel.addEventListener('change', () => { 
-    mountRow.style.display = typeSel.value === 'icecast' ? 'flex' : 'none'; 
+typeSel.addEventListener('change', () => {
+    // El campo "Punto de Montaje" solo aplica a Icecast 2 (donde el operador
+    // configura libremente /stream, /live, etc.). Ambas variantes de Shoutcast
+    // usan /1 hardcoded (Stream ID 1), así que el mount se oculta.
+    mountRow.style.display = typeSel.value === 'icecast' ? 'flex' : 'none';
 });
 
 sourceSel.addEventListener('change', async () => { 
@@ -444,6 +450,20 @@ document.getElementById('enc-ip').value = encPrefs.ip;
 document.getElementById('enc-port').value = encPrefs.port;
 document.getElementById('enc-pass').value = encPrefs.pass;
 document.getElementById('enc-mount').value = encPrefs.mount;
+
+// Auto-normalización del Punto de Montaje: si el operador escribe `stream` sin la
+// barra inicial, al salir del campo se la agregamos automáticamente (queda
+// `/stream`). Evita errores 404 silenciosos del servidor Icecast y le da feedback
+// visual al usuario de la URL real que se va a enviar. La normalización también
+// ocurre en el backend (normalizeMount()) como red de seguridad — aquí es solo UX.
+const mountInput = document.getElementById('enc-mount');
+if (mountInput) {
+    mountInput.addEventListener('blur', () => {
+        const raw = mountInput.value.trim();
+        if (!raw) return; // permitir vacío (la validación al conectar lo bloquea)
+        mountInput.value = raw.startsWith('/') ? raw : `/${raw}`;
+    });
+}
 typeSel.value = encPrefs.type;
 sourceSel.value = encPrefs.source;
 codecSel.value = encPrefs.codec;

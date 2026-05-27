@@ -8693,7 +8693,14 @@ async function ensureClimateWeatherValue(kind) {
 }
 
 async function playClimateLocution(kind) {
-    if (!isClimateLocutionType(kind) || isJinglePlaying) return;
+    if (!isClimateLocutionType(kind)) return;
+    if (isJinglePlaying) {
+        // Mismo salvavidas que en playTimeLocution: recuperarse de un flag
+        // stuck cuando Rust ya no tiene audio vivo en el bus jingle.
+        if (isJingleBusReallyActive()) return;
+        logSystem('[INFO] Locucion de clima: isJinglePlaying estaba colgado, liberando flag.');
+        isJinglePlaying = false;
+    }
     const folder = resolveClimateLocutionFolder(kind);
     if (!folder || !folderHasClimateFiles(folder, kind)) {
         logSystem('[CLIMA] Carpeta de locucion no valida.');
@@ -8712,6 +8719,19 @@ async function playClimateLocution(kind) {
 
     const playerId = `climate-${kind}`;
     isJinglePlaying = true;
+    // Registrar el runtime ANTES del comando load (mismo patrón que
+    // playOverlayDropViaRust). Si registramos después del await y la
+    // locución es muy corta, Rust puede reportar 'ended' antes de que el
+    // reconcile sepa que existe → onEnded jamás se llamaba y
+    // isJinglePlaying quedaba stuck en true, lo que bloqueaba los
+    // pisadores horarios siguientes (playTimeLocution chequea ese flag).
+    registerRustOverlayRuntime({
+        playerId,
+        path: filePath,
+        type: 'climate-locution',
+        affectsProgram: true,
+        onEnded: () => { isJinglePlaying = false; }
+    });
     const result = await commandRustControlPlane('load', {
         player: playerId,
         path: filePath,
@@ -8720,19 +8740,11 @@ async function playClimateLocution(kind) {
         autoplay: true
     });
     if (!result?.ok) {
+        finishRustOverlayRuntime(playerId);
         isJinglePlaying = false;
         logSystem(`[CLIMA] No se pudo reproducir locucion: ${result?.error || 'sin detalle'}`);
         return;
     }
-
-    const startedMsg = result.result?.message || {};
-    registerRustOverlayRuntime({
-        playerId,
-        path: filePath,
-        type: 'climate-locution',
-        affectsProgram: true,
-        onEnded: () => { isJinglePlaying = false; }
-    });
     ipcRenderer.send('update-metadata', `${getClimateLocutionLabel(kind)} ${Math.round(value)}`);
 }
 
@@ -8754,8 +8766,36 @@ function resolveTimeLocutionFiles(folder, now = new Date()) {
     return filesToPlay;
 }
 
+function isJingleBusReallyActive() {
+    // Verifica con Rust si hay algún player vivo en el bus 'jingle'. Sirve
+    // para detectar (y recuperar) un `isJinglePlaying` que quedó stuck en
+    // true porque su `onEnded` jamás se llamó (race de registro tardío).
+    try {
+        const players = rustAudioProbeStatus?.lastStatus?.players;
+        if (!Array.isArray(players) || players.length === 0) return false;
+        return players.some(p => {
+            if (!p) return false;
+            const status = String(p.status || '').toLowerCase();
+            const onJingleBus = (rustOverlayRuntimes.get(p.id)?.affectsProgram !== false)
+                && (p.id === 'time-locucion' || String(p.id || '').startsWith('climate-') || String(p.id || '').startsWith('overlay-'));
+            return onJingleBus && (status === 'playing' || status === 'loaded' || status === 'paused');
+        });
+    } catch (err) {
+        return false;
+    }
+}
+
 function playTimeLocution() {
-    if (isJinglePlaying) return;
+    if (isJinglePlaying) {
+        // Salvavidas: si el flag quedó stuck pero Rust dice que nada
+        // está sonando realmente en el bus jingle, liberamos el flag
+        // y seguimos. Sin esto, un solo `onEnded` perdido (p.ej. por una
+        // locución de clima muy corta) bloquearía PARA SIEMPRE el
+        // pisador horario.
+        if (isJingleBusReallyActive()) return;
+        logSystem('[INFO] Pisador horario: isJinglePlaying estaba colgado, liberando flag.');
+        isJinglePlaying = false;
+    }
     const folder = generalPrefs.timeFolder;
     if (!folder || !fs.existsSync(folder)) return;
 

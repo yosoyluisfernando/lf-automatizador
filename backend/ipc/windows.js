@@ -293,7 +293,11 @@ module.exports = function(context) {
     }
 
     function normalizeEncoderConfig(config = {}) {
-        const serverType = config.serverType || config.type || 'icecast';
+        // Tipos válidos: 'icecast' (Icecast 2 PUT), 'shoutcast' (clásico SOURCE
+        // legacy), 'shoutcast2' (DNAS 2.x con PUT moderno). Cualquier otro valor
+        // cae a 'icecast' por seguridad.
+        const rawType = config.serverType || config.type || 'icecast';
+        const serverType = ['icecast', 'shoutcast', 'shoutcast2'].includes(rawType) ? rawType : 'icecast';
         const password = config.password || config.pass || '';
         const bitrate = Math.min(320, Math.max(32, parseInt(config.bitrate, 10) || 128));
         const providerLower = String(config.encoderProvider || 'auto').trim().toLowerCase();
@@ -332,7 +336,12 @@ module.exports = function(context) {
 
     function buildStreamUrl(config) {
         const safePassword = encodeURIComponent(String(config.password || ''));
-        if (config.serverType === 'shoutcast') {
+        // SHOUTcast (clásico o moderno) usa /1 hardcoded como Stream ID 1, que es
+        // el default de Listen2MyRadio y la mayoría de proveedores free. La
+        // diferencia entre 'shoutcast' y 'shoutcast2' NO está en la URL sino en
+        // el método HTTP que envía FFmpeg (SOURCE legacy vs PUT moderno),
+        // controlado por `-legacy_icecast` en buildCodecArgs().
+        if (config.serverType === 'shoutcast' || config.serverType === 'shoutcast2') {
             return `icecast://source:${safePassword}@${config.ip}:${config.port}/1`;
         }
         let mountStr = normalizeMount(config.mount);
@@ -342,8 +351,18 @@ module.exports = function(context) {
 
     function buildCodecArgs(config) {
         const common = ['-vn', '-ac', '2', '-ar', '44100', '-af', 'aresample=async=1:first_pts=0'];
-        if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, '-f', 'adts', '-content_type', 'audio/aac'];
-        return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, '-f', 'mp3', '-content_type', 'audio/mpeg'];
+        // El protocolo `icecast://` de FFmpeg envía por defecto HTTP PUT (Icecast
+        // 2.4+). SHOUTcast clásico (v1 y la mayoría de v2 free como Listen2MyRadio)
+        // sólo entiende el método SOURCE legacy — sin `-legacy_icecast 1` falla
+        // con "End of file" antes de transmitir audio.
+        //
+        // Tres modos según el dropdown del encoder:
+        //   - 'icecast'    → PUT moderno (Icecast 2.4+, Zeno.fm)
+        //   - 'shoutcast'  → SOURCE legacy (Shoutcast 1.x / 2.x clásico, L2MR)
+        //   - 'shoutcast2' → PUT moderno (DNAS 2.x con HTTP PUT habilitado)
+        const legacyShoutcast = config.serverType === 'shoutcast' ? ['-legacy_icecast', '1'] : [];
+        if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+        return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, '-f', 'mp3', '-content_type', 'audio/mpeg'];
     }
 
     function buildEncoderInputArgs(config) {
@@ -773,8 +792,13 @@ module.exports = function(context) {
                     const mountStr = encodeURIComponent(normalizeMount(conf.mount));
                     metaUrl = `http://${conf.ip}:${conf.port}/admin/metadata?mount=${mountStr}&mode=updinfo&song=${encodedMeta}`;
                     authHeader = 'Basic ' + Buffer.from(`admin:${conf.password}`).toString('base64');
-                } else if (conf.serverType === 'shoutcast') {
-                    metaUrl = `http://${conf.ip}:${conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&song=${encodedMeta}`;
+                } else if (conf.serverType === 'shoutcast' || conf.serverType === 'shoutcast2') {
+                    // El campo `sid` (stream ID) es obligatorio en SHOUTcast DNAS 2.x
+                    // — sin él el servidor responde 404 y la metadata no se actualiza.
+                    // Hardcodeamos sid=1 igual que el mountpoint `/1` que usa
+                    // buildStreamUrl(). Para SHOUTcast v1 el parámetro extra es
+                    // ignorado, así que es seguro en ambos modos (clásico y moderno).
+                    metaUrl = `http://${conf.ip}:${conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&sid=1&song=${encodedMeta}`;
                 }
                 if (metaUrl) {
                     const headers = authHeader ? { 'Authorization': authHeader } : {};
