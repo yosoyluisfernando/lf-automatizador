@@ -271,6 +271,11 @@ function initDB() {
             PRIMARY KEY (file_path, artist_key, role)
         );
 
+        -- Índice para JOIN WHERE role = 'main' en lib-get-full-db y consultas de país
+        CREATE INDEX IF NOT EXISTS idx_tal_role_artist ON track_artist_links(role, artist_key);
+        -- Índice para consultas por artista (catálogo, card, artistas de un track)
+        CREATE INDEX IF NOT EXISTS idx_tal_artist_key ON track_artist_links(artist_key);
+
         CREATE TABLE IF NOT EXISTS track_genre_links (
             file_path TEXT,
             genre_key TEXT,
@@ -279,6 +284,9 @@ function initDB() {
             source TEXT,
             PRIMARY KEY (file_path, genre_key, role)
         );
+
+        -- Índice para consultas por género en sincronización y editor de géneros
+        CREATE INDEX IF NOT EXISTS idx_tgl_genre_key ON track_genre_links(genre_key);
 
         CREATE TABLE IF NOT EXISTS library_virtual_folders (
             id TEXT PRIMARY KEY,
