@@ -12238,10 +12238,21 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
 
     function getRustEnginePath() {
         const fname = process.platform === 'win32' ? 'lf-audio-engine.exe' : 'lf-audio-engine';
+        // IMPORTANTE: Electron parcha fs.existsSync para que devuelva true en rutas dentro
+        // de app.asar (FS virtual), pero child_process.spawn() NO usa ese parche y falla con
+        // ENOENT. Por eso NUNCA incluimos candidatos con "app.asar" sin ".unpacked".
         const candidates = [];
+        // 1. extraResources → resources/bin/  (ubicación canónica en el build)
         if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', fname));
-        candidates.push(path.join(__dirname, '..', 'bin', fname));
-        candidates.push(path.join(process.cwd(), 'bin', fname));
+        // 2. asarUnpack → app.asar.unpacked/bin/  (alternativa en el build)
+        const appDir = path.join(__dirname, '..');
+        if (appDir.includes('app.asar')) {
+            candidates.push(appDir.replace(/app\.asar(?!\.unpacked)/g, 'app.asar.unpacked') + path.sep + 'bin' + path.sep + fname);
+        } else {
+            // 3. Entorno de desarrollo (bin/ o cwd/bin/)
+            candidates.push(path.join(appDir, 'bin', fname));
+            candidates.push(path.join(process.cwd(), 'bin', fname));
+        }
         for (const p of candidates) {
             try { if (fs.existsSync(p)) return p; } catch (e) { }
         }

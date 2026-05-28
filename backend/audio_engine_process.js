@@ -7,21 +7,35 @@ function resolveRustAudioEnginePath(rootDir) {
     // Cross-Platform: en Windows el binario lleva .exe, en Linux no tiene extensión.
     const ext = process.platform === 'win32' ? '.exe' : '';
     const resourcesDir = process.resourcesPath ? path.resolve(process.resourcesPath) : '';
+
+    // BUG FIX: Electron parcha fs.existsSync para que devuelva true en rutas dentro
+    // de app.asar (sistema de archivos virtual). Sin embargo, child_process.spawn()
+    // NO usa ese parche — va directo al SO y lanza ENOENT si la ruta apunta a dentro
+    // del .asar. Por eso NUNCA incluimos candidatos con "app.asar" sin ".unpacked".
+    // Se usa orden de prioridad fijo (no sort por mtime) para garantizar que
+    // extraResources (resources/bin/) siempre gane sobre asarUnpack.
+    const isPackaged = baseDir.includes('app.asar');
+    // Convierte cualquier ruta app.asar/… → app.asar.unpacked/… (ruta real en disco).
+    const toUnpacked = p => p.replace(/app\.asar(?!\.unpacked)/g, 'app.asar.unpacked');
+
     const candidates = [
+        // Prioridad 1 — extraResources: resources/bin/  (siempre la ubicación canónica)
         resourcesDir ? path.join(resourcesDir, 'bin', `lf-audio-engine${ext}`) : '',
         resourcesDir ? path.join(resourcesDir, 'bin', `lf-audio-engine-debug${ext}`) : '',
-        path.join(baseDir.replace('app.asar', 'app.asar.unpacked'), 'bin', `lf-audio-engine${ext}`),
-        path.join(baseDir.replace('app.asar', 'app.asar.unpacked'), 'bin', `lf-audio-engine-debug${ext}`),
-        path.join(baseDir, 'bin', `lf-audio-engine${ext}`),
-        path.join(baseDir, 'bin', `lf-audio-engine-debug${ext}`),
-        path.join(baseDir, 'audio-engine-rust', 'target', 'release', `lf-audio-engine${ext}`),
-        path.join(baseDir, 'audio-engine-rust', 'target', 'debug', `lf-audio-engine${ext}`)
+        // Prioridad 2 — asarUnpack: app.asar.unpacked/bin/  (sólo en build empaquetado)
+        isPackaged ? toUnpacked(path.join(baseDir, 'bin', `lf-audio-engine${ext}`)) : '',
+        isPackaged ? toUnpacked(path.join(baseDir, 'bin', `lf-audio-engine-debug${ext}`)) : '',
+        // Prioridad 3 — entorno de desarrollo (sólo cuando baseDir no está dentro de asar)
+        !isPackaged ? path.join(baseDir, 'bin', `lf-audio-engine${ext}`) : '',
+        !isPackaged ? path.join(baseDir, 'bin', `lf-audio-engine-debug${ext}`) : '',
+        !isPackaged ? path.join(baseDir, 'audio-engine-rust', 'target', 'release', `lf-audio-engine${ext}`) : '',
+        !isPackaged ? path.join(baseDir, 'audio-engine-rust', 'target', 'debug', `lf-audio-engine${ext}`) : '',
     ].filter(Boolean);
-    const existing = candidates
-        .filter(candidate => fs.existsSync(candidate))
-        .map(candidate => ({ candidate, mtimeMs: fs.statSync(candidate).mtimeMs || 0 }))
-        .sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return existing[0]?.candidate || candidates[0];
+
+    // Primer candidato que exista en el sistema de archivos REAL.
+    // NO se ordena por mtime — el orden de prioridad ya es el correcto.
+    const found = candidates.find(c => { try { return fs.existsSync(c); } catch { return false; } });
+    return found || candidates[0] || '';
 }
 
 
