@@ -660,6 +660,97 @@
         </div>
     </div>
 
+    <!-- ============================================================ -->
+    <!-- Wizard de primer uso / diagnostico (F1 para reabrir)         -->
+    <!-- ============================================================ -->
+    <div id="wizard-modal" class="modal-overlay" style="display: none; z-index: 10000;">
+        <div class="modal-content wizard-modal-content">
+            <div class="wizard-header">
+                <h2 id="wizard-title">Bienvenido a LF Automatizador</h2>
+                <div class="wizard-step-indicator">Paso <span id="wizard-step-current">1</span> de <span id="wizard-step-total">4</span></div>
+            </div>
+
+            <div class="wizard-body">
+                <!-- Paso 1: Diagnostico -->
+                <section id="wizard-step-1" class="wizard-step">
+                    <p class="wizard-intro">Antes de empezar verificamos que todo este listo para emitir. Si algo aparece con <span style="color:#e74c3c;">&#10007;</span>, sigue la sugerencia a su lado.</p>
+                    <div class="wizard-os-info">Sistema: <strong id="wizard-os-info">detectando...</strong></div>
+                    <ul id="wizard-diagnostics-list" class="wizard-diag-list"></ul>
+                    <div style="margin-top: 12px;">
+                        <button id="wizard-btn-copy-diag" class="settings-btn" style="background:#555;">Copiar diagnostico al portapapeles</button>
+                        <span id="wizard-copy-feedback" style="margin-left:10px; color:#27ae60; font-size:12px;"></span>
+                    </div>
+                </section>
+
+                <!-- Paso 2: Carpetas -->
+                <section id="wizard-step-2" class="wizard-step" style="display: none;">
+                    <p class="wizard-intro">Configura tus carpetas principales. Las opcionales puedes saltarlas y configurarlas despues.</p>
+                    <div class="wizard-field">
+                        <label>Carpeta raiz de tu libreria musical:</label>
+                        <div class="wizard-input-row">
+                            <input id="wizard-library-root" type="text" readonly placeholder="(no configurado)">
+                            <button id="wizard-pick-library" class="settings-btn" style="background:#00a8ff;">Elegir...</button>
+                        </div>
+                    </div>
+                    <div class="wizard-field">
+                        <label>Carpeta de locucion horaria <span class="wizard-optional">(opcional)</span>:</label>
+                        <div class="wizard-input-row">
+                            <input id="wizard-time-folder" type="text" readonly placeholder="(no configurado)">
+                            <button id="wizard-pick-time" class="settings-btn" style="background:#555;">Elegir...</button>
+                        </div>
+                    </div>
+                    <div class="wizard-field">
+                        <label>Carpeta de temperaturas <span class="wizard-optional">(opcional)</span>:</label>
+                        <div class="wizard-input-row">
+                            <input id="wizard-temp-folder" type="text" readonly placeholder="(no configurado)">
+                            <button id="wizard-pick-temp" class="settings-btn" style="background:#555;">Elegir...</button>
+                        </div>
+                    </div>
+                    <div class="wizard-field">
+                        <label>Carpeta de humedad <span class="wizard-optional">(opcional)</span>:</label>
+                        <div class="wizard-input-row">
+                            <input id="wizard-hum-folder" type="text" readonly placeholder="(no configurado)">
+                            <button id="wizard-pick-hum" class="settings-btn" style="background:#555;">Elegir...</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Paso 3: Ciudad -->
+                <section id="wizard-step-3" class="wizard-step" style="display: none;">
+                    <p class="wizard-intro">Si vas a usar locuciones de clima, indica la ciudad para que se actualice automaticamente. <span class="wizard-optional">(opcional)</span></p>
+                    <div class="wizard-field">
+                        <label>Ciudad (ej: "Lima, PE", "Madrid, ES"):</label>
+                        <input id="wizard-city" type="text" placeholder="Ciudad, Pais" style="width: 100%;">
+                    </div>
+                </section>
+
+                <!-- Paso 4: Tips + dismiss -->
+                <section id="wizard-step-4" class="wizard-step" style="display: none;">
+                    <p class="wizard-intro">Atajos basicos que vas a usar todo el tiempo:</p>
+                    <ul class="wizard-tips-list">
+                        <li><strong>Doble click</strong> sobre una pista de la playlist: la marca como SIGUIENTE para sonar cuando termine la actual.</li>
+                        <li><strong>Ctrl + Doble click</strong>: fuerza la reproduccion INMEDIATA de esa pista (interrumpe la actual con transicion limpia).</li>
+                        <li><strong>F1</strong>: vuelve a abrir este asistente cuando quieras (diagnostico + configuracion).</li>
+                    </ul>
+                    <div class="wizard-dismiss">
+                        <label class="wizard-checkbox-label">
+                            <input type="checkbox" id="wizard-dismiss-checkbox">
+                            <span>No volver a mostrar este asistente al iniciar el programa</span>
+                        </label>
+                    </div>
+                </section>
+            </div>
+
+            <div class="wizard-footer">
+                <button id="wizard-btn-back" class="settings-btn" style="background: #444;">Atras</button>
+                <span style="flex:1;"></span>
+                <button id="wizard-btn-skip" class="settings-btn" style="background: #666;">Saltar</button>
+                <button id="wizard-btn-next" class="settings-btn" style="background: #00a8ff;">Siguiente</button>
+                <button id="wizard-btn-finish" class="settings-btn" style="background: #27ae60; display: none;">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="render.js"></script>
 </body>
 </html>

@@ -1,23 +1,31 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Instalador de Dependencias - LF Automatizador 0.9.0
+title Instalador de Dependencias - LF Automatizador
 color 0B
 
 cd /d "%~dp0"
 
 echo ===============================================================================
-echo            LF AUTOMATIZADOR 0.9.0 - INSTALADOR DE DEPENDENCIAS
+echo            LF AUTOMATIZADOR - INSTALADOR DE DEPENDENCIAS
 echo ===============================================================================
 echo.
 echo Este asistente preparara tu sistema para poder usar el programa.
 echo Por favor, NO CIERRES ESTA VENTANA. Algunos procesos pueden tardar
 echo varios minutos en completarse y parecer que no avanzan. Es normal.
 echo.
+echo Se instalaran (si faltan):
+echo   - Microsoft Visual C++ Runtime (necesario para reproducir audio)
+echo   - Entorno de compilacion Rust + GCC ligero
+echo   - Dependencias de Node.js
+echo   - Motor de audio interno (compilado desde fuente)
+echo.
 echo ===============================================================================
 echo.
 
+:: ============================================================
 :: 1. Verificando Node.js
-echo [1/6] Verificando instalacion de Node.js...
+:: ============================================================
+echo [1/7] Verificando instalacion de Node.js...
 node -v >nul 2>&1
 if %errorlevel% equ 0 goto node_ok
 
@@ -36,14 +44,67 @@ echo [OK] Node.js !NODE_VERSION! detectado correctamente.
 echo.
 
 
-:: 2. Verificando/Instalando Rust (GNU)
-echo [2/6] Verificando entorno de compilacion Rust...
+:: ============================================================
+:: 2. Microsoft Visual C++ Runtime (CRITICO para que el motor de audio cargue)
+:: ============================================================
+echo [2/7] Verificando Microsoft Visual C++ Runtime (x64)...
+:: Chequeamos por la clave de registro que el redistributable instala.
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Installed >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] Visual C++ Runtime ya esta instalado.
+    goto vcredist_done
+)
+
+:: Fallback: chequeamos por la DLL en System32.
+if exist "%SystemRoot%\System32\vcruntime140.dll" (
+    echo [OK] Visual C++ Runtime detectado en System32.
+    goto vcredist_done
+)
+
+echo [INFO] Visual C++ Runtime NO detectado. Es necesario para que el motor
+echo        de audio funcione. Procediendo a descargar e instalar...
+echo [INFO] Descargando vc_redist.x64.exe desde Microsoft (~25 MB)...
+powershell -Command "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile 'vc_redist.x64.exe' -UseBasicParsing"
+
+if not exist "vc_redist.x64.exe" (
+    color 0C
+    echo [ERROR] No se pudo descargar vc_redist.x64.exe. Verifica tu conexion a internet.
+    echo Puedes instalarlo manualmente desde:
+    echo https://aka.ms/vs/17/release/vc_redist.x64.exe
+    pause
+    exit /b 1
+)
+
+echo [INFO] Ejecutando instalador de Visual C++ (puede pedir permisos de administrador)...
+vc_redist.x64.exe /install /quiet /norestart
+set "VC_EXITCODE=%errorlevel%"
+
+if "%VC_EXITCODE%"=="0"    echo [OK] Visual C++ Runtime instalado correctamente.
+if "%VC_EXITCODE%"=="1638" echo [OK] Ya hay una version mas reciente de Visual C++ Runtime.
+if "%VC_EXITCODE%"=="3010" echo [OK] Visual C++ Runtime instalado. Se recomienda reiniciar Windows.
+
+if not "%VC_EXITCODE%"=="0"    if not "%VC_EXITCODE%"=="1638" if not "%VC_EXITCODE%"=="3010" (
+    color 0E
+    echo [ADVERTENCIA] vc_redist.x64.exe devolvio codigo !VC_EXITCODE!.
+    echo La instalacion pudo no haberse completado. Si el programa no abre audio,
+    echo instala manualmente: https://aka.ms/vs/17/release/vc_redist.x64.exe
+)
+del vc_redist.x64.exe >nul 2>&1
+
+:vcredist_done
+echo.
+
+
+:: ============================================================
+:: 3. Verificando/Instalando Rust (GNU)
+:: ============================================================
+echo [3/7] Verificando entorno de compilacion Rust...
 cargo -V >nul 2>&1
 if %errorlevel% equ 0 goto rust_ok
 
 echo [INFO] Rust no esta instalado. Se procedera con la descarga e instalacion automatica.
 echo [INFO] Descargando instalador de Rust (esto requiere conexion a internet)...
-powershell -Command "Invoke-WebRequest -Uri 'https://win.rustup.rs/' -OutFile 'rustup-init.exe'"
+powershell -Command "Invoke-WebRequest -Uri 'https://win.rustup.rs/' -OutFile 'rustup-init.exe' -UseBasicParsing"
 if exist "rustup-init.exe" goto rust_download_ok
 
 color 0C
@@ -79,8 +140,10 @@ rustup default stable-gnu >nul 2>&1
 echo.
 
 
-:: 3. Verificando/Instalando compilador C/C++ ligero (w64devkit)
-echo [3/6] Preparando entorno C/C++ para dependencias nativas...
+:: ============================================================
+:: 4. Verificando/Instalando compilador C/C++ ligero (w64devkit)
+:: ============================================================
+echo [4/7] Preparando entorno C/C++ para dependencias nativas...
 set "W64_BIN=%USERPROFILE%\w64devkit\bin"
 set "W64_LIB=%USERPROFILE%\w64devkit\x86_64-w64-mingw32\lib"
 
@@ -88,7 +151,7 @@ if exist "%W64_BIN%\gcc.exe" goto gcc_ok
 
 echo [INFO] El compilador C/C++ ligero no esta instalado.
 echo [INFO] Descargando compilador portatil (aprox. 80MB). Por favor espera...
-powershell -Command "Invoke-WebRequest -Uri 'https://github.com/skeeto/w64devkit/releases/download/v1.20.0/w64devkit-1.20.0.zip' -OutFile 'w64devkit.zip'"
+powershell -Command "Invoke-WebRequest -Uri 'https://github.com/skeeto/w64devkit/releases/download/v1.20.0/w64devkit-1.20.0.zip' -OutFile 'w64devkit.zip' -UseBasicParsing"
 
 if exist "w64devkit.zip" goto gcc_download_ok
 
@@ -137,8 +200,10 @@ echo [INFO] Aplicando parche de compatibilidad interna para el linker (libgcc_eh
 echo.
 
 
-:: 4. Instalando dependencias de Node.js
-echo [4/6] Instalando dependencias del entorno Node.js...
+:: ============================================================
+:: 5. Instalando dependencias de Node.js
+:: ============================================================
+echo [5/7] Instalando dependencias del entorno Node.js...
 echo [INFO] Descargando e instalando paquetes...
 echo [INFO] Por favor, ten paciencia, puede tomar varios minutos. No te preocupes por las advertencias (WARN).
 call npm install
@@ -159,8 +224,10 @@ echo [OK] Dependencias de Node.js listas.
 echo.
 
 
-:: 5. Compilando motor de audio Rust
-echo [5/6] Compilando el Motor de Audio interno...
+:: ============================================================
+:: 6. Compilando motor de audio Rust
+:: ============================================================
+echo [6/7] Compilando el Motor de Audio interno...
 echo [INFO] Se estan descargando componentes y compilando el codigo en Rust.
 echo [INFO] Este es el paso que mas tiempo consume. Dependiendo de tu PC puede tardar de 1 a 5 minutos.
 echo [INFO] Por favor espera a que aparezca "Finalizado".
@@ -197,8 +264,10 @@ cd ..
 echo.
 
 
-:: 6. Limpieza final
-echo [6/6] Tareas finales de limpieza y optimizacion...
+:: ============================================================
+:: 7. Limpieza final
+:: ============================================================
+echo [7/7] Tareas finales de limpieza y optimizacion...
 call npm cache clean --force >nul 2>&1
 echo [OK] Optimizacion terminada.
 echo.

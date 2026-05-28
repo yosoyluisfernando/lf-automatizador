@@ -30,6 +30,9 @@ dist/
 .env
 .env.local
 
+# Binarios pesados que CI descarga en cada build (no committear)
+build/vcredist/*.exe
+
 # Asegurar que los instaladores y scripts multiplataforma SÍ se suban
 !iniciar.sh
 !instalar_dependencias.sh

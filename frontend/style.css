@@ -304,6 +304,41 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; display: flex; align-items: center; justify-content: center; }
 .modal-overlay:focus { outline: none; }
 .modal-content { background-color: #222225; border: 1px solid #444; border-radius: 6px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.9); display: flex; flex-direction: column;}
+
+/* --- Wizard de primer uso --- */
+.wizard-modal-content { width: 640px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); gap: 14px; padding: 22px; }
+.wizard-header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #333; padding-bottom: 10px; }
+.wizard-header h2 { margin: 0; color: #00a8ff; font-size: 18px; }
+.wizard-step-indicator { color: #888; font-size: 12px; }
+.wizard-body { overflow-y: auto; min-height: 280px; max-height: 60vh; padding-right: 4px; }
+.wizard-step { display: flex; flex-direction: column; gap: 12px; color: #ddd; font-size: 13px; line-height: 1.5; }
+.wizard-intro { margin: 0 0 4px 0; color: #ccc; }
+.wizard-os-info { background: #1a1a1d; padding: 8px 12px; border-radius: 4px; border-left: 3px solid #00a8ff; font-size: 12px; }
+.wizard-diag-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.wizard-diag-item { display: flex; align-items: flex-start; gap: 10px; background: #1a1a1d; padding: 8px 10px; border-radius: 4px; }
+.wizard-diag-icon { font-size: 16px; font-weight: bold; min-width: 18px; text-align: center; line-height: 1.2; }
+.wizard-diag-icon.ok { color: #27ae60; }
+.wizard-diag-icon.fail { color: #e74c3c; }
+.wizard-diag-icon.warn { color: #f39c12; }
+.wizard-diag-text { flex: 1; }
+.wizard-diag-label { font-weight: 600; color: #eee; }
+.wizard-diag-detail { color: #999; font-size: 11px; margin-top: 2px; }
+.wizard-diag-detail a { color: #00a8ff; text-decoration: none; }
+.wizard-diag-detail a:hover { text-decoration: underline; }
+.wizard-field { display: flex; flex-direction: column; gap: 4px; }
+.wizard-field label { color: #bbb; font-size: 12px; }
+.wizard-input-row { display: flex; gap: 6px; align-items: center; }
+.wizard-input-row input { flex: 1; padding: 6px 8px; background: #1a1a1d; border: 1px solid #444; border-radius: 4px; color: #ddd; font-size: 12px; }
+.wizard-input-row input:focus { outline: none; border-color: #00a8ff; }
+.wizard-optional { color: #888; font-size: 11px; font-weight: normal; }
+.wizard-tips-list { padding-left: 20px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.wizard-tips-list li { color: #ddd; }
+.wizard-tips-list strong { color: #00a8ff; }
+.wizard-dismiss { margin-top: 14px; padding-top: 10px; border-top: 1px solid #333; }
+.wizard-checkbox-label { display: flex; align-items: center; gap: 8px; color: #ccc; cursor: pointer; font-size: 12px; }
+.wizard-checkbox-label input[type="checkbox"] { accent-color: #00a8ff; }
+.wizard-footer { display: flex; gap: 8px; border-top: 1px solid #333; padding-top: 12px; align-items: center; }
+.wizard-footer .settings-btn { padding: 7px 14px; }
 .repeat-options-overlay, .mode-options-overlay { background: rgba(0,0,0,0.62); }
 .repeat-options-modal, .mode-options-modal { width: 340px; max-width: calc(100vw - 40px); gap: 12px; padding: 16px; }
 .repeat-options-header, .mode-options-header { display: flex; flex-direction: column; gap: 3px; border-bottom: 1px solid #333; padding-bottom: 10px; }

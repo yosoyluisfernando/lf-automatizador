@@ -73,6 +73,22 @@ jobs:
           mkdir -p ../bin
           cp target/release/lf-audio-engine.exe ../bin/
 
+      - name: Download VC++ 2015-2022 Redistributable (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/vcredist | Out-Null
+          $url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $dest = "build/vcredist/vc_redist.x64.exe"
+          Write-Host "Descargando $url -> $dest"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          $size = (Get-Item $dest).Length
+          Write-Host "OK: vc_redist.x64.exe descargado ($size bytes)"
+          if ($size -lt 10000000) {
+            Write-Error "El archivo descargado es demasiado pequeno ($size bytes). Se esperaban ~25 MB."
+            exit 1
+          }
+
       - name: Compile Rust Engine (Linux)
         if: matrix.platform == 'linux'
         shell: bash

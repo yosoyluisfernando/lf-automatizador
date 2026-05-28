@@ -1553,7 +1553,7 @@ function setRustPlaylistMirrorGain(playerId, gain, extra = {}) {
     // Cuando un deck pasa a ser "owner" (recién asignado), marcar el
     // timestamp de asignación para saber cuál es el más viejo en caso
     // de saturación de decks.
-    const assignedAt = extra.owner && !previous.assignedAt
+    const assignedAt = extra.owner
         ? Date.now()
         : previous.assignedAt;
     rustPlaylistMirrorState.set(playerId, {
@@ -1631,8 +1631,25 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
     }
 
     if (!bestCandidate) {
-        bestCandidate = RUST_PLAYLIST_DECK_IDS.find(id => !excluded.has(id))
-            || RUST_PLAYLIST_DECK_IDS[rustPlaylistDeckCursor % RUST_PLAYLIST_DECK_IDS.length];
+        bestCandidate = RUST_PLAYLIST_DECK_IDS.find(id => !excluded.has(id));
+    }
+
+    // Salvaguarda final: si TODOS los decks están excluidos (caso patológico
+    // donde fadingDeck + activeDeck + standby son tres IDs diferentes), nunca
+    // sacrificar el deck del aire. Orden de preferencia para sacrificio:
+    //   1) fadingDeck (su cola ya estaba por terminar)
+    //   2) standby   (se puede re-precargar después)
+    //   3) cualquier deck que no sea el activo
+    // Solo como último recurso absoluto se devuelve el activo (no debería
+    // alcanzarse nunca con 3 decks reales).
+    if (!bestCandidate) {
+        const activeId = activeRustPlaylistDeckId;
+        const fadingId = getPlaylistPlayerId(fadingPlayer);
+        const standbyId = rustPlaylistStandbyPreload?.playerId;
+        bestCandidate = (fadingId && fadingId !== activeId) ? fadingId
+            : (standbyId && standbyId !== activeId) ? standbyId
+            : (RUST_PLAYLIST_DECK_IDS.find(id => id !== activeId)
+                || RUST_PLAYLIST_DECK_IDS[rustPlaylistDeckCursor % RUST_PLAYLIST_DECK_IDS.length]);
     }
 
     // Log de diagnóstico de saturación
@@ -1673,15 +1690,37 @@ function evictRustPlaylistDeck(playerId) {
 }
 
 function pickRustStandbyDeckId() {
-    const activeIds = new Set([
+    const now = Date.now();
+    const excluded = new Set([
         getPlaylistPlayerId(activePlayer),
         getPlaylistPlayerId(fadingPlayer),
-        activeRustPlaylistDeckId
+        activeRustPlaylistDeckId,
+        rustPlaylistStandbyPreload?.playerId
     ].filter(Boolean));
+
+    // Excluir tambien decks con audio activo en Rust (tail en curso o pista
+    // cargada). Sin esto, un deck en holdTail seria invisible para el algoritmo
+    // y la siguiente llamada `commandRustControlPlane('load', ...)` cortaria
+    // su cola en seco. La rotacion normal A→B→C→A se rompe cuando una cola
+    // larga vive mas alla de un crossfade rapido (locuciones cortas),
+    // momento en el que fadingPlayer ya no referencia ese deck.
+    for (const [pid, state] of rustPlaylistMirrorState.entries()) {
+        const tailUntil = Number(state?.tailUntil) || 0;
+        const status = String(state?.status || '').toLowerCase();
+        const hasLiveAudio = !!state?.path && status !== 'stopped';
+        if (tailUntil > now || hasLiveAudio) {
+            excluded.add(pid);
+        }
+    }
+
     const preferred = RUST_PLAYLIST_DECK_IDS.includes('player-c')
         ? ['player-c', ...RUST_PLAYLIST_DECK_IDS.filter(id => id !== 'player-c')]
         : RUST_PLAYLIST_DECK_IDS;
-    return preferred.find(playerId => !activeIds.has(playerId)) || preferred[0] || '';
+
+    // Si todos estan ocupados, retornar '' (NO un excluido) para que el
+    // standby simplemente no se precargue ahora. El siguiente crossfade hara
+    // un load fresco; menos eficiente, pero garantiza que no cortamos colas.
+    return preferred.find(playerId => !excluded.has(playerId)) || '';
 }
 
 function isRustStandbyReadyFor(row, filePath, bus) {
@@ -2130,6 +2169,11 @@ function syncRustPlaylistControlPlane({ force = false, syncPosition = force } = 
     for (const [playerId, state] of rustPlaylistMirrorState.entries()) {
         if (!liveIds.has(playerId)) {
             if ((Number(state?.tailUntil) || 0) > Date.now()) continue;
+            // Salvaguarda: nunca detener el deck que está al aire por una
+            // desincronización transitoria entre buildMixDiagnostics y el
+            // estado Rust. Si playerId coincide con activeRustPlaylistDeckId,
+            // sigue siendo el deck del aire aunque livePlayers parezca vacío.
+            if (playerId && playerId === activeRustPlaylistDeckId) continue;
             const primaryPlayerId = getRustPrimaryPlayerId(playerId);
             if (primaryPlayerId !== playerId
                 && liveIds.has(primaryPlayerId)
@@ -8087,6 +8131,11 @@ ipcRenderer.on('settings-updated', () => {
 let lastLeftPeak = 0; let lastRightPeak = 0; let isJinglePlaying = false;
 let activePlayer = playerA; let activeGain = gainA; let fadingPlayer = null; let fadingGain = null;
 let currentTrackConfig = null; let crossfadeTriggered = false; let crossfadeTriggeredForRow = null;
+// Fila que está siendo reintentada tras un fallo transitorio (race condition,
+// load momentáneo fallido). Sólo se permite UN reintento por fila antes de
+// avanzar a la siguiente, para evitar loops. Se limpia cuando entra a sonar
+// una fila distinta.
+let pendingRetryRow = null;
 let currentStartTimeOffset = 0; let currentFiredDrops = [];
 let playRowSessionId = 0;
 let lastOverlayEvalSessionId = 0;
@@ -8287,9 +8336,54 @@ function rememberOverlayEval(realElapsed) {
 // emite `timeLocutionEnded` y el listener IPC al final del archivo se
 // encarga de avanzar la playlist y liberar el ducking de la botonera.
 
-function schedulePlayNextAfterFailure(isAutoMix = false, delayMs = 1200) {
-    const name = currentPlayingRow?.dataset?.pureName || currentPlayingRow?.children?.[1]?.innerText || 'pista actual';
-    haltPlaybackOnFatalError(`Fallo de reproduccion en ${name}. La siguiente pista no se disparo automaticamente.`, { autoAction: true });
+function schedulePlayNextAfterFailure(isAutoMix = false, delayMs = 400) {
+    const failedRow = currentPlayingRow;
+    const name = failedRow?.dataset?.pureName || failedRow?.children?.[1]?.innerText || 'pista actual';
+
+    // Limpiamos siempre crossfadeTriggered para no quedar atascados.
+    crossfadeTriggered = false;
+    crossfadeTriggeredForRow = null;
+
+    // PASO 1: Reintentar UNA vez la misma fila. Los fallos transitorios
+    // (race condition en reserva de deck, load momentáneo fallido) suelen
+    // resolverse en un reintento corto. Si la fila ya se intentó, saltamos.
+    if (failedRow && document.body.contains(failedRow) && pendingRetryRow !== failedRow) {
+        pendingRetryRow = failedRow;
+        const retryDelay = Math.max(150, Math.min(Number(delayMs) || 400, 500));
+        logSystem(`[INCIDENTE] Fallo transitorio en ${name}. Reintentando en ${retryDelay}ms...`);
+        setTimeout(() => {
+            try {
+                // Solo reintentar si seguimos en la misma fila (no la canceló operador)
+                if (pendingRetryRow !== failedRow) return;
+                playRow(failedRow, isAutoMix);
+            } catch (err) {
+                logSystem(`[ERROR] Reintento fallo: ${err?.message || err}. Avanzando.`);
+                pendingRetryRow = null;
+                try { playNext(isAutoMix); } catch (e) {
+                    haltPlaybackOnFatalError(
+                        `Reintento+avance fallaron en ${name}: ${e?.message || e}`,
+                        { autoAction: true }
+                    );
+                }
+            }
+        }, retryDelay);
+        return;
+    }
+
+    // PASO 2: Ya se reintentó (o no hay fila reintentable). Avanzar.
+    pendingRetryRow = null;
+    logSystem(`[ERROR] Fallo persistente en ${name}. Saltando automaticamente a la siguiente pista.`);
+    const delay = Math.max(100, Number(delayMs) || 400);
+    setTimeout(() => {
+        try {
+            playNext(isAutoMix);
+        } catch (err) {
+            haltPlaybackOnFatalError(
+                `No se pudo avanzar tras fallo en ${name}: ${err?.message || err}`,
+                { autoAction: true }
+            );
+        }
+    }, delay);
 }
 
 function handleTimeUpdate(player) {
@@ -9445,6 +9539,12 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
     const currentSessionId = playRowSessionId;
     const previousPlayingRow = currentPlayingRow;
     if (previousPlayingRow !== tr) repeatTrackFinishCount = 0;
+    // Si pasamos a una fila DISTINTA de la que estabamos reintentando, limpiamos
+    // el tracker. Esto permite que la misma fila pueda volver a reintentarse
+    // mas tarde (por ej. en un loop de playlist) si vuelve a fallar.
+    // Si tr === pendingRetryRow, es porque estamos ejecutando el reintento ahora,
+    // y dejamos el tracker para que un segundo fallo seguido salte a la siguiente.
+    if (pendingRetryRow && pendingRetryRow !== tr) pendingRetryRow = null;
 
     // Limpieza de pista anterior (crucial para canciones temporales y saltos a comandos)
     if (previousPlayingRow && previousPlayingRow !== tr) {
@@ -9493,7 +9593,22 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             activeRustPlaylistDeckId,
             rustPlaylistStandbyPreload?.playerId
         ].filter(Boolean);
-        let currentRustPlayerId = isRustPlaylistOwnerEnabled() ? reserveRustPlaylistDeckId(excludedRustDecks) : '';
+        // Si el standby ya está precargado para esta pista exacta, usarlo
+        // directamente sin llamar a reserveRustPlaylistDeckId. En la rotación
+        // estable de 3 decks (A→B→C→A) los tres IDs terminan en excludedRustDecks
+        // simultáneamente: reserveRustPlaylistDeckId no encontraría deck libre,
+        // entraría en modo evicción y registraría [DECK SATURACION] innecesariamente
+        // porque el standby iba a consumirse igual unos milisegundos después.
+        let currentRustPlayerId = '';
+        if (isRustPlaylistOwnerEnabled()) {
+            const earlyFilePath = tr.dataset.ruta || '';
+            const earlyBus = earlyFilePath ? getRustPlaylistPrimaryBus(tr) : '';
+            if (earlyFilePath && isRustStandbyReadyFor(tr, earlyFilePath, earlyBus)) {
+                currentRustPlayerId = rustPlaylistStandbyPreload.playerId;
+            } else {
+                currentRustPlayerId = reserveRustPlaylistDeckId(excludedRustDecks);
+            }
+        }
         activeRustPlaylistDeckId = currentRustPlayerId;
         assignPlayerToPlaylistBus(activePlayer, getPlaylistIndexFromRow(tr));
         assignPlayerToPlaylistBus(fadingPlayer, getPlaylistIndexFromRow(previousPlayingRow || tr));
@@ -9930,7 +10045,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         currentStartTimeOffset = playbackWindow.startOffset;
         currentDuration = playbackWindow.effectiveDuration ?? Math.max(MIN_PLAYBACK_WINDOW_SECONDS, baseDur - currentStartTimeOffset);
         if (!Number.isFinite(currentDuration) || currentDuration < 1) {
-            haltPlaybackOnFatalError(`Duracion invalida menor a 1 segundo: ${nombreMostrar}`);
+            logSystem(`[ERROR] Duracion invalida menor a 1 segundo: ${nombreMostrar}`);
+            schedulePlayNextAfterFailure(isAutoMix);
             return;
         }
         trackStartTime = new Date(); document.getElementById('txt-cancion').innerText = nombreMostrar; document.getElementById('txt-cancion').style.color = '#ffffff';
@@ -9990,7 +10106,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             }
             let nextPlayerId = standbyPlayerId || getPlaylistPlayerId(nextPlayer);
             if (!nextPlayerId) {
-                haltPlaybackOnFatalError('Rust no pudo resolver el player activo.');
+                logSystem('[ERROR] Rust no pudo resolver el player activo. Avanzando a la siguiente.');
+                schedulePlayNextAfterFailure(isAutoMix);
                 return;
             }
             syncRustPlaylistPlaybackContext(nextPlayerId);
@@ -10053,6 +10170,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     path: rutaFisica,
                     owner: true,
                     status: 'loaded',
+                    tailUntil: 0,
                     seekBucket: Math.floor(positionMs / RUST_MIRROR_SEEK_DEBOUNCE_MS)
                 });
                 if (nextAuxPlayerId && nextAuxBus) {
@@ -10129,7 +10247,14 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 return;
             } catch (err) {
                 refreshAirIncidentStatus();
-                haltPlaybackOnFatalError(`Rust no pudo reproducir: ${nombreMostrar}. ${err?.message || ''}`.trim());
+                // Fail-soft: si la transición Rust falla (típicamente tras un
+                // [DECK SATURACION] que dejó el standby inconsistente), NO
+                // haltamos la emisión. Logueamos y avanzamos a la siguiente
+                // pista. Si haltáramos aquí, handleEnded y playNext quedarían
+                // bloqueados por playbackFatalHalt y la cancion actual sonaria
+                // hasta su fin natural sin avanzar (silencio hasta click manual).
+                logSystem(`[ERROR] Rust no pudo reproducir: ${nombreMostrar}. ${err?.message || ''}`.trim());
+                schedulePlayNextAfterFailure(isAutoMix);
                 return;
             }
         }
@@ -10216,7 +10341,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             nextPlayer.src = targetMediaUrl;
             nextPlayer.load();
         }
-    } catch (err) { haltPlaybackOnFatalError(`Error interno al iniciar pista: ${err.message || err}`); }
+    } catch (err) {
+        logSystem(`[ERROR] Error interno al iniciar pista: ${err.message || err}`);
+        schedulePlayNextAfterFailure(isAutoMix);
+    }
 }
 
 function isPlaybackFullyStopped() {
@@ -10308,6 +10436,13 @@ async function executeEventCommandRow(commandRow) {
 }
 
 function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
+    // Defensa: si un crossfade anterior dejó este flag stuck (porque playRow
+    // fallo antes de poder resetearlo en su try), aquí lo limpiamos antes
+    // de elegir la siguiente pista. Sin esto, la deteccion de mix-point
+    // podria saltarse en la siguiente cancion.
+    crossfadeTriggered = false;
+    crossfadeTriggeredForRow = null;
+
     if (playbackFatalHalt) {
         logSystem('[SEGURIDAD] Avance automatico bloqueado por error critico. Pulsa Stop y luego Play para reintentar.');
         return;
@@ -12069,4 +12204,335 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         }
     }
 });
+
+// ============================================================
+// Wizard de primer uso / diagnostico
+// ============================================================
+// Modal multi-paso que se abre automaticamente la primera vez
+// (cuando generalPrefs.wizardDismissed != true) y puede reabrirse
+// con F1 en cualquier momento. Permite verificar dependencias
+// (motor Rust, FFmpeg, Visual C++ Runtime) y hacer una configuracion
+// rapida de carpetas y ciudad para que un usuario no-tecnico pueda
+// arrancar con la emision sin tocar codigo ni archivos.
+// ============================================================
+(function setupFirstRunWizard() {
+    const TOTAL_STEPS = 4;
+    const libraryPrefsPath = path.join(configDir, 'library_prefs.json');
+    let currentStep = 1;
+
+    const $ = id => document.getElementById(id);
+    const setDisp = (el, val) => { if (el) el.style.display = val; };
+
+    function readLibraryPrefsRaw() {
+        try {
+            if (fs.existsSync(libraryPrefsPath)) {
+                return JSON.parse(fs.readFileSync(libraryPrefsPath, 'utf-8')) || {};
+            }
+        } catch (e) { }
+        return {};
+    }
+    function writeLibraryPrefsRaw(prefs) {
+        try { fs.writeFileSync(libraryPrefsPath, JSON.stringify(prefs, null, 2)); }
+        catch (e) { console.error('[wizard] no se pudo escribir library_prefs.json:', e); }
+    }
+
+    function getRustEnginePath() {
+        const fname = process.platform === 'win32' ? 'lf-audio-engine.exe' : 'lf-audio-engine';
+        const candidates = [];
+        if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'bin', fname));
+        candidates.push(path.join(__dirname, '..', 'bin', fname));
+        candidates.push(path.join(process.cwd(), 'bin', fname));
+        for (const p of candidates) {
+            try { if (fs.existsSync(p)) return p; } catch (e) { }
+        }
+        return '';
+    }
+    function getFFmpegPath() {
+        try {
+            const p = require('ffmpeg-static');
+            return typeof p === 'string' ? p : '';
+        } catch (e) { return ''; }
+    }
+    function hasVcRuntime() {
+        if (process.platform !== 'win32') return null;
+        try {
+            const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+            return fs.existsSync(path.join(sysRoot, 'System32', 'vcruntime140.dll'));
+        } catch (e) { return false; }
+    }
+    function getOsLabel() {
+        const plat = process.platform;
+        const arch = process.arch;
+        const release = os.release();
+        if (plat === 'win32') {
+            const build = parseInt((release.split('.')[2] || '0'), 10);
+            const win = build >= 22000 ? 'Windows 11' : 'Windows 10';
+            return `${win} (${arch}, build ${build || release})`;
+        }
+        if (plat === 'linux') return `Linux ${release} (${arch})`;
+        if (plat === 'darwin') return `macOS ${release} (${arch})`;
+        return `${plat} ${release} (${arch})`;
+    }
+
+    function runDiagnostics() {
+        const out = [];
+        // Motor Rust
+        const rust = getRustEnginePath();
+        out.push(rust
+            ? { ok: true, label: 'Motor de audio Rust', detail: `OK: ${rust}` }
+            : { ok: false, label: 'Motor de audio Rust', detail: 'NO ENCONTRADO. Reinstala LF Automatizador desde el instalador oficial.', fix: { kind: 'open-url', url: 'https://github.com/LuisFernandoSamame/LF-Automatizador/releases/latest', label: 'Ir a releases' } });
+        // FFmpeg
+        const ff = getFFmpegPath();
+        const ffOk = ff && fs.existsSync(ff);
+        out.push(ffOk
+            ? { ok: true, label: 'FFmpeg (encoder)', detail: `OK: ${ff}` }
+            : { ok: false, label: 'FFmpeg (encoder)', detail: 'No encontrado. El encoder no podra emitir hasta resolver esto. Reinstala el programa.', fix: { kind: 'open-url', url: 'https://github.com/LuisFernandoSamame/LF-Automatizador/releases/latest', label: 'Ir a releases' } });
+        // VC++ Runtime (Windows only)
+        if (process.platform === 'win32') {
+            const vc = hasVcRuntime();
+            out.push(vc
+                ? { ok: true, label: 'Microsoft Visual C++ Runtime', detail: 'OK: vcruntime140.dll presente en System32.' }
+                : { ok: false, label: 'Microsoft Visual C++ Runtime', detail: 'NO INSTALADO. Sin esto el motor de audio no arranca y no hay reproduccion. Puedo instalarlo ahora por ti (te pedira permisos de administrador).', fix: { kind: 'install-vcredist', label: 'Instalar ahora' } });
+        }
+        // Carpeta raiz libreria
+        const libRoot = (readLibraryPrefsRaw().persistentRoot || '').trim();
+        let libOk = false; try { libOk = libRoot && fs.statSync(libRoot).isDirectory(); } catch (e) { }
+        out.push(libOk
+            ? { ok: true, label: 'Carpeta raiz de la libreria', detail: `OK: ${libRoot}` }
+            : { warn: true, label: 'Carpeta raiz de la libreria', detail: 'No configurada. Configurala en el paso siguiente.', fix: { kind: 'goto-step', step: 2, label: 'Configurar' } });
+        // Carpeta locucion horaria (opcional)
+        const tf = (generalPrefs?.timeFolder || '').trim();
+        let tfOk = false; try { tfOk = tf && fs.statSync(tf).isDirectory(); } catch (e) { }
+        out.push(tfOk
+            ? { ok: true, label: 'Carpeta locucion horaria', detail: `OK: ${tf}` }
+            : { warn: true, label: 'Carpeta locucion horaria', detail: 'No configurada (opcional).', fix: { kind: 'goto-step', step: 2, label: 'Configurar' } });
+        // Ciudad para clima (opcional)
+        const city = (generalPrefs?.weatherCity || '').trim();
+        out.push(city
+            ? { ok: true, label: 'Ciudad para clima', detail: `OK: ${city}` }
+            : { warn: true, label: 'Ciudad para clima', detail: 'No configurada (opcional).', fix: { kind: 'goto-step', step: 3, label: 'Configurar' } });
+        return out;
+    }
+
+    // Aplica una accion de auto-fix segun el tipo. Devuelve una Promise.
+    async function applyFix(fix, btnEl) {
+        if (!fix) return;
+        const origLabel = btnEl ? btnEl.textContent : '';
+        const setBtn = (text, disabled) => {
+            if (!btnEl) return;
+            btnEl.textContent = text;
+            btnEl.disabled = !!disabled;
+            btnEl.style.opacity = disabled ? '0.6' : '1';
+        };
+
+        try {
+            if (fix.kind === 'install-vcredist') {
+                setBtn('Instalando... (espera UAC)', true);
+                const res = await ipcRenderer.invoke('wizard:installVcRedist');
+                if (res?.ok) {
+                    setBtn(res.rebootRequired ? 'OK - reinicia Windows' : 'Instalado!', true);
+                    setTimeout(renderDiagnostics, 1200);
+                } else {
+                    setBtn('Fallo - reintentar', false);
+                    console.error('[wizard] install-vcredist:', res?.error || res);
+                    alert('No se pudo instalar Visual C++ Runtime automaticamente.\n\n' +
+                        (res?.error || 'Error desconocido.') +
+                        '\n\nDescargalo e instalalo manualmente desde:\nhttps://aka.ms/vs/17/release/vc_redist.x64.exe');
+                }
+                return;
+            }
+            if (fix.kind === 'goto-step') {
+                gotoStep(fix.step || 2);
+                return;
+            }
+            if (fix.kind === 'open-url' && fix.url) {
+                ipcRenderer.invoke('shell:openExternal', fix.url).catch(() => { });
+                return;
+            }
+        } catch (err) {
+            console.error('[wizard] applyFix error:', err);
+            setBtn(origLabel || 'Solucionar', false);
+        }
+    }
+
+    function renderDiagnostics() {
+        const osInfo = $('wizard-os-info');
+        if (osInfo) osInfo.textContent = `${getOsLabel()} - App v${APP_VERSION}`;
+        const list = $('wizard-diagnostics-list');
+        if (!list) return;
+        list.innerHTML = '';
+        for (const r of runDiagnostics()) {
+            const li = document.createElement('li');
+            li.className = 'wizard-diag-item';
+            const cls = r.ok ? 'ok' : (r.warn ? 'warn' : 'fail');
+            const ch = r.ok ? '✓' : (r.warn ? '⚠' : '✗');
+            li.innerHTML = `<span class="wizard-diag-icon ${cls}">${ch}</span><div class="wizard-diag-text"><div class="wizard-diag-label"></div><div class="wizard-diag-detail"></div></div>`;
+            li.querySelector('.wizard-diag-label').textContent = r.label;
+            // detail puede traer <a href>, no escapar
+            li.querySelector('.wizard-diag-detail').innerHTML = r.detail;
+            // Si el item tiene una accion de auto-fix, agregamos un boton inline.
+            if (r.fix && !r.ok) {
+                const btn = document.createElement('button');
+                btn.className = 'settings-btn wizard-fix-btn';
+                btn.textContent = r.fix.label || 'Solucionar';
+                btn.style.cssText = 'margin-left: 8px; background: ' + (r.warn ? '#666' : '#c0392b') + '; padding: 4px 10px; font-size: 11px; white-space: nowrap;';
+                btn.addEventListener('click', () => applyFix(r.fix, btn));
+                li.querySelector('.wizard-diag-text').appendChild(btn);
+            }
+            list.appendChild(li);
+        }
+    }
+
+    function buildDiagnosticText() {
+        const lines = [];
+        lines.push(`LF Automatizador v${APP_VERSION}`);
+        lines.push(`OS: ${getOsLabel()}`);
+        lines.push(`Fecha: ${new Date().toISOString()}`);
+        lines.push('');
+        lines.push('--- Diagnostico ---');
+        for (const r of runDiagnostics()) {
+            const tag = r.ok ? '[OK]  ' : (r.warn ? '[WARN]' : '[FAIL]');
+            const detail = (r.detail || '').replace(/<[^>]*>/g, '');
+            lines.push(`${tag} ${r.label}: ${detail}`);
+        }
+        return lines.join('\n');
+    }
+
+    function fillInputsFromPrefs() {
+        const lib = readLibraryPrefsRaw().persistentRoot || '';
+        if ($('wizard-library-root')) $('wizard-library-root').value = lib;
+        if ($('wizard-time-folder')) $('wizard-time-folder').value = generalPrefs?.timeFolder || '';
+        if ($('wizard-temp-folder')) $('wizard-temp-folder').value = generalPrefs?.weatherTemperatureFolder || '';
+        if ($('wizard-hum-folder')) $('wizard-hum-folder').value = generalPrefs?.weatherHumidityFolder || '';
+        if ($('wizard-city')) $('wizard-city').value = generalPrefs?.weatherCity || '';
+        if ($('wizard-dismiss-checkbox')) $('wizard-dismiss-checkbox').checked = generalPrefs?.wizardDismissed === true;
+    }
+
+    function persistFromInputs() {
+        try {
+            // Library root: solo sobreescribir si el usuario puso algo
+            const libVal = ($('wizard-library-root')?.value || '').trim();
+            if (libVal) {
+                const lp = readLibraryPrefsRaw();
+                lp.persistentRoot = libVal;
+                writeLibraryPrefsRaw(lp);
+            }
+            // General prefs
+            const tf = ($('wizard-time-folder')?.value || '').trim();
+            const tmp = ($('wizard-temp-folder')?.value || '').trim();
+            const hum = ($('wizard-hum-folder')?.value || '').trim();
+            const city = ($('wizard-city')?.value || '').trim();
+            if (tf) generalPrefs.timeFolder = tf;
+            if (tmp) generalPrefs.weatherTemperatureFolder = tmp;
+            if (hum) generalPrefs.weatherHumidityFolder = hum;
+            if (city) generalPrefs.weatherCity = city;
+            generalPrefs.wizardDismissed = $('wizard-dismiss-checkbox')?.checked === true;
+            saveConfig(generalPrefsPath, generalPrefs);
+        } catch (err) {
+            console.error('[wizard] error guardando settings:', err);
+        }
+    }
+
+    function gotoStep(n) {
+        n = Math.max(1, Math.min(TOTAL_STEPS, n));
+        currentStep = n;
+        if ($('wizard-step-current')) $('wizard-step-current').textContent = String(n);
+        if ($('wizard-step-total')) $('wizard-step-total').textContent = String(TOTAL_STEPS);
+        for (let i = 1; i <= TOTAL_STEPS; i++) {
+            const el = $(`wizard-step-${i}`);
+            if (el) el.style.display = (i === n ? 'flex' : 'none');
+        }
+        setDisp($('wizard-btn-back'), n > 1 ? 'inline-block' : 'none');
+        setDisp($('wizard-btn-skip'), (n === 2 || n === 3) ? 'inline-block' : 'none');
+        setDisp($('wizard-btn-next'), n < TOTAL_STEPS ? 'inline-block' : 'none');
+        setDisp($('wizard-btn-finish'), n === TOTAL_STEPS ? 'inline-block' : 'none');
+        if (n === 1) renderDiagnostics();
+    }
+
+    function showWizard() {
+        const modal = $('wizard-modal');
+        if (!modal) return;
+        fillInputsFromPrefs();
+        gotoStep(1);
+        modal.style.display = 'flex';
+    }
+    function hideWizard() {
+        const modal = $('wizard-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    async function pickFolderInto(inputId, title) {
+        try {
+            const current = $(inputId)?.value || '';
+            const folder = await ipcRenderer.invoke('dialog:pickFolder', {
+                title: title || 'Seleccionar carpeta',
+                defaultPath: current || undefined
+            });
+            if (folder && $(inputId)) $(inputId).value = folder;
+        } catch (err) { console.error('[wizard] pickFolder error:', err); }
+    }
+
+    function copyDiagnosticToClipboard() {
+        try {
+            navigator.clipboard.writeText(buildDiagnosticText()).then(() => {
+                const fb = $('wizard-copy-feedback');
+                if (fb) { fb.textContent = 'Copiado!'; setTimeout(() => { fb.textContent = ''; }, 2500); }
+            }).catch(err => console.error('[wizard] clipboard:', err));
+        } catch (err) { console.error('[wizard] copy error:', err); }
+    }
+
+    function wireWizard() {
+        const click = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
+        click('wizard-btn-back', () => gotoStep(currentStep - 1));
+        click('wizard-btn-next', () => gotoStep(currentStep + 1));
+        click('wizard-btn-skip', () => gotoStep(currentStep + 1));
+        click('wizard-btn-finish', () => { persistFromInputs(); hideWizard(); });
+        click('wizard-btn-copy-diag', copyDiagnosticToClipboard);
+        click('wizard-pick-library', () => pickFolderInto('wizard-library-root', 'Carpeta raiz de la libreria'));
+        click('wizard-pick-time', () => pickFolderInto('wizard-time-folder', 'Carpeta de locucion horaria'));
+        click('wizard-pick-temp', () => pickFolderInto('wizard-temp-folder', 'Carpeta de temperaturas'));
+        click('wizard-pick-hum', () => pickFolderInto('wizard-hum-folder', 'Carpeta de humedad'));
+
+        // F1 reabre el wizard; Esc lo cierra guardando.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F1') {
+                e.preventDefault();
+                showWizard();
+            } else if (e.key === 'Escape') {
+                const modal = $('wizard-modal');
+                if (modal && modal.style.display !== 'none') {
+                    persistFromInputs();
+                    hideWizard();
+                }
+            }
+        });
+
+        // Interceptar links externos dentro del wizard para abrirlos en el
+        // navegador real (no en una sub-ventana de Electron).
+        const modalEl = $('wizard-modal');
+        if (modalEl) {
+            modalEl.addEventListener('click', (e) => {
+                const a = e.target.closest('a[href]');
+                if (a && /^https?:\/\//i.test(a.href)) {
+                    e.preventDefault();
+                    ipcRenderer.invoke('shell:openExternal', a.href).catch(() => { });
+                }
+            });
+        }
+    }
+
+    function maybeAutoShow() {
+        try {
+            if (generalPrefs?.wizardDismissed === true) return;
+            setTimeout(showWizard, 800);
+        } catch (err) { console.error('[wizard] autoshow error:', err); }
+    }
+
+    try {
+        wireWizard();
+        maybeAutoShow();
+    } catch (err) {
+        console.error('[wizard] init error:', err);
+    }
+})();
 

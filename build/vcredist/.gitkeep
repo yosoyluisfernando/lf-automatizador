@@ -1,0 +1,3 @@
+# Carpeta para vc_redist.x64.exe (Visual C++ Runtime).
+# El archivo .exe NO se commitea (esta en .gitignore).
+# CI lo descarga fresco desde Microsoft en cada build de Windows.

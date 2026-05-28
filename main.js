@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
@@ -2209,7 +2209,104 @@ function createApplicationMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 app.whenReady().then(() => { installNavigationGuards(); createApplicationMenu(); createWindow(); }); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
-ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; }); 
+ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
+ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
+    const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+    const res = await dialog.showOpenDialog(ownerWindow, {
+        title: opts?.title || 'Seleccionar carpeta',
+        defaultPath: opts?.defaultPath || undefined,
+        properties: ['openDirectory']
+    });
+    if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus();
+    if (res.canceled || !res.filePaths || !res.filePaths.length) return '';
+    return res.filePaths[0];
+});
+ipcMain.handle('shell:openExternal', async (e, url) => {
+    if (!url || typeof url !== 'string') return false;
+    if (!/^https?:\/\//i.test(url)) return false;
+    try { await shell.openExternal(url); return true; } catch (err) { return false; }
+});
+
+// Auto-instalacion de Microsoft Visual C++ Runtime desde el wizard.
+// Busca primero el vc_redist.x64.exe bundleado en resources (lo agrega
+// electron-builder via extraResources). Si no esta, lo descarga desde
+// Microsoft. Luego lo ejecuta con /install /quiet /norestart — Windows
+// dispara UAC automaticamente porque el .exe esta firmado.
+ipcMain.handle('wizard:installVcRedist', async () => {
+    if (process.platform !== 'win32') {
+        return { ok: false, error: 'Solo disponible en Windows.' };
+    }
+    const candidates = [
+        process.resourcesPath ? path.join(process.resourcesPath, 'vcredist', 'vc_redist.x64.exe') : '',
+        path.join(__dirname, 'build', 'vcredist', 'vc_redist.x64.exe')
+    ].filter(Boolean);
+
+    let exePath = candidates.find(p => {
+        try { return fs.existsSync(p); } catch (e) { return false; }
+    });
+
+    if (!exePath) {
+        // Descargar a temp como fallback (Microsoft URL redirige)
+        const tmpPath = path.join(os.tmpdir(), 'lf_vc_redist.x64.exe');
+        try {
+            await downloadHttpsWithRedirects('https://aka.ms/vs/17/release/vc_redist.x64.exe', tmpPath);
+            exePath = tmpPath;
+        } catch (err) {
+            return { ok: false, error: 'No se pudo descargar vc_redist.x64.exe: ' + (err?.message || String(err)) };
+        }
+    }
+
+    return new Promise((resolve) => {
+        try {
+            const child = cp.spawn(exePath, ['/install', '/quiet', '/norestart'], {
+                detached: false,
+                stdio: 'ignore',
+                windowsHide: true
+            });
+            child.on('exit', (code) => {
+                // 0 = ok, 1638 = ya hay version mas reciente, 3010 = ok pero requiere reinicio
+                const success = code === 0 || code === 1638 || code === 3010;
+                resolve({
+                    ok: success,
+                    exitCode: code,
+                    rebootRequired: code === 3010,
+                    error: success ? null : `vc_redist.x64.exe devolvio codigo ${code}`
+                });
+            });
+            child.on('error', (err) => {
+                resolve({ ok: false, error: err?.message || String(err) });
+            });
+        } catch (err) {
+            resolve({ ok: false, error: err?.message || String(err) });
+        }
+    });
+});
+
+function downloadHttpsWithRedirects(url, destPath, maxRedirects = 5) {
+    const https = require('https');
+    return new Promise((resolve, reject) => {
+        const attempt = (u, remaining) => {
+            if (remaining < 0) return reject(new Error('Demasiados redirects.'));
+            const req = https.get(u, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    res.resume();
+                    return attempt(res.headers.location, remaining - 1);
+                }
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    return reject(new Error(`HTTP ${res.statusCode}`));
+                }
+                const file = fs.createWriteStream(destPath);
+                res.pipe(file);
+                file.on('finish', () => file.close(err => err ? reject(err) : resolve(destPath)));
+                file.on('error', (err) => { try { fs.unlinkSync(destPath); } catch (e) {} reject(err); });
+            });
+            req.on('error', reject);
+            req.setTimeout(60000, () => { req.destroy(new Error('Timeout descarga (60s).')); });
+        };
+        attempt(url, maxRedirects);
+    });
+}
 
 
 // Comerciales refactorizados a backend/ipc/commercials.js
