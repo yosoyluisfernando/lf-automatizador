@@ -2357,6 +2357,9 @@ function stopAtEndOfCurrentTrack() {
 let repeatTrackFinishCount = 0;
 
 function finishCurrentTrack({ isAutoMix = false } = {}) {
+    // Cualquier avance limpio (reloj virtual, timeLocutionEnded o este mismo
+    // flujo) cancela el watchdog de locución pendiente.
+    clearRustTimeLocutionWatchdog();
     if (!currentPlayingRow || !document.body.contains(currentPlayingRow)) {
         stopAll();
         return;
@@ -3242,7 +3245,46 @@ let isPlaylistTimeActive = false;
 //   row              → fila de playlist asociada (solo kind='playlist')
 let rustTimeLocutionContext = null;
 
+// Red de seguridad fail-soft para la locución horaria/clima. El avance a la
+// siguiente pista normalmente lo dispara el reloj virtual (handleTimeUpdate al
+// cruzar playbackEndAbsolute) o el evento `timeLocutionEnded` del motor Rust.
+// Si esa carrera se desincroniza (más fácil con archivos muy cortos, donde la
+// ventana de tiempo es mínima), la playlist podía quedarse clavada en la
+// locución: recuperándose tarde ("pausa") o nunca ("freeze"). Este watchdog,
+// armado con la duración REAL que reporta Rust + un margen, garantiza que la
+// emisión jamás se congele: si seguimos en la misma fila pasada esa ventana,
+// forzamos el avance. Política del proyecto: "la reproducción nunca se detiene".
+let rustTimeLocutionWatchdog = null;
+
+function clearRustTimeLocutionWatchdog() {
+    if (rustTimeLocutionWatchdog) {
+        clearTimeout(rustTimeLocutionWatchdog);
+        rustTimeLocutionWatchdog = null;
+    }
+}
+
+function armRustTimeLocutionWatchdog(row, durationSeconds) {
+    clearRustTimeLocutionWatchdog();
+    const dur = Number(durationSeconds) > 0 ? Number(durationSeconds) : 5;
+    const delayMs = Math.max(2500, dur * 1000 + 1500);
+    rustTimeLocutionWatchdog = setTimeout(() => {
+        rustTimeLocutionWatchdog = null;
+        // Si ya cambiamos de fila, el avance ocurrió con normalidad → nada que
+        // hacer. Solo actuamos si SEGUIMOS clavados en la fila de la locución.
+        if (currentPlayingRow !== row || !document.body.contains(row)) return;
+        logSystem('[GUARDIA] La locucion no avanzo a tiempo; forzando la siguiente pista.');
+        // Recuperar una transición que pudo quedar a medias (crossfade
+        // disparado pero playRow abortado) y limpiar el estado de locución.
+        isPlaylistTimeActive = false;
+        rustTimeLocutionContext = null;
+        crossfadeTriggered = false;
+        crossfadeTriggeredForRow = null;
+        finishCurrentTrack();
+    }, delayMs);
+}
+
 function stopActiveRustTimeLocution() {
+    clearRustTimeLocutionWatchdog();
     const playerId = rustTimeLocutionContext?.playerId || 'time-locucion';
     if (playerId) commandRustControlPlane('stop', { player: playerId }).catch(() => {});
     rustTimeLocutionContext = null;
@@ -9687,6 +9729,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         resetPlaybackGuard();
 
         const type = tr.dataset.type || 'normal'; isPlaylistTimeActive = false;
+        // Entrar a cualquier fila nueva cancela el watchdog de la locución
+        // previa (cubre el avance manual con "Siguiente", que no pasa por
+        // finishCurrentTrack). La propia fila 'time' lo re-arma más abajo.
+        clearRustTimeLocutionWatchdog();
         // Si quedaba alguna locución horaria activa de la fila previa, se la
         // detenemos al motor Rust antes de pisar el contexto. Usamos el player
         // real del contexto, porque en playlist puede ser un deck de programa.
@@ -9831,6 +9877,12 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             isTrackReady = true;
             refreshAirIncidentStatus();
             publishRustTransport({ force: true, syncPosition: false });
+
+            // Red de seguridad: el clima se carga como pista normal (sin evento
+            // `timeLocutionEnded`), así que depende solo del reloj virtual. Para
+            // archivos muy cortos un desfase podía congelar el avance; el
+            // watchdog garantiza la salida pasada la duración real + margen.
+            armRustTimeLocutionWatchdog(tr, currentDuration);
 
             calcularHorasPlaylist(); updateNextTrackVisuals();
             logSystem(`${ICON_AIR_PREFIX} ${climateTitle} (Rust, ${(durationMs/1000).toFixed(1)}s, bus=${climatePlaylistBus}, deck=${climatePlaylistPlayerId})`);
@@ -9988,6 +10040,11 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             isTrackReady = true;
             refreshAirIncidentStatus();
             publishRustTransport({ force: true, syncPosition: false });
+
+            // Red de seguridad: si por desincronización del reloj virtual o
+            // pérdida del evento `timeLocutionEnded` la locución no avanzara a
+            // tiempo, forzamos el avance pasada su duración real + margen.
+            armRustTimeLocutionWatchdog(tr, currentDuration);
 
             calcularHorasPlaylist(); updateNextTrackVisuals();
             logSystem(`${ICON_AIR_PREFIX} ${ICON_CLOCK_LABEL} (Rust, ${segments} archivo(s), ${(durationMs/1000).toFixed(1)}s, bus=${timePlaylistBus}, deck=${timePlaylistPlayerId})`);
@@ -10548,6 +10605,7 @@ function stopAll() {
     } else if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
         currentPlayingRow.classList.remove('row-active');
     }
+    clearRustTimeLocutionWatchdog();
     currentPlayingRow = null; trackStartTime = null; crossfadeTriggered = false; crossfadeTriggeredForRow = null; isPlaylistTimeActive = false; rustTimeLocutionContext = null; activeRustPlaylistDeckId = '';
     queuedNextRow = preservedQueuedNextRow && document.body.contains(preservedQueuedNextRow) ? preservedQueuedNextRow : null;
     const txtT = document.getElementById('txt-tiempo'); if (txtT) { txtT.innerText = "00:00.0"; txtT.classList.remove('time-warning-blue', 'time-warning-red', 'time-flash'); }
