@@ -322,7 +322,7 @@ module.exports = function(context) {
             source,
             tapPoint: config.tapPoint === 'preFx' ? 'preFx' : 'postFx',
             micId: config.micId || config.mic || '',
-            codec: config.codec === 'mp3' ? 'mp3' : 'aac',
+            codec: config.codec === 'mp3' ? 'mp3' : config.codec === 'aac_he' ? 'aac_he' : 'aac',
             encoderProvider: rawEncoderProvider,
             bitrate: String(bitrate)
         };
@@ -350,7 +350,13 @@ module.exports = function(context) {
     }
 
     function buildCodecArgs(config) {
-        const common = ['-vn', '-ac', '2', '-ar', '44100', '-af', 'aresample=async=1:first_pts=0'];
+        // aresample=async:1 solo es necesario cuando la fuente tiene timing variable
+        // (renderer WebAudio o micrófono). El tap PCM nativo de Rust entrega s16le
+        // a sample rate exacto y fijo, así que el filtro no aporta nada y puede
+        // introducir micro-artefactos por el modo async.
+        const needsResample = config.captureFormat !== 'pcm_s16le';
+        const resampleFilter = needsResample ? ['-af', 'aresample=async=1:first_pts=0'] : [];
+        const common = ['-vn', '-ac', '2', '-ar', '44100', ...resampleFilter];
         // El protocolo `icecast://` de FFmpeg envía por defecto HTTP PUT (Icecast
         // 2.4+). SHOUTcast clásico (v1 y la mayoría de v2 free como Listen2MyRadio)
         // sólo entiende el método SOURCE legacy — sin `-legacy_icecast 1` falla
@@ -362,6 +368,7 @@ module.exports = function(context) {
         //   - 'shoutcast2' → PUT moderno (DNAS 2.x con HTTP PUT habilitado)
         const legacyShoutcast = config.serverType === 'shoutcast' ? ['-legacy_icecast', '1'] : [];
         if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+        if (config.codec === 'aac_he') return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
         return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, '-f', 'mp3', '-content_type', 'audio/mpeg'];
     }
 
@@ -440,7 +447,8 @@ module.exports = function(context) {
             if (context.ffmpegProcess) killFfmpegProcess('');
             const inputArgs = buildEncoderInputArgs(config);
             const ffmpegArgs = localTesting ? ['-hide_banner', '-nostdin', ...inputArgs, '-f', 'null', '-'] : ['-hide_banner', '-nostdin', ...inputArgs, ...codecArgs, streamUrl];
-            writeLog(`Encoder FFmpeg iniciado. Entrada: ${config.captureFormat || 'webm-opus'} ${config.sampleRate || ''}`.trim());
+            const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? 'AAC+ (HE-AAC)' : 'AAC-LC';
+            writeLog(`Encoder FFmpeg iniciado. Codec: ${_codecLabel} ${config.bitrate || 128}kbps, servidor: ${config.serverType || 'icecast'}, entrada: ${config.captureFormat || 'webm-opus'}${config.sampleRate ? ' ' + config.sampleRate + 'Hz' : ''}`);
             resetEncoderWriteStats();
             notifyRustEncoder('start', config);
             context.ffmpegProcess = cp.spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });

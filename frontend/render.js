@@ -9614,6 +9614,21 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         assignPlayerToPlaylistBus(fadingPlayer, getPlaylistIndexFromRow(previousPlayingRow || tr));
         clearPlayerPlaybackMeta(activePlayer);
 
+        // Re-pin the new Rust deck immediately after meta clear so the health
+        // monitor tracks the correct player during the async track-loading
+        // window. Without this, getPlaylistPlayerId falls back to the DOM id
+        // ('player-a'/'player-b') which may point to a 'stopped' player whose
+        // positionMs >> currentDuration (still the short locution / jingle
+        // duration), causing isRustPlayerAtExpectedPlaybackEnd to fire
+        // deferExpectedRustTrackFinish → session mismatch → virtual clock
+        // never starts on the new activePlayer → playback freeze.
+        // Climate and time locution paths overwrite this immediately with their
+        // own early setPlayerPlaybackMeta call, so this is a no-op for them.
+        if (currentRustPlayerId && isRustPlaylistOwnerEnabled()) {
+            setPlayerPlaybackMeta(activePlayer, { rustPlayerId: currentRustPlayerId });
+            markExpectedPlaybackPositionJump('track-load-start', 0);
+        }
+
         activeGain.gain.cancelScheduledValues(audioCtx.currentTime);
         let earlyOutgoingRustTransitionScheduled = false;
         if (fadingPlayer && !isPlayerClockPaused(fadingPlayer) && currentRustPlayerId) {
@@ -9675,8 +9690,16 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         // Si quedaba alguna locución horaria activa de la fila previa, se la
         // detenemos al motor Rust antes de pisar el contexto. Usamos el player
         // real del contexto, porque en playlist puede ser un deck de programa.
+        // EXCEPCIÓN: si ya se programó una transición de salida temprana (fade
+        // holdTail) para el deck de esa locución, NO enviamos 'stop' adicional
+        // porque cancelaría el fade y provocaría un corte en seco. El propio
+        // fade plan se encarga de detener el player al final de la cola.
         if (rustTimeLocutionContext) {
-            stopActiveRustTimeLocution();
+            if (earlyOutgoingRustTransitionScheduled) {
+                rustTimeLocutionContext = null;
+            } else {
+                stopActiveRustTimeLocution();
+            }
         }
         currentStartTimeOffset = 0; currentFiredDrops = []; lastOverlayEvalSessionId = currentSessionId; lastOverlayEvalElapsed = 0; let manualFin = null;
         const savedResumeStart = parseFloat(tr.dataset.resumeStart || '');

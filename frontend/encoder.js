@@ -41,7 +41,7 @@ function normalizeEncoderPrefs(raw = {}) {
         mount: String(raw.mount || '').trim(),
         source: raw.source === 'mic' ? 'mic' : 'master',
         tapPoint: raw.tapPoint === 'preFx' ? 'preFx' : 'postFx',
-        codec: raw.codec === 'mp3' ? 'mp3' : 'aac',
+        codec: raw.codec === 'mp3' ? 'mp3' : raw.codec === 'aac_he' ? 'aac_he' : 'aac',
         encoderProvider,
         bitrate
     };
