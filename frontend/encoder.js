@@ -629,6 +629,10 @@ ipcRenderer.on('encoder-error', (e, msg) => {
     encLog(`Error: ${msg}`, "error");
 });
 
+ipcRenderer.on('encoder-warn', (e, msg) => {
+    encLog(`Aviso: ${msg}`, 'warn');
+});
+
 setInterval(() => {
     if (currentEncoderStatus !== 'live' || !lastThroughputAt || !encoderHealthLineEl) return;
     const staleMs = Date.now() - lastThroughputAt;

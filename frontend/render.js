@@ -1592,9 +1592,19 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
     let oldestAssignedAt = Infinity;
     let bestProtectedTailCandidate = '';
     let oldestProtectedTailAssignedAt = Infinity;
+    // Nunca evictar el deck al aire ni un standby YA listo: su pista (al aire o
+    // precargada) se perdería → "se soltó la canción / edad=0.0s EVICT". El
+    // standby solo se sacrifica como último recurso (bloque patológico de abajo).
+    const readyStandbyId = (rustPlaylistStandbyPreload && rustPlaylistStandbyPreload.ready)
+        ? (rustPlaylistStandbyPreload.playerId || '') : '';
+    const noEvict = new Set([activeRustPlaylistDeckId, readyStandbyId].filter(Boolean));
     const deckDiagnostics = [];
     for (const playerId of RUST_PLAYLIST_DECK_IDS) {
         if (excluded.has(playerId)) continue;
+        // Nunca sacrificar el deck al aire (música/locución) ni un standby listo:
+        // evictarlos = corte seco / pista soltada. El llamador ya los excluye,
+        // pero lo reforzamos aquí ante cualquier llamador futuro.
+        if (playerId && noEvict.has(playerId)) continue;
         const state = rustPlaylistMirrorState.get(playerId) || {};
         const assignedAt = Number(state.assignedAt) || 0;
         const tailUntil = Number(state.tailUntil) || 0;
@@ -1631,7 +1641,7 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
     }
 
     if (!bestCandidate) {
-        bestCandidate = RUST_PLAYLIST_DECK_IDS.find(id => !excluded.has(id));
+        bestCandidate = RUST_PLAYLIST_DECK_IDS.find(id => !excluded.has(id) && !noEvict.has(id));
     }
 
     // Salvaguarda final: si TODOS los decks están excluidos (caso patológico
@@ -1663,18 +1673,34 @@ function reserveRustPlaylistDeckId(excludeIds = []) {
     }).join(' | ');
     logSystem(`[DECK SATURACION] 3/3 ocupados. ${diagLines}`);
 
-    // Paso 3: forzar limpieza del deck más viejo
-    evictRustPlaylistDeck(bestCandidate);
+    // Paso 3: forzar limpieza del deck más viejo. forReuse=true porque este
+    // mismo deck se devuelve y se recarga de inmediato — no debe programarse un
+    // stop diferido que caiga sobre el load entrante (corte seco).
+    evictRustPlaylistDeck(bestCandidate, { forReuse: true });
 
     rustPlaylistDeckCursor = (RUST_PLAYLIST_DECK_IDS.indexOf(bestCandidate) + 1) % RUST_PLAYLIST_DECK_IDS.length;
     return bestCandidate;
 }
 
-function evictRustPlaylistDeck(playerId) {
+function evictRustPlaylistDeck(playerId, { forReuse = false } = {}) {
     if (!playerId) return;
     cancelRustPlaylistGainRamp(playerId);
     const currentGain = Number(rustPlaylistMirrorState.get(playerId)?.gain) || 1;
-    // Micro-fade de 30ms para evitar pop audible, luego stop
+    rustPlaylistMirrorState.delete(playerId);
+    // CASO REUTILIZACIÓN: reserveRustPlaylistDeckId evicta y DEVUELVE este mismo
+    // deck para cargar la pista entrante de inmediato. Mandamos UN stop INMEDIATO
+    // (no diferido) ANTES de que el llamador haga el `load`: en la cola de Rust
+    // queda stop → load → play (orden correcto), así NO hay corte seco (eso lo
+    // causaba un stop DIFERIDO que caía DESPUÉS del load). Además, al detener el
+    // contenido viejo (queda 'stopped', nunca drena a 'ended') evitamos que un
+    // 'ended' rezagado del deck reusado dispare un avance espurio ("se soltó la
+    // canción / locución dos veces"). El deck reusado NUNCA es el del aire
+    // (reserve excluye activeRustPlaylistDeckId), así que el stop no corta la emisión.
+    if (forReuse) {
+        commandRustPlaylist('stop', { player: playerId }).catch(() => { });
+        return;
+    }
+    // DESCARTE REAL (sin reutilización): micro-fade de 30ms anti-pop, luego stop.
     commandRustPlaylist('fade', {
         player: playerId,
         fromGain: currentGain,
@@ -1682,11 +1708,10 @@ function evictRustPlaylistDeck(playerId) {
         durationMs: 30,
         stopAfter: true
     }).catch(() => { });
-    // Stop explícito como respaldo por si el fade no lo detiene a tiempo
+    // Stop explícito como respaldo por si el fade no lo detiene a tiempo.
     setTimeout(() => {
         commandRustPlaylist('stop', { player: playerId }).catch(() => { });
     }, 50);
-    rustPlaylistMirrorState.delete(playerId);
 }
 
 function pickRustStandbyDeckId() {
@@ -1847,21 +1872,41 @@ function markExpectedPlaybackPositionJump(reason = 'seek', targetSeconds = null)
     rustPlaylistOwnerHealth.positionJumpReason = reason;
 }
 
-function isRustPlayerAtExpectedPlaybackEnd(rustPlayer = {}) {
+function isRustPlayerAtExpectedPlaybackEnd(rustPlayer = {}, playerId = '') {
     const status = rustPlayer?.status || '';
     if (status !== 'ended' && status !== 'stopped') return false;
 
+    // BLINDAJE CONTRA AVANCES ESPURIOS (síntoma "se soltó la canción / la
+    // locución sonó dos veces"): Rust NO emite id de instancia, así que un deck
+    // reusado puede colar un 'ended'/'stopped' rezagado de su contenido anterior.
+    // Solo aceptamos el fin del deck que REALMENTE está al aire y que está
+    // reproduciendo la pista ACTUAL (path coincide). Para pistas normales/clima
+    // el path es real; las locuciones horarias usan un marcador y avanzan por
+    // timeLocutionEnded (además aquí watch está deshabilitado durante ellas).
+    if (playerId && activeRustPlaylistDeckId && playerId !== activeRustPlaylistDeckId) return false;
+    const meta = getPlayerPlaybackMeta(activePlayer) || {};
+    const metaPath = String(meta.filePath || '');
+    const isMarkerPath = !metaPath || metaPath.startsWith('<') || metaPath === 'time_locution';
+    if (!isMarkerPath) {
+        const rustPath = String(rustPlayer.path || '');
+        if (rustPath && rustPath !== metaPath) return false;
+    }
+
     const positionMs = Math.max(0, Number(rustPlayer.positionMs) || 0);
     const rustDurationMs = Math.max(0, Number(rustPlayer.durationMs) || 0);
-    const meta = getPlayerPlaybackMeta(activePlayer) || {};
     const metaEndSeconds = parseFiniteCueValue(meta.playbackEndAbsolute);
     const expectedEndMs = metaEndSeconds !== null
         ? Math.max(0, Math.round(metaEndSeconds * 1000))
         : Math.max(0, Math.round((currentStartTimeOffset + currentDuration) * 1000));
 
+    // Fin REAL de Rust (player.empty()): fuente de verdad para TODAS las pistas (fase D).
     if (status === 'ended') return true;
-    if (expectedEndMs > 0 && positionMs + 750 >= expectedEndMs) return true;
-    if (rustDurationMs > 0 && positionMs + 750 >= rustDurationMs) return true;
+    // 'stopped' solo cuenta como fin si la posición ya alcanzó el final esperado;
+    // así un stop transitorio de reuse/recarga NO se confunde con fin de pista.
+    if (status === 'stopped') {
+        if (expectedEndMs > 0 && positionMs + 750 >= expectedEndMs) return true;
+        if (rustDurationMs > 0 && positionMs + 750 >= rustDurationMs) return true;
+    }
     return false;
 }
 
@@ -1900,7 +1945,7 @@ function watchRustPlaylistOwnerHealth(status = null) {
     }
     const audioNotReadyMs = rustPlaylistOwnerHealth.audioNotReadySince ? now - rustPlaylistOwnerHealth.audioNotReadySince : 0;
     const stalledMs = now - (rustPlaylistOwnerHealth.lastPositionAt || now);
-    if (isRustPlayerAtExpectedPlaybackEnd(rustPlayer)) {
+    if (isRustPlayerAtExpectedPlaybackEnd(rustPlayer, playerId)) {
         rustPlaylistOwnerHealth.audioNotReadySince = 0;
         rustPlaylistOwnerHealth.lastPositionAt = now;
         deferExpectedRustTrackFinish();
@@ -2135,6 +2180,35 @@ function syncRustRepeatTrackMode({ player = getPlaylistPlayerId(activePlayer), e
     }).catch(() => { });
 }
 
+// Libera del mirror los decks que YA terminaron (Rust los reporta ended/stopped
+// o ni siquiera aparecen en su lista) y cuya cola de crossfade ya expiró, SIN
+// tocar el deck al aire/locución ni el standby precargado. Se llama en CADA status
+// de Rust (y también durante la locución, cuando syncRustPlaylistControlPlane hace
+// return temprano y deja de limpiar el Map) → así los decks muertos no se acumulan
+// hasta saturar 3/3 y forzar la evicción del deck entrante. NO ejecuta
+// buildMixDiagnostics ni 'load', así que no choca con el control del bus por saytime.
+function releaseFinishedRustPlaylistDecks() {
+    const status = rustAudioProbeStatus?.lastStatus || null;
+    // Sin estado fresco de Rust no podemos confirmar qué decks terminaron;
+    // no liberamos nada para no arriesgar cortar audio vivo.
+    if (!status || !Array.isArray(status.players)) return;
+    const now = Date.now();
+    const standbyId = rustPlaylistStandbyPreload?.playerId || '';
+    for (const [playerId, state] of rustPlaylistMirrorState.entries()) {
+        if (!playerId) continue;
+        if (playerId === activeRustPlaylistDeckId) continue;   // deck al aire / locución
+        if (playerId === standbyId) continue;                  // preload listo para la próxima
+        if ((Number(state?.tailUntil) || 0) > now) continue;   // cola de crossfade viva
+        const rustPlayer = findRustStatusPlayer(status, playerId);
+        const rustStatus = String(rustPlayer?.status || '').toLowerCase();
+        // Solo liberar cuando Rust confirma que el deck ya no suena.
+        const finishedInRust = !rustPlayer || rustStatus === 'ended' || rustStatus === 'stopped';
+        if (!finishedInRust) continue;
+        commandRustPlaylist('stop', { player: playerId }).catch(() => { });
+        rustPlaylistMirrorState.delete(playerId);
+    }
+}
+
 function syncRustPlaylistControlPlane({ force = false, syncPosition = force } = {}) {
     if (!shouldMirrorRustControlPlane()) return;
     if (isRustPlaylistStopGuardActive()) return;
@@ -2149,6 +2223,12 @@ function syncRustPlaylistControlPlane({ force = false, syncPosition = force } = 
     // salimos sin tocar ningún estado de playlist en Rust.
     if (isPlaylistTimeActive) {
         syncRustMonitorMirror([], { force: false });
+        // Aunque saytime tiene el control exclusivo del bus, liberamos los decks
+        // que YA terminaron para que reserveRustPlaylistDeckId no vea 3/3 al
+        // cargar la pista posterior a la locución (causa raíz de la saturación →
+        // corte seco). Solo limpia decks muertos confirmados por Rust; nunca el
+        // deck al aire/locución, el standby, ni colas de crossfade vivas.
+        releaseFinishedRustPlaylistDecks();
         return;
     }
     if (!isRustPlaylistOwnerEnabled()) {
@@ -2489,8 +2569,14 @@ function setLoopPlaylistMode(enabled, { announce = true } = {}) {
     saveConfig(generalPrefsPath, generalPrefs);
     const btnModeLoop = document.getElementById('btn-mode-looplist');
     if (btnModeLoop) btnModeLoop.classList.toggle('active-loop', nextValue);
-    if (currentPlayingRow && (!queuedNextRow || queuedNextRow.dataset.manualNext !== "true")) {
-        queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, nextValue);
+    if (currentPlayingRow) {
+        if (!nextValue) {
+            // Al desactivar el loop siempre recalcular: un queuedNextRow que apunta hacia
+            // atrás (primera fila) es un pointer residual del loop, no una cola intencional.
+            queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, false);
+        } else if (!queuedNextRow || queuedNextRow.dataset.manualNext !== "true") {
+            queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, true);
+        }
     }
     syncRustPlaylistMode();
     updateNextTrackVisuals();
@@ -3272,7 +3358,7 @@ function armRustTimeLocutionWatchdog(row, durationSeconds) {
         // Si ya cambiamos de fila, el avance ocurrió con normalidad → nada que
         // hacer. Solo actuamos si SEGUIMOS clavados en la fila de la locución.
         if (currentPlayingRow !== row || !document.body.contains(row)) return;
-        logSystem('[GUARDIA] La locucion no avanzo a tiempo; forzando la siguiente pista.');
+        logSystem('[GUARDIA] La pista no avanzo a tiempo; forzando la siguiente pista.');
         // Recuperar una transición que pudo quedar a medias (crossfade
         // disparado pero playRow abortado) y limpiar el estado de locución.
         isPlaylistTimeActive = false;
@@ -7679,6 +7765,16 @@ setTimeout(() => {
     commandRustControlPlane('monitorGain', { gain: (generalPrefs.monitorVolume ?? 100) / 100 }).catch(() => {});
 }, 1200);
 
+// Detectar cambios físicos de hardware de audio (enchufar/desenchufar USB, etc.)
+// y re-enrutar inmediatamente sin esperar al polling de 60s.
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+        rustAudioProbeStatus.lastDevices = null;
+        syncRustRouteContract({ force: true });
+        applyAudioRouting();
+    });
+}
+
 function buildRustFxSyncPlan() {
     const diagnostics = buildFxDiagnostics();
     return {
@@ -8134,6 +8230,9 @@ document.addEventListener('click', (e) => {
 });
 
 ipcRenderer.on('settings-updated', () => {
+    // Invalidar caché de dispositivos para que syncRustRouteContract consulte
+    // lista fresca al motor Rust en lugar de usar dispositivos antiguos.
+    rustAudioProbeStatus.lastDevices = null;
     const previousRouteSignature = getAudioRouteSignature(generalPrefs);
     const previousEngineMode = generalPrefs.audioEngineMode || 'rustAudio';
     generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, generalPrefs));
@@ -8147,7 +8246,7 @@ ipcRenderer.on('settings-updated', () => {
     if (routeChanged || engineChanged) {
         applyRustPlaylistOwnerMute();
         syncRustPlaylistControlPlane({ force: engineChanged, syncPosition: false });
-        syncRustRouteContract({ force: engineChanged });
+        syncRustRouteContract({ force: routeChanged || engineChanged });
     }
     syncRustFxContract({ force: engineChanged });
     loadFileTypes();
@@ -9870,7 +9969,13 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     path: climateFilePath,
                     owner: true,
                     status: 'playing',
-                    seekBucket: 0
+                    seekBucket: 0,
+                    // tailUntil:0 explícito — un deck de locución activa NO debe
+                    // heredar la cola de stop del deck saliente (vía {...previous}).
+                    // Heredarla lo dejaba "protegido" para siempre y bloqueaba la
+                    // liberación → saturación 3/3 → corte seco. Está al aire, así
+                    // que lo protege activeRustPlaylistDeckId, no tailUntil.
+                    tailUntil: 0
                 });
             }
             markRustPlaylistOwnerOk({ activate: true });
@@ -10033,7 +10138,11 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     path: '<time-locution>',
                     owner: true,
                     status: 'playing',
-                    seekBucket: 0
+                    seekBucket: 0,
+                    // tailUntil:0 explícito — ver nota en la locución de clima.
+                    // Evita heredar la cola de stop del deck saliente y quedar
+                    // protegido indefinidamente (saturación de decks).
+                    tailUntil: 0
                 });
             }
             markRustPlaylistOwnerOk({ activate: true });
@@ -10232,6 +10341,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 const rustStartGain = currentTrackConfig.fadein > 0 ? 0.0001 : targetLinearGain;
                 const rustPrimaryBus = getRustPlaylistPrimaryBus(tr);
                 const rustDeckWasPreloaded = standbyPlayerId && standbyPlayerId === nextPlayerId;
+                let rustLoadStatus = null;
                 cancelRustPlaylistGainRamp(nextPlayerId);
                 if (nextAuxPlayerId) cancelRustPlaylistGainRamp(nextAuxPlayerId);
                 if (rustDeckWasPreloaded) {
@@ -10245,6 +10355,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     });
                     if (currentSessionId !== playRowSessionId || nextPlayer !== activePlayer) return;
                     if (!loadResult?.ok) throw new Error(loadResult?.error || 'Rust no pudo cargar la pista.');
+                    rustLoadStatus = loadResult.result?.status || null;
                 }
                 setRustPlaylistMirrorGain(nextPlayerId, rustStartGain, {
                     path: rutaFisica,
@@ -10317,6 +10428,45 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 refreshAirIncidentStatus();
                 publishRustTransport({ force: true, syncPosition: false });
                 scheduleAirWaveform(rutaFisica, currentSessionId);
+
+                // ── E: duración REAL de Rust como playbackEndAbsolute ─────────
+                // Archivos fuera de la DB / sin metadata no traen duración →
+                // playbackWindow.effectiveEndAbsolute queda null → el avance por
+                // reloj nunca se cumpliría. Usamos la duración real del decoder
+                // que reporta Rust, SIN pisar cues/fin/mix manuales (solo si la
+                // ventana quedó sin fin). El avance por 'ended' (fase D) es el
+                // respaldo; esto además da un reloj/fin correcto a la UI.
+                let hasReliableDuration = playbackWindow.effectiveEndAbsolute !== null;
+                if (playbackWindow.effectiveEndAbsolute === null) {
+                    const rustDeckPlayer = findRustStatusPlayer(rustLoadStatus || rustAudioProbeStatus.lastStatus, nextPlayerId);
+                    const rustDurMs = Number(rustDeckPlayer?.durationMs) || 0;
+                    if (rustDurMs > 0) {
+                        hasReliableDuration = true;
+                        const realEndAbsolute = rustDurMs / 1000;
+                        currentDuration = Math.max(MIN_PLAYBACK_WINDOW_SECONDS, realEndAbsolute - currentStartTimeOffset);
+                        const adjustedEnd = new Date(trackStartTime.getTime() + currentDuration * 1000);
+                        const acabaEl = document.getElementById('txt-acaba');
+                        if (acabaEl) acabaEl.innerText = adjustedEnd.toLocaleTimeString('es-PE', { hour12: false });
+                        setPlayerPlaybackMeta(activePlayer, {
+                            ...(getPlayerPlaybackMeta(activePlayer) || {}),
+                            playbackEndAbsolute: realEndAbsolute,
+                            naturalEndAbsolute: realEndAbsolute
+                        });
+                    }
+                }
+
+                // ── G: watchdog universal fail-soft ──────────────────────────
+                // Antes solo cubría 'time'/'climate'. Ahora también las pistas
+                // normales: si por cualquier desfase el avance no ocurre, forzamos
+                // la siguiente pasada la duración real + margen. Se cancela en
+                // finishCurrentTrack y no actúa si la fila ya cambió. SOLO con
+                // duración CONFIABLE: si es desconocida (sin metadata y Rust sin
+                // durationMs), NO armamos un watchdog corto que cortaría la pista;
+                // ahí el respaldo es el 'ended' real de Rust (fase D).
+                if (hasReliableDuration && currentDuration > 0) {
+                    armRustTimeLocutionWatchdog(tr, currentDuration);
+                }
+
                 handleTimeUpdate(nextPlayer);
                 logSystem(`[RUST TRANSICION] entrante=${nextPlayerId}, saliente=${previousPlayerId || 'ninguno'}, ` +
                     `fadePlan={s:${previousFadePlan.seconds.toFixed(2)}, stopDelay:${previousFadePlan.stopDelaySeconds.toFixed(2)}, ` +
@@ -10542,7 +10692,17 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
     }
     let target = null;
     if (queuedNextRow && document.body.contains(queuedNextRow)) {
-        target = queuedNextRow;
+        // Si el loop está desactivado, rechazar queuedNextRow si apunta hacia atrás en la
+        // lista (pointer residual de cuando el loop estaba activo). Cubre la race condition
+        // donde el reloj virtual llama playNext() antes de que el clic procese la limpieza.
+        const isStaleLoopPointer = !generalPrefs.modeLoopPlaylist
+            && currentPlayingRow
+            && document.body.contains(currentPlayingRow)
+            && queuedNextRow.closest('tbody') === currentPlayingRow.closest('tbody')
+            && !isRowAfterAnchor(queuedNextRow, currentPlayingRow);
+        if (!isStaleLoopPointer) {
+            target = queuedNextRow;
+        }
     } else if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
         target = currentPlayingRow.nextElementSibling;
     } else {
@@ -12232,6 +12392,10 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
             lastError: ''
         };
         try { watchRustPlaylistOwnerHealth(message); } catch (err) {}
+        // Liberación pronta por la verdad real de Rust: en CADA status soltamos
+        // del Map los decks que ya terminaron (ended/stopped) y no están al aire,
+        // así reserveRustPlaylistDeckId casi nunca llega a 3/3 y no se evicta nada.
+        try { releaseFinishedRustPlaylistDecks(); } catch (err) {}
         try { reconcileRustCartwallRuntimeStatus(message); } catch (err) {}
         try { reconcileRustOverlayRuntimeStatus(message); } catch (err) {}
         return;

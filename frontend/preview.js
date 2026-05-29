@@ -94,8 +94,11 @@ async function reproducir(rutaArchivo) {
     ipcRenderer.invoke('audio-engine-rust-command', {
         cmd: 'getPeaks', path: rutaArchivo, bins: 128, cacheDir: cacheDirEditor,
     }).then(respuesta => {
-        if (respuesta && respuesta.type === 'peaks' && respuesta.durationMs > 0) {
-            duracionTotal           = respuesta.durationMs / 1000;
+        // La respuesta llega envuelta: { success, message: { type, durationMs, ... }, status }
+        // Desempaquetamos igual que en render.js getRustAudioPeaks().
+        const peaks = respuesta?.message || respuesta;
+        if (peaks && peaks.type === 'peaks' && peaks.durationMs > 0) {
+            duracionTotal           = peaks.durationMs / 1000;
             totalEl.innerText       = formatearTiempo(duracionTotal);
         }
     }).catch(() => {});

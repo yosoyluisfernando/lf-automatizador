@@ -6,6 +6,25 @@
 module.exports = function(context) {
     const { ipcMain, dialog, screen, openCommercialManagerWindow, BrowserWindow, writeLog, path, configDir, fs, cp, ffmpegPath } = context;
 
+    // Detectar soporte de libfdk_aac en el FFmpeg empaquetado (fire-and-forget al
+    // inicio del módulo). El resultado se cachea en _fdkAacAvailable y se usa en
+    // buildCodecArgs() sin añadir async al path de encodificación.
+    // En builds estándar (ffmpeg-static / gyan.dev GPL) siempre será false porque
+    // libfdk_aac es non-free y no se incluye. Si el operador sustituye el binario
+    // por uno compilado con --enable-libfdk_aac, el probe lo detecta y habilita
+    // HE-AAC real automáticamente.
+    let _fdkAacAvailable = null;
+    (function probeFdkAac() {
+        try {
+            const probe = cp.spawn(ffmpegPath, ['-encoders'], { windowsHide: true });
+            let out = '';
+            if (probe.stdout) probe.stdout.on('data', d => { out += d.toString(); });
+            if (probe.stderr) probe.stderr.on('data', d => { out += d.toString(); });
+            probe.on('close', () => { _fdkAacAvailable = out.includes('libfdk_aac'); });
+            probe.on('error', () => { _fdkAacAvailable = false; });
+        } catch (_) { _fdkAacAvailable = false; }
+    }());
+
     function setEncoderStatus(status) {
         context.encoderRuntimeStatus = status;
         if (context.encoderWindow && !context.encoderWindow.isDestroyed()) context.encoderWindow.webContents.send('encoder-status', status);
@@ -368,7 +387,16 @@ module.exports = function(context) {
         //   - 'shoutcast2' → PUT moderno (DNAS 2.x con HTTP PUT habilitado)
         const legacyShoutcast = config.serverType === 'shoutcast' ? ['-legacy_icecast', '1'] : [];
         if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
-        if (config.codec === 'aac_he') return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+        if (config.codec === 'aac_he') {
+            // Usar libfdk_aac solo si el probe de inicio confirmó que está disponible.
+            // En ffmpeg-static/gyan.dev (GPL) no está incluido por ser non-free, así
+            // que caemos al encoder nativo aac (AAC-LC). El aviso al usuario se emite
+            // en startFfmpegProcess() antes de llamar a esta función.
+            if (_fdkAacAvailable === true) {
+                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+            }
+            return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+        }
         return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, '-f', 'mp3', '-content_type', 'audio/mpeg'];
     }
 
@@ -442,12 +470,19 @@ module.exports = function(context) {
         const config = normalizeEncoderConfig(rawConfig);
         const localTesting = process.env.LOCAL_TESTING === 'true' || config?.localTesting === true;
         const streamUrl = buildStreamUrl(config);
+        // Notificar al operador si AAC+ solicitado pero libfdk_aac no disponible.
+        if (config.codec === 'aac_he' && _fdkAacAvailable !== true && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+            const fallbackMsg = _fdkAacAvailable === null
+                ? 'Verificando soporte AAC+ en FFmpeg, transmitiendo como AAC-LC por ahora.'
+                : 'AAC+ (libfdk_aac) no esta disponible en este FFmpeg. Transmitiendo como AAC-LC. Para HE-AAC real usa un FFmpeg compilado con --enable-libfdk-aac.';
+            context.encoderWindow.webContents.send('encoder-warn', fallbackMsg);
+        }
         const codecArgs = buildCodecArgs(config);
         try {
             if (context.ffmpegProcess) killFfmpegProcess('');
             const inputArgs = buildEncoderInputArgs(config);
             const ffmpegArgs = localTesting ? ['-hide_banner', '-nostdin', ...inputArgs, '-f', 'null', '-'] : ['-hide_banner', '-nostdin', ...inputArgs, ...codecArgs, streamUrl];
-            const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? 'AAC+ (HE-AAC)' : 'AAC-LC';
+            const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? (_fdkAacAvailable === true ? 'AAC+ (HE-AAC)' : 'AAC-LC (fallback de AAC+)') : 'AAC-LC';
             writeLog(`Encoder FFmpeg iniciado. Codec: ${_codecLabel} ${config.bitrate || 128}kbps, servidor: ${config.serverType || 'icecast'}, entrada: ${config.captureFormat || 'webm-opus'}${config.sampleRate ? ' ' + config.sampleRate + 'Hz' : ''}`);
             resetEncoderWriteStats();
             notifyRustEncoder('start', config);
