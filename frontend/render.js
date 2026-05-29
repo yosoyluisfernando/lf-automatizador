@@ -11965,9 +11965,6 @@ async function playCartwallTimeButtonViaRust({ btnInfo, btnDOM, runtimeKey, tabI
         id,
         key: runtimeKey,
         btnInfo,
-        timeSequence: true,
-        filesToPlay,
-        currentIndex: 0,
         stopped: false,
         sourcePath: filesToPlay[0] || '',
         cartwallBus: busAndOutput.bus,
@@ -11981,7 +11978,17 @@ async function playCartwallTimeButtonViaRust({ btnInfo, btnDOM, runtimeKey, tabI
     if (btnDOM && tabIndex === cwActiveTabIndex) btnDOM.classList.add('cw-playing');
     ipcRenderer.send('cartwall-play-state', { id, tabIndex, state: 'playing' });
     refreshCwPlayingTabs();
-    const result = await playRustCartwallRuntimeItem(runtimeItem);
+    // Locución de hora gapless: el motor encadena HORAS+MINUTOS en un único
+    // player con append (sin la micro-pausa del encadenamiento por IPC). El fin
+    // se detecta por status 'ended' vía reconcileRustCartwallRuntimeStatus.
+    const result = await commandRustControlPlane('cartwallSequence', {
+        player: runtimeItem.rustPlayerId,
+        bus: busAndOutput.bus,
+        outputId: busAndOutput.outputId,
+        paths: filesToPlay,
+        gain: btnInfo?.vol ?? 1,
+        cacheDir: mainWaveformCacheDir
+    });
     if (result?.ok) return;
     finishCartwallRuntimeItem(runtimeItem);
     logSystem(`[CARTWALL] Rust no pudo reproducir locucion de hora: ${result?.error || 'sin detalle'}`);
@@ -12100,21 +12107,9 @@ function reconcileRustCartwallRuntimeStatus(status = {}) {
 function handleRustCartwallRuntimeEnded(runtimeItem) {
     if (!runtimeItem || runtimeItem.stopped) return;
     const endedPlayerId = runtimeItem.rustPlayerId;
-    if (runtimeItem.timeSequence) {
-        runtimeItem.currentIndex = (Number(runtimeItem.currentIndex) || 0) + 1;
-        const nextPath = runtimeItem.filesToPlay?.[runtimeItem.currentIndex];
-        if (!nextPath) {
-            finishCartwallRuntimeItem(runtimeItem);
-            return;
-        }
-        commandRustControlPlane('cartwallStop', { player: endedPlayerId }).catch(() => { });
-        runtimeItem.rustPlayerId = buildRustCartwallPlayerId(runtimeItem.key);
-        runtimeItem.sourcePath = nextPath;
-        playRustCartwallRuntimeItem(runtimeItem).then(result => {
-            if (!result?.ok) finishCartwallRuntimeItem(runtimeItem);
-        }).catch(() => finishCartwallRuntimeItem(runtimeItem));
-        return;
-    }
+    // (La locución de hora del cartwall ya NO se encadena por IPC: el motor la
+    // reproduce gapless con `cartwallSequence`. Por eso aquí ya no hay rama
+    // `timeSequence`; el fin de toda la secuencia llega como un único 'ended'.)
     if (runtimeItem.loop) {
         if (runtimeItem.restartPending) return;
         runtimeItem.restartPending = true;

@@ -2786,6 +2786,78 @@ fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, 
     Ok(())
 }
 
+/// Como `load_audio_player` pero encadena VARIOS archivos en UN solo player con
+/// `append` (rodio los reproduce gapless, sin micro-pausa entre ellos). Pensado
+/// para el cartwall (locución de hora HORAS+MINUTOS). A diferencia de
+/// `start_time_locution`, NO usa la maquinaria global `time_locution_*` (que es
+/// de instancia única), por lo que cartwall y playlist pueden sonar a la vez sin
+/// pisarse. El fin se detecta por la vía normal: `emit_status` marca 'ended'
+/// cuando `player.empty()` tras el último archivo. Se duplica a propósito parte
+/// del setup de `load_audio_player` para dejar ese camino crítico (música) intacto.
+fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_paths: &[String], gain: f32, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
+    if file_paths.is_empty() {
+        return Err("Secuencia de audio vacia.".to_string());
+    }
+    let (resolved_output_id, resolved_output_name) = ensure_output(state, output_id)?;
+    if is_program_bus(bus_id) && state.program_mixer_input.is_none() {
+        let master_output_id = state.routes.get("master")
+            .map(|r| r.output_device_id.clone())
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| resolved_output_id.clone());
+        ensure_program_mixer(state, &master_output_id)?;
+    }
+    let use_program_mixer = is_program_bus(bus_id) && state.program_mixer_input.is_some();
+    let program_mixer_clone = if use_program_mixer {
+        state.program_mixer_input.as_ref().map(|m| m.clone())
+    } else {
+        None
+    };
+    let player = match program_mixer_clone.as_ref() {
+        Some(mixer) => Player::connect_new(mixer),
+        None => {
+            let output = state.outputs.get(&resolved_output_id).ok_or_else(|| "Salida Rust no disponible.".to_string())?;
+            Player::connect_new(output.sink.mixer())
+        }
+    };
+    player.set_volume(gain.clamp(0.0, 2.0));
+
+    let meter = Arc::new(PlayerMeter::default());
+    // Duración total (cacheada) ANTES de encolar.
+    let mut total_ms: u64 = 0;
+    for path in file_paths {
+        total_ms = total_ms.saturating_add(cached_audio_duration_ms(path, cache_dir));
+    }
+    // Encolar todos los archivos en el mismo player → reproducción gapless.
+    for path in file_paths {
+        let file = File::open(path).map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
+        let decoder = Decoder::try_from(file).map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
+        let metered = MeteredSource::new(decoder, Arc::clone(&meter));
+        player.append(metered);
+    }
+
+    let runtime = state.players.entry(player_id.to_string()).or_default();
+    if let Some(old_player) = runtime.player.take() {
+        old_player.stop();
+    }
+    runtime.meter = Arc::clone(&meter);
+    runtime.state.path = file_paths.join("|");
+    runtime.state.status = "playing".to_string();
+    runtime.state.position_ms = 0;
+    runtime.state.duration_ms = total_ms;
+    runtime.state.gain = gain.clamp(0.0, 2.0);
+    runtime.state.fade_active = false;
+    runtime.state.fade_start_gain = runtime.state.gain;
+    runtime.state.fade_target_gain = runtime.state.gain;
+    runtime.state.fade_started_at_ms = 0;
+    runtime.state.fade_duration_ms = 0;
+    runtime.state.fade_stop_after = false;
+    runtime.state.bus_id = bus_id.to_string();
+    runtime.state.output_device_id = resolved_output_id;
+    runtime.state.output_device_name = resolved_output_name;
+    runtime.player = Some(player);
+    Ok(())
+}
+
 fn release_runtime_player(runtime: &mut RuntimePlayer) {
     runtime.state.fade_active = false;
     runtime.state.fade_stop_after = false;
@@ -4459,6 +4531,22 @@ fn main() {
                             let _ = cached_audio_duration_ms(p, &cache_dir);
                         }
                     });
+                }
+            }
+            // Reproducción gapless de una secuencia de archivos en un player
+            // normal (cartwall: locución de hora HORAS+MINUTOS sin micro-pausa).
+            // No toca la maquinaria time_locution; el fin se detecta por 'ended'.
+            "cartwallSequence" => {
+                let paths = json_get_string_array(&line, "paths").unwrap_or_default();
+                let gain = json_get_f32(&line, "gain").unwrap_or(1.0);
+                let bus_id = json_get_string(&line, "bus").unwrap_or_else(|| "cartwall".to_string());
+                let output_id = json_get_string(&line, "outputId").unwrap_or_else(|| "default".to_string());
+                let cache_dir = json_get_string(&line, "cacheDir").unwrap_or_default();
+                let resolved_output_id = resolve_output_for_bus(&state, &bus_id, &output_id);
+                if paths.is_empty() {
+                    emit_error("cartwallSequence: 'paths' vacio.", &request_id);
+                } else if let Err(err) = load_audio_player_sequence(&mut state, &player_id, &paths, gain, &resolved_output_id, &bus_id, &cache_dir) {
+                    emit_error(&err, &request_id);
                 }
             }
             "labPlay" => {

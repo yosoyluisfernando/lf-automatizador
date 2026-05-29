@@ -335,6 +335,18 @@ class RustAudioEngineAdapter {
                     paths: Array.isArray(payload.paths) ? payload.paths : [],
                     cacheDir: payload.cacheDir || ''
                 };
+            case 'cartwallSequence':
+                // Cartwall: locución de hora gapless. El motor encadena todos los
+                // archivos (HORAS+MINUTOS) en un único player con append.
+                return {
+                    cmd: 'cartwallSequence',
+                    player: payload.player || payload.playerId || payload.id || `cartwall-${Date.now()}`,
+                    bus: payload.bus || 'cartwall',
+                    paths: Array.isArray(payload.paths) ? payload.paths : [],
+                    outputId: payload.outputId || payload.deviceId || 'default',
+                    gain: payload.gain ?? payload.volume ?? 1,
+                    cacheDir: payload.cacheDir || ''
+                };
             case 'masterGain':
                 return { cmd: 'masterGain', gain: payload.gain ?? 1.0 };
             case 'monitorGain':
