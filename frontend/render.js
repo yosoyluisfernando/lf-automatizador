@@ -10358,10 +10358,13 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
 
         if (isRustPlaylistOwnerEnabled()) {
             const initialRustPrimaryBus = getRustPlaylistPrimaryBus(tr);
-            const initialPositionMs = Math.max(0, Math.round(currentStartTimeOffset * 1000));
-            const standbyPlayerId = initialPositionMs === 0
-                ? consumeRustStandbyFor(tr, rutaFisica, initialRustPrimaryBus)
-                : '';
+            // Reusar el deck precargado en standby SIEMPRE que corresponda a esta
+            // pista (consumeRustStandbyFor valida row+path+bus), INCLUSO con punto
+            // de marca (cue): el standby se precarga desde 0 y el `seek` de más
+            // abajo lo reposiciona al cue al instante (el archivo ya está en RAM).
+            // Antes, con cue (initialPositionMs!=0) se descartaba el standby y se
+            // hacía un `load` síncrono desde disco → cuelgue/bache en esa transición.
+            const standbyPlayerId = consumeRustStandbyFor(tr, rutaFisica, initialRustPrimaryBus);
             if (standbyPlayerId) {
                 currentRustPlayerId = standbyPlayerId;
                 activeRustPlaylistDeckId = standbyPlayerId;
