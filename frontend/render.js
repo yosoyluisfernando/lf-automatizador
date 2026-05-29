@@ -8972,7 +8972,8 @@ async function playClimateLocution(kind) {
         path: filePath,
         bus: 'jingle',
         gain: 1,
-        autoplay: true
+        autoplay: true,
+        cacheDir: mainWaveformCacheDir
     });
     if (!result?.ok) {
         finishRustOverlayRuntime(playerId);
@@ -9069,7 +9070,8 @@ async function playTimeLocutionViaRust() {
     const result = await commandRustControlPlane('timeLocution', {
         folder,
         bus: 'jingle',
-        gain: 1
+        gain: 1,
+        cacheDir: mainWaveformCacheDir
     });
     if (!result?.ok) {
         rustTimeLocutionContext = null;
@@ -9934,7 +9936,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 bus: climatePlaylistBus,
                 path: climateFilePath,
                 gain: dbToLinear(currentTrackConfig.ampDb),
-                autoplay: true
+                autoplay: true,
+                cacheDir: mainWaveformCacheDir
             });
             if (currentSessionId !== playRowSessionId) return;
             if (!result?.ok) {
@@ -10088,7 +10091,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 player: timePlaylistPlayerId,
                 bus: timePlaylistBus,
                 folder,
-                gain: dbToLinear(currentTrackConfig.ampDb)
+                gain: dbToLinear(currentTrackConfig.ampDb),
+                cacheDir: mainWaveformCacheDir
             });
             if (currentSessionId !== playRowSessionId) {
                 return;
@@ -11858,7 +11862,8 @@ function playRustCartwallRuntimeItem(runtimeItem) {
         outputId: runtimeItem.cartwallOutputId || 'default',
         path: runtimeItem.sourcePath,
         gain: runtimeItem.btnInfo?.vol ?? 1,
-        autoplay: true
+        autoplay: true,
+        cacheDir: runtimeItem.cacheDir || ''
     });
 }
 
@@ -11945,7 +11950,8 @@ async function playCartwallClimateButtonViaRust({ btnInfo, btnDOM, runtimeKey, t
         stopped: false,
         sourcePath: filePath,
         cartwallBus: busAndOutput.bus,
-        cartwallOutputId: busAndOutput.outputId
+        cartwallOutputId: busAndOutput.outputId,
+        cacheDir: mainWaveformCacheDir
     };
     cartwallAudioInstances[runtimeKey] = [runtimeItem];
     if (affectsProgram) {

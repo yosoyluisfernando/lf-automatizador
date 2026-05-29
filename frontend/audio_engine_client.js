@@ -255,7 +255,8 @@ class RustAudioEngineAdapter {
                     path: payload.path || '',
                     outputId: payload.outputId || payload.deviceId || 'default',
                     gain: payload.gain,
-                    autoplay: payload.autoplay === true
+                    autoplay: payload.autoplay === true,
+                    cacheDir: payload.cacheDir || ''
                 };
             case 'play':
             case 'pause':
@@ -282,7 +283,8 @@ class RustAudioEngineAdapter {
                     path: payload.path || payload.file || '',
                     outputId: payload.outputId || payload.deviceId || 'default',
                     gain: payload.gain ?? payload.volume ?? 1,
-                    autoplay: payload.autoplay !== false
+                    autoplay: payload.autoplay !== false,
+                    cacheDir: payload.cacheDir || ''
                 };
             case 'cartwallStop':
                 return {
@@ -322,7 +324,8 @@ class RustAudioEngineAdapter {
                     folder: payload.folder || '',
                     bus: payload.bus || 'jingle',
                     gain: payload.gain ?? 1,
-                    outputId: payload.outputId || payload.deviceId || 'default'
+                    outputId: payload.outputId || payload.deviceId || 'default',
+                    cacheDir: payload.cacheDir || ''
                 };
             case 'masterGain':
                 return { cmd: 'masterGain', gain: payload.gain ?? 1.0 };

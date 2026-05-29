@@ -2713,7 +2713,7 @@ fn ensure_output(state: &mut EngineState, requested_id: &str) -> Result<(String,
     Ok((id, name))
 }
 
-fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, gain: f32, paused: bool, output_id: &str, bus_id: &str) -> Result<(), String> {
+fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, gain: f32, paused: bool, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
     let (resolved_output_id, resolved_output_name) = ensure_output(state, output_id)?;
     if is_program_bus(bus_id) && state.program_mixer_input.is_none() {
         let master_output_id = state.routes.get("master")
@@ -2735,11 +2735,16 @@ fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, 
     };
     let file = File::open(file_path).map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
     let decoder = Decoder::try_from(file).map_err(|err| format!("No se pudo decodificar audio: {}", err))?;
-    // Leer duración antes de consumir el decoder. `total_duration()` es confiable
-    // para WAV y FLAC; para MP3 VBR puede devolver None o un valor aproximado.
-    let duration_ms = decoder.total_duration()
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    // Duración: para pistas normales (cache_dir vacío) usamos el decoder ya
+    // abierto con `total_duration()` — barato, y su duración real vive en el
+    // SQLite del frontend. Para LOCUCIONES (cache_dir presente: clima/hora
+    // manual) usamos el caché en disco, que escanea una sola vez los VBR sin
+    // header y persiste el resultado (archivos que suenan cientos de veces/día).
+    let duration_ms = if cache_dir.trim().is_empty() {
+        decoder.total_duration().map(|d| d.as_millis() as u64).unwrap_or(0)
+    } else {
+        cached_audio_duration_ms(file_path, cache_dir)
+    };
     let player = match program_mixer_clone.as_ref() {
         Some(mixer) => Player::connect_new(mixer),
         None => {
@@ -2834,7 +2839,7 @@ fn play_existing_or_rebuild_player(state: &mut EngineState, player_id: &str) -> 
     };
     let output_id = resolve_output_for_bus(state, &bus_id, &fallback_output_id);
 
-    load_audio_player(state, player_id, &path, gain, true, &output_id, &bus_id)?;
+    load_audio_player(state, player_id, &path, gain, true, &output_id, &bus_id, "")?;
     if let Some(runtime) = state.players.get_mut(player_id) {
         runtime.state.status = "playing".to_string();
         runtime.state.position_ms = seek_ms;
@@ -2904,7 +2909,7 @@ fn process_repeat_players(state: &mut EngineState) {
 
     for spec in repeats {
         let output_id = resolve_output_for_bus(state, &spec.bus_id, &spec.output_device_id);
-        match load_audio_player(state, &spec.player_id, &spec.path, spec.gain, true, &output_id, &spec.bus_id) {
+        match load_audio_player(state, &spec.player_id, &spec.path, spec.gain, true, &output_id, &spec.bus_id, "") {
             Ok(()) => {
                 if let Some(runtime) = state.players.get_mut(&spec.player_id) {
                     runtime.state.repeat_active = !spec.deactivate_after_repeat;
@@ -3105,7 +3110,7 @@ fn resume_pending_players(state: &mut EngineState) {
         let resume_pos = spec.position_ms;
         // Cargar siempre en pausa: evita que el decoder emita muestras desde
         // el inicio (pos 0) durante el instante que tarda en procesar el seek.
-        match load_audio_player(state, &spec.player_id, &spec.path, spec.gain, true, &master_output_id, &spec.bus_id) {
+        match load_audio_player(state, &spec.player_id, &spec.path, spec.gain, true, &master_output_id, &spec.bus_id, "") {
             Ok(()) => {
                 if let Some(runtime) = state.players.get_mut(&spec.player_id) {
                     if let Some(player) = &runtime.player {
@@ -3695,6 +3700,74 @@ fn load_peaks_cache(cache_path: &str) -> Option<(Vec<f32>, Vec<f32>, u64, u32, f
     Some((min, max, duration_ms, sample_rate, silence_start, silence_end))
 }
 
+/// mtime del archivo en segundos UNIX (0 si no se puede leer). Mismo criterio
+/// de invalidación que el caché de peaks: si el archivo cambia, cambia el mtime.
+fn file_mtime_secs(path: &str) -> u64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Mide la duración REAL de un archivo. `total_duration()` es confiable para
+/// WAV/FLAC y MP3 con header Xing/VBRI; para MP3 VBR sin header devuelve None
+/// y entonces escaneamos el archivo (decodificar y contar samples interleaved).
+fn measure_audio_duration_full(path: &str) -> u64 {
+    let Ok(file) = File::open(path) else { return 0; };
+    let Ok(decoder) = Decoder::try_from(file) else { return 0; };
+    match decoder.total_duration() {
+        Some(d) => d.as_millis() as u64,
+        None => {
+            // sample_rate()/channels() se leen ANTES de count() (que consume).
+            let sr = decoder.sample_rate().get() as u64;
+            let ch = decoder.channels().get() as u64;
+            let samples = decoder.count() as u64;
+            if sr > 0 && ch > 0 { (samples / ch) * 1000 / sr } else { 0 }
+        }
+    }
+}
+
+fn save_duration_cache(cache_path: &str, duration_ms: u64) {
+    if let Some(parent) = std::path::Path::new(cache_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::File::create(cache_path) {
+        let _ = writeln!(f, "v1 {}", duration_ms);
+    }
+}
+
+fn load_duration_cache(cache_path: &str) -> Option<u64> {
+    let content = std::fs::read_to_string(cache_path).ok()?;
+    let line = content.lines().next()?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 2 || parts[0] != "v1" { return None; }
+    parts[1].parse().ok()
+}
+
+/// Duración de un archivo con caché en disco. Pensado para LOCUCIONES (hora,
+/// clima): archivos pregrabados, fijos, que suenan cientos de veces al día.
+/// El nombre del caché incluye el mtime → auto-invalida si el archivo cambia
+/// (mismo patrón que `compute_waveform_peaks`). Si `cache_dir` viene vacío
+/// (pistas normales de música: su duración vive en el SQLite del frontend),
+/// mide directo sin escanear ni cachear, preservando el comportamiento previo.
+fn cached_audio_duration_ms(path: &str, cache_dir: &str) -> u64 {
+    let cache_dir_clean = cache_dir.trim_end_matches(['/', '\\']);
+    if cache_dir_clean.is_empty() {
+        return measure_audio_duration_full(path);
+    }
+    let cache_path = format!("{}/{:016x}_{}.dur", cache_dir_clean, fnv_hash(path), file_mtime_secs(path));
+    if let Some(ms) = load_duration_cache(&cache_path) {
+        return ms;
+    }
+    let measured = measure_audio_duration_full(path);
+    if measured > 0 {
+        save_duration_cache(&cache_path, measured);
+    }
+    measured
+}
+
 fn compute_waveform_peaks(
     path: &str,
     target_bins: usize,
@@ -3940,6 +4013,7 @@ fn start_time_locution(
     output_id: &str,
     bus_id: &str,
     _request_id: &str,
+    cache_dir: &str,
 ) -> Result<(u64, Vec<String>), String> {
     let files = resolve_time_locution_files(folder);
     if files.is_empty() {
@@ -3982,31 +4056,13 @@ fn start_time_locution(
     let meter = Arc::new(PlayerMeter::default());
 
     // ── Fase 1: medir la duración TOTAL real de la pista virtual (HRS+MIN)
-    // ANTES de encolar nada. `total_duration()` es confiable para WAV/FLAC y
-    // MP3 con header Xing/VBRI; para MP3 VBR sin header devuelve None y antes
-    // ese segmento (normalmente MINxx) NO se sumaba a total_ms → la duración
-    // total quedaba corta y el frontend adelantaba el avance (cortando MINxx)
-    // o se quedaba esperando el `timeLocutionEnded` real (bache al aire).
-    // Cuando falta metadata escaneamos el archivo (decodificar y contar
-    // samples): los archivos de locución son cortos (1-3 s), el costo es trivial.
+    // ANTES de encolar nada, vía caché en disco. La primera vez escanea los
+    // VBR sin header (que antes subestimaban total_ms → el frontend adelantaba
+    // el avance cortando MINxx, o esperaba el `timeLocutionEnded` real → bache);
+    // las siguientes lee del caché. Si cache_dir viene vacío mide sin cachear.
     let mut total_ms: u64 = 0;
     for path in &files {
-        let probe_file = File::open(path)
-            .map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
-        let probe = Decoder::try_from(probe_file)
-            .map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
-        let measured_ms = match probe.total_duration() {
-            Some(d) => d.as_millis() as u64,
-            None => {
-                // VBR sin header: contar samples interleaved del archivo entero.
-                // sample_rate()/channels() se leen ANTES de count() (que consume).
-                let sr = probe.sample_rate().get() as u64;
-                let ch = probe.channels().get() as u64;
-                let samples = probe.count() as u64;
-                if sr > 0 && ch > 0 { (samples / ch) * 1000 / sr } else { 0 }
-            }
-        };
-        total_ms = total_ms.saturating_add(measured_ms);
+        total_ms = total_ms.saturating_add(cached_audio_duration_ms(path, cache_dir));
     }
     if total_ms == 0 {
         return Err("La locucion de hora dura 0 ms (decoders sin metadata de duracion).".to_string());
@@ -4376,12 +4432,15 @@ fn main() {
                 let gain = json_get_f32(&line, "gain").unwrap_or(current_gain);
                 let output_id = json_get_string(&line, "outputId").unwrap_or_else(|| "default".to_string());
                 let bus_id = json_get_string(&line, "bus").unwrap_or_else(|| default_bus_for_player(&player_id).to_string());
+                // cacheDir presente solo en LOCUCIONES (clima): habilita el caché de
+                // duración en disco. Ausente/vacío en música → medición directa.
+                let cache_dir = json_get_string(&line, "cacheDir").unwrap_or_default();
                 // `autoplay: true` → el player arranca inmediatamente (cartwall, overlays).
                 // `autoplay: false` (default) → carga en pausa; un `play` posterior lo inicia
                 // (playlist, editores). Si el campo está ausente, se comporta como false.
                 let autoplay = json_get_bool(&line, "autoplay").unwrap_or(false);
                 let resolved_output_id = resolve_output_for_bus(&state, &bus_id, &output_id);
-                if let Err(err) = load_audio_player(&mut state, &player_id, &path, gain, !autoplay, &resolved_output_id, &bus_id) {
+                if let Err(err) = load_audio_player(&mut state, &player_id, &path, gain, !autoplay, &resolved_output_id, &bus_id, &cache_dir) {
                     emit_error(&err, &request_id);
                 }
             }
@@ -4392,7 +4451,7 @@ fn main() {
                 let output_id = json_get_string(&line, "outputId").unwrap_or_else(|| "default".to_string());
                 let bus_id = json_get_string(&line, "bus").unwrap_or_else(|| default_bus_for_player(&player_id).to_string());
                 let resolved_output_id = resolve_output_for_bus(&state, &bus_id, &output_id);
-                if let Err(err) = load_audio_player(&mut state, &player_id, &path, gain, false, &resolved_output_id, &bus_id) {
+                if let Err(err) = load_audio_player(&mut state, &player_id, &path, gain, false, &resolved_output_id, &bus_id, "") {
                     emit_error(&err, &request_id);
                 }
             }
@@ -4444,6 +4503,9 @@ fn main() {
                 let gain = json_get_f32(&line, "gain").unwrap_or(1.0);
                 let bus_id = json_get_string(&line, "bus").unwrap_or_else(|| "jingle".to_string());
                 let output_id = json_get_string(&line, "outputId").unwrap_or_else(|| "default".to_string());
+                // cacheDir habilita el caché de duración en disco para los
+                // segmentos (HRS/MIN) de la locución horaria.
+                let cache_dir = json_get_string(&line, "cacheDir").unwrap_or_default();
                 if folder.is_empty() {
                     emit_error("timeLocution: falta el campo 'folder'.", &request_id);
                 } else {
@@ -4452,7 +4514,7 @@ fn main() {
                     // desde la playlist el renderer pasa "player-a"/"player-b" para
                     // que la locución se trate como una pista normal del programa.
                     let time_player_id = if player_id == "probe" { "time-locucion".to_string() } else { player_id.clone() };
-                    match start_time_locution(&mut state, &time_player_id, &folder, gain, &output_id, &bus_id, &request_id) {
+                    match start_time_locution(&mut state, &time_player_id, &folder, gain, &output_id, &bus_id, &request_id, &cache_dir) {
                         Ok((duration_ms, files)) => {
                             let files_json = files
                                 .iter()
