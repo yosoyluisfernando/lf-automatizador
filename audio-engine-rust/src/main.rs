@@ -4444,6 +4444,23 @@ fn main() {
                     emit_error(&err, &request_id);
                 }
             }
+            // Warm-up del caché de duración de LOCUCIONES (hora/clima). Mide y
+            // persiste el `.dur` de cada archivo SIN reproducir, en un hilo
+            // aparte para NO bloquear el loop de comandos: la emisión en vivo
+            // nunca debe esperar a que se precalienten locuciones. Idempotente
+            // (los .dur ya presentes son lectura instantánea), así que correrlo
+            // en cada arranque es barato y cubre a usuarios nuevos y existentes.
+            "cacheDuration" => {
+                let paths = json_get_string_array(&line, "paths").unwrap_or_default();
+                let cache_dir = json_get_string(&line, "cacheDir").unwrap_or_default();
+                if !cache_dir.trim().is_empty() && !paths.is_empty() {
+                    std::thread::spawn(move || {
+                        for p in &paths {
+                            let _ = cached_audio_duration_ms(p, &cache_dir);
+                        }
+                    });
+                }
+            }
             "labPlay" => {
                 let current = state.players.get(&player_id).map(|runtime| (runtime.state.path.clone(), runtime.state.gain)).unwrap_or_else(|| (String::new(), 1.0));
                 let path = json_get_string(&line, "path").unwrap_or(current.0);

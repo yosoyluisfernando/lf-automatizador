@@ -327,6 +327,14 @@ class RustAudioEngineAdapter {
                     outputId: payload.outputId || payload.deviceId || 'default',
                     cacheDir: payload.cacheDir || ''
                 };
+            case 'cacheDuration':
+                // Warm-up: lista de archivos de locución a medir y cachear (.dur)
+                // sin reproducir. El motor los procesa en un hilo aparte.
+                return {
+                    cmd: 'cacheDuration',
+                    paths: Array.isArray(payload.paths) ? payload.paths : [],
+                    cacheDir: payload.cacheDir || ''
+                };
             case 'masterGain':
                 return { cmd: 'masterGain', gain: payload.gain ?? 1.0 };
             case 'monitorGain':

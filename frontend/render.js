@@ -113,7 +113,12 @@ let mainWaveformCacheDir = '';
 
 ipcRenderer.invoke('get-cache-dir')
     .then(result => {
-        if (result?.success && result.cacheDir) mainWaveformCacheDir = result.cacheDir;
+        if (result?.success && result.cacheDir) {
+            mainWaveformCacheDir = result.cacheDir;
+            // Precalentar el caché de duración de locuciones en segundo plano.
+            // Retraso para no competir con el arranque; el motor escanea aparte.
+            setTimeout(() => warmupLocutionDurations(), 5000);
+        }
     })
     .catch(() => {});
 
@@ -8927,6 +8932,71 @@ async function ensureClimateWeatherValue(kind) {
     return Number.isFinite(value) ? value : null;
 }
 
+// ── Warm-up del caché de duración de locuciones ────────────────────────────
+// Las locuciones (hora HRS/MIN, clima TMP/TMPN/HUM) son archivos fijos que
+// suenan cientos de veces al día. La PRIMERA reproducción de cada una mide su
+// duración (escaneo completo para MP3 VBR sin header), lo que puede provocar
+// una micro-pausa. Este warm-up precalienta el caché .dur en segundo plano (el
+// motor escanea en un hilo aparte), priorizando lo ACTUAL y lo PRÓXIMO. Es
+// fail-soft e idempotente: si el .dur ya existe, el motor lo lee al instante.
+function collectLocutionFilesForWarmup() {
+    const out = [];
+    const seen = new Set();
+    const push = (p) => { if (p && !seen.has(p)) { seen.add(p); out.push(p); } };
+    const safeReaddir = (folder) => {
+        try { return (folder && fs.existsSync(folder)) ? fs.readdirSync(folder) : []; }
+        catch (err) { return []; }
+    };
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const nextHh = String((now.getHours() + 1) % 24).padStart(2, '0');
+
+    // HORA: primero la hora/minuto actual y la hora próxima, luego el resto.
+    const timeFolder = generalPrefs.timeFolder;
+    const timeFiles = safeReaddir(timeFolder);
+    if (timeFiles.length) {
+        const byPrefix = (prefix) => {
+            const up = prefix.toUpperCase();
+            return timeFiles.find(f => String(f).toUpperCase().startsWith(up));
+        };
+        const full = (f) => f ? path.join(timeFolder, f) : '';
+        push(full(byPrefix(`HRS${hh}`)));
+        push(full(byPrefix(`MIN${mm}`)));
+        push(full(byPrefix(`HRS${nextHh}`)));
+        timeFiles
+            .filter(f => { const u = String(f).toUpperCase(); return u.startsWith('HRS') || u.startsWith('MIN'); })
+            .forEach(f => push(full(f)));
+    }
+
+    // CLIMA: primero el valor actual de temperatura/humedad, luego el resto.
+    [['temperature', ['TMP', 'TMPN']], ['humidity', ['HUM']]].forEach(([kind, prefixes]) => {
+        const folder = resolveClimateLocutionFolder(kind);
+        const files = safeReaddir(folder);
+        if (!files.length) return;
+        const full = (f) => f ? path.join(folder, f) : '';
+        const current = getCurrentClimateValue(kind);
+        if (Number.isFinite(current)) push(findClimateLocutionFile(folder, kind, current));
+        files
+            .filter(f => { const u = String(f).toUpperCase(); return prefixes.some(p => u.startsWith(p)); })
+            .forEach(f => push(full(f)));
+    });
+
+    return out;
+}
+
+function warmupLocutionDurations() {
+    try {
+        if (!mainWaveformCacheDir) return;
+        const paths = collectLocutionFilesForWarmup();
+        if (!paths.length) return;
+        commandRustControlPlane('cacheDuration', { paths, cacheDir: mainWaveformCacheDir }).catch(() => {});
+        logSystem(`[WARMUP] Precalentando duracion de ${paths.length} locucion(es) en segundo plano.`);
+    } catch (err) {
+        // Fail-soft: el warm-up jamás debe interferir con el arranque ni la emisión.
+    }
+}
+
 async function playClimateLocution(kind) {
     if (!isClimateLocutionType(kind)) return;
     if (isJinglePlaying) {
@@ -9330,6 +9400,9 @@ ipcRenderer.on('settings-updated', () => {
     if (generalPrefs.weatherFolder) generalPrefs.weatherFolder = adaptStoredPath(generalPrefs.weatherFolder, __projectRoot);
     window.currentWeather.lastUpdate = 0;
     setTimeout(() => fetchWeatherBackground(true), 1000);
+    // Las carpetas de locución (hora/clima) pudieron cambiar: re-precalentar el
+    // caché de duración en segundo plano (idempotente, fail-soft).
+    setTimeout(() => warmupLocutionDurations(), 2000);
 });
 
 
