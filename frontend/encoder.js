@@ -3,6 +3,18 @@ const fs = require('fs');
 const path = require('path');
 const { getConfigDir } = require('../backend/utils/app_paths');
 
+// Mostrar la versión real de la app (desde package.json) en la cabecera del
+// encoder, para que nunca quede desincronizada tras un bump de versión.
+try {
+    const appVersion = require('../package.json').version;
+    const applyEncoderVersion = () => {
+        const el = document.getElementById('enc-version');
+        if (el) el.textContent = `LF Automatizador v${appVersion}`;
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyEncoderVersion);
+    else applyEncoderVersion();
+} catch (err) { /* fallback: queda el texto estático del HTML */ }
+
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 const encoderPrefsPath = path.join(configDir, 'encoder_prefs.json');
 
