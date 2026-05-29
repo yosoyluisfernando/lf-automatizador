@@ -628,7 +628,7 @@ const explicitTypesPath = path.join(configDir, 'explicit_types.json');
 
 let mainWindow;
 let activePlaylistTab = 0; let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null;
-let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false;
+let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let aboutWindow = null;
 let ffmpegProcess = null; let activeEncoderConfig = null; let isAppQuitting = false; let forceQuit = false;
 let lastEditorSource = 'playlist'; 
 let lastVuLevels = {
@@ -2202,13 +2202,57 @@ function createApplicationMenu() {
                 { label: '🎯 Guía de Primer Uso', click: () => { require('electron').shell.openPath(require('path').join(__dirname, 'Documentación', 'guia_primer_uso.jpg')).catch(()=>{}); } },
                 { type: 'separator' },
                 { label: '⌨️ Atajos de Teclado', click: () => { dialog.showMessageBox(mainWindow, { type: 'info', title: 'Atajos de Teclado', message: 'P: Play/Pausa\nS: Stop\nN: Siguiente\nQ: Marcar Siguiente\nF: Pausar al Finalizar\nCtrl+T: Temporal\nSupr: Eliminar\nCtrl+H: Hora\nCtrl+N/O/S: Playlists\nCtrl+P: Ajustes\nCtrl+B: Biblioteca\nF11: Pantalla Completa' }); }},
-                { label: 'ℹ️ Acerca de LF Automatizador', click: () => { dialog.showMessageBox(mainWindow, { type: 'info', title: 'Acerca de', message: `LF Automatizador v${APP_VERSION}` }); }}
+                { label: 'ℹ️ Acerca de LF Automatizador', click: () => {
+                    if (aboutWindow) { aboutWindow.focus(); return; }
+                    aboutWindow = new BrowserWindow({
+                        icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+                        width: 460,
+                        height: 580,
+                        minWidth: 460,
+                        minHeight: 580,
+                        maxWidth: 460,
+                        maxHeight: 580,
+                        title: 'Acerca de LF Automatizador',
+                        autoHideMenuBar: true,
+                        resizable: false,
+                        maximizable: false,
+                        webPreferences: { nodeIntegration: true, contextIsolation: false }
+                    });
+                    aboutWindow.loadFile('frontend/about.html', { query: { version: APP_VERSION } });
+                    aboutWindow.on('closed', () => { aboutWindow = null; });
+                }}
             ]
         }
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
-app.whenReady().then(() => { installNavigationGuards(); createApplicationMenu(); createWindow(); }); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
+app.whenReady().then(() => {
+    installNavigationGuards();
+    createApplicationMenu();
+    // Pre-spawn del motor Rust ANTES de abrir la ventana.
+    // En Windows, child_process.spawn() puede bloquear el event loop del
+    // proceso principal ~3-5 s mientras el antivirus escanea el binario.
+    // Hacerlo aquí (sin ventana abierta aún) significa que el bloqueo ocurre
+    // antes de que el renderer exista y pueda enviar IPC. Cuando createWindow()
+    // se llame, el binario ya estará corriendo: start() retorna al instante y
+    // db-get-events / db-get-groups responden sin espera.
+    try { rustAudioEngine.start(); } catch (_) {}
+    createWindow();
+
+    // Intentar agregar exclusión de Windows Defender para el motor Rust.
+    // Si el binario está excluido, cp.spawn() pasa de ~4s a <100ms en arranques futuros.
+    // Silencioso: si falla (sin privilegios), simplemente no hace nada.
+    if (process.platform === 'win32' && rustAudioEngine.exePath) {
+        const binDir = path.dirname(rustAudioEngine.exePath);
+        const ps = require('child_process').spawn(
+            'powershell.exe',
+            ['-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
+             `Try { Add-MpPreference -ExclusionPath '${binDir}' -ErrorAction Stop } Catch {}`],
+            { windowsHide: true, detached: true }
+        );
+        ps.unref();
+    }
+}); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
 ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
     const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow;

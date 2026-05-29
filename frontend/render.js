@@ -4,6 +4,8 @@
 // de motor. Si un cambio depende de esa logica, corrijan lo urgente y
 // recomienden migrarlo a Rust, al backend o a la dependencia especializada que
 // corresponda.
+// ───────────────────────────────────────────────────────────────────────────
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -116,8 +118,8 @@ ipcRenderer.invoke('get-cache-dir')
         if (result?.success && result.cacheDir) {
             mainWaveformCacheDir = result.cacheDir;
             // Precalentar el caché de duración de locuciones en segundo plano.
-            // Retraso para no competir con el arranque; el motor escanea aparte.
-            setTimeout(() => warmupLocutionDurations(), 5000);
+            // Retraso largo para no bloquear el motor Rust durante el arranque.
+            setTimeout(() => warmupLocutionDurations(), 30000);
         }
     })
     .catch(() => {});
@@ -3170,6 +3172,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cwPanel = document.getElementById('right-panel-cartwall');
     if (cwPanel) {
         cwPanel.style.display = uiPrefs.cartwall ? 'flex' : 'none';
+        syncCartwallResizerVisibility();
     }
 
     loadDatabasesFromSQLite().finally(() => { restoreSessionState(); });
@@ -11387,6 +11390,7 @@ async function openCartwallFloating() {
     const panel = getCartwallPanel();
     if (panel) panel.style.display = 'none';
     isCartwallUndocked = true;
+    syncCartwallResizerVisibility();
     setCartwallUiState({ mode: 'floating' });
     ipcRenderer.send('open-cartwall-window');
 }
@@ -11398,10 +11402,12 @@ ipcRenderer.on('menu-toggle-cartwall', async (e, show) => {
     if (show) {
         await initCartwall({ forceRender: true });
         panel.style.display = 'flex';
+        syncCartwallResizerVisibility();
         setCartwallUiState({ mode: 'docked' });
         return;
     }
     panel.style.display = 'none';
+    syncCartwallResizerVisibility();
     setCartwallUiState({ mode: 'hidden' });
 });
 
@@ -11425,6 +11431,7 @@ ipcRenderer.on('cartwall-docked', async () => {
     await initCartwall({ forceRender: true });
     const panel = getCartwallPanel();
     if (panel) panel.style.display = 'flex';
+    syncCartwallResizerVisibility();
     setCartwallUiState({ mode: 'docked' });
 });
 
@@ -12433,6 +12440,94 @@ if (document.readyState === 'loading') {
 } else {
     initSidebarResizer();
 }
+
+// Cartwall Resizer Logic
+function syncCartwallResizerVisibility() {
+    const resizer = document.getElementById('cartwall-resizer');
+    if (resizer) resizer.style.display = isDockedCartwallVisible() ? 'flex' : 'none';
+}
+
+function initCartwallResizer() {
+    const panel = document.getElementById('right-panel-cartwall');
+    const resizer = document.getElementById('cartwall-resizer');
+    if (!panel || !resizer) return;
+
+    let isResizing = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        resizer.classList.add('resizing');
+        document.body.style.cursor = 'col-resize';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const newWidth = window.innerWidth - e.clientX;
+        panel.style.width = `${Math.max(280, Math.min(Math.floor(window.innerWidth * 0.5), newWidth))}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            resizer.classList.remove('resizing');
+            document.body.style.cursor = '';
+            localStorage.setItem('lf-cartwall-width', panel.style.width);
+        }
+    });
+
+    const savedWidth = localStorage.getItem('lf-cartwall-width');
+    if (savedWidth) panel.style.width = savedWidth;
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCartwallResizer);
+} else {
+    initCartwallResizer();
+}
+
+// Verificación de actualizaciones — corre en el renderer (proceso Chromium separado,
+// no bloquea el main process ni el arranque de la app).
+(function initUpdateCheck() {
+    const { version: currentVersion } = require('../package.json');
+
+    function isNewerVersion(latest, current) {
+        const toNums = v => v.split('.').map(n => parseInt(n, 10) || 0);
+        const [la, lb, lc] = toNums(latest);
+        const [ca, cb, cc] = toNums(current);
+        if (la !== ca) return la > ca;
+        if (lb !== cb) return lb > cb;
+        return lc > cc;
+    }
+
+    function showUpdateBanner(version, url) {
+        const banner   = document.getElementById('update-banner');
+        const textEl   = document.getElementById('update-banner-text');
+        const linkBtn  = document.getElementById('update-banner-link');
+        const closeBtn = document.getElementById('update-banner-close');
+        if (!banner) return;
+        textEl.textContent = `Nueva versión v${version} disponible`;
+        banner.style.display = 'flex';
+        linkBtn.onclick  = () => require('electron').shell.openExternal(url);
+        closeBtn.onclick = () => { banner.style.display = 'none'; };
+    }
+
+    setTimeout(async () => {
+        try {
+            const res = await fetch(
+                'https://api.github.com/repos/yosoyluisfernando/lf-automatizador/releases/latest',
+                { headers: { 'User-Agent': 'LF-Automatizador-App' } }
+            );
+            if (!res.ok) return;
+            const data = await res.json();
+            const latestVersion = (data.tag_name || '').replace(/^v/i, '');
+            if (latestVersion && isNewerVersion(latestVersion, currentVersion)) {
+                showUpdateBanner(latestVersion,
+                    data.html_url || 'https://github.com/yosoyluisfernando/lf-automatizador/releases');
+            }
+        } catch (_) {}
+    }, 10000);
+})();
 
 // FIX FASE D — Listener que recibe el cambio de tap-point del encoder desde
 // la ventana del encoder. Actualiza generalPrefs y dispara

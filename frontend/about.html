@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acerca de LF Automatizador</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, sans-serif;
+            background-color: #1a1a1c;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .card {
+            background: #222225;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 28px 32px 24px;
+            width: 360px;
+            text-align: center;
+            animation: fadeIn 0.25s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Logo */
+        .logo-wrap {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #444;
+        }
+        .logo-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Nombre y versión */
+        .app-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 7px;
+            letter-spacing: -0.2px;
+        }
+
+        .version-badge {
+            display: inline-block;
+            background: rgba(0, 168, 255, 0.12);
+            border: 1px solid rgba(0, 168, 255, 0.3);
+            color: #00a8ff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            letter-spacing: 0.3px;
+            margin-bottom: 20px;
+        }
+
+        /* Separador */
+        .sep {
+            height: 1px;
+            background: #333;
+            margin: 0 -32px 18px;
+        }
+
+        /* Creador */
+        .creator-label {
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .creator-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #c8d0dc;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        /* Links */
+        .links-label {
+            font-size: 10px;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 9px;
+        }
+
+        .links {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .link-btn {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            color: #aaa;
+            font-size: 12.5px;
+            font-weight: bold;
+            padding: 5px 9px;
+            cursor: pointer;
+            text-align: left;
+            transition: color 0.15s, background 0.15s, border-color 0.15s;
+            width: 100%;
+            font-family: inherit;
+            min-height: 28px;
+        }
+
+        .link-btn:hover {
+            color: #00a8ff;
+            background: #333;
+            border-color: #444;
+        }
+
+        .link-btn .icon {
+            font-size: 14px;
+            flex-shrink: 0;
+            width: 18px;
+            text-align: center;
+        }
+
+        .link-btn .label { flex: 1; }
+
+        .link-btn .arrow {
+            font-size: 10px;
+            color: #444;
+            transition: color 0.15s;
+        }
+        .link-btn:hover .arrow { color: #00a8ff; }
+
+        /* Footer */
+        .footer {
+            margin-top: 16px;
+            font-size: 10.5px;
+            color: #3a3f47;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+
+        <div class="logo-wrap">
+            <img src="../icon.png" alt="LF Automatizador" onerror="this.style.display='none'">
+        </div>
+
+        <div class="app-name">LF Automatizador</div>
+        <div class="version-badge" id="version-label">v—</div>
+
+        <div class="sep"></div>
+
+        <div class="creator-label">Desarrollado por</div>
+        <div class="creator-name">Luis Fernando Velasquez</div>
+
+        <div class="links-label">Recursos y comunidad</div>
+        <div class="links">
+            <button class="link-btn" id="btn-github">
+                <span class="icon">🐙</span>
+                <span class="label">Código fuente en GitHub</span>
+                <span class="arrow">↗</span>
+            </button>
+            <button class="link-btn" id="btn-telegram-channel">
+                <span class="icon">📢</span>
+                <span class="label">Canal de novedades (Telegram)</span>
+                <span class="arrow">↗</span>
+            </button>
+            <button class="link-btn" id="btn-telegram-group">
+                <span class="icon">💬</span>
+                <span class="label">Grupo de la comunidad (Telegram)</span>
+                <span class="arrow">↗</span>
+            </button>
+        </div>
+
+        <div class="footer">Motor de audio Rust &nbsp;·&nbsp; Construido con Electron</div>
+    </div>
+
+    <script>
+        const { shell } = require('electron');
+
+        const params = new URLSearchParams(window.location.search);
+        const version = params.get('version') || '—';
+        document.getElementById('version-label').textContent = `v${version}`;
+
+        document.getElementById('btn-github').addEventListener('click', () => {
+            shell.openExternal('https://github.com/yosoyluisfernando/lf-automatizador');
+        });
+        document.getElementById('btn-telegram-channel').addEventListener('click', () => {
+            shell.openExternal('https://t.me/+XKof2wDvGVw1YTRh');
+        });
+        document.getElementById('btn-telegram-group').addEventListener('click', () => {
+            shell.openExternal('https://t.me/+bXppwWvJvSg5YjNh');
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') window.close();
+        });
+    </script>
+</body>
+</html>

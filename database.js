@@ -569,9 +569,11 @@ function seedDefaultCountries() {
 // MIGRACIÓN AUTOMÁTICA (Rescate de JSONs)
 // ============================================================================
 function migrateDataFromJSON() {
-    const tracksCount = db.prepare("SELECT count(*) as count FROM tracks").get().count;
-    
-    if (tracksCount === 0) {
+    // SELECT 1 LIMIT 1 para en el primer registro — O(1) aunque haya 100k pistas.
+    // El antiguo count(*) hacía un full-table-scan bloqueando el proceso ~2-3 s.
+    const hasAnyTrack = !!db.prepare("SELECT 1 FROM tracks LIMIT 1").get();
+
+    if (!hasAnyTrack) {
         console.log("[BD] Base de datos vacía. Iniciando migración de rescate desde JSON...");
         
         // 1. MIGRAR PISTAS

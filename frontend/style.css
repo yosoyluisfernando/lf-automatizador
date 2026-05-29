@@ -73,6 +73,9 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
 .sidebar-resizer { width: 6px; cursor: col-resize; flex-shrink: 0; background: transparent; position: relative; display: flex; align-items: center; justify-content: center; z-index: 10; margin: 0 -1px; }
 .sidebar-resizer::after { content: ''; width: 2px; height: 30px; background: #444; border-radius: 2px; transition: background 0.2s; }
 .sidebar-resizer:hover::after, .sidebar-resizer.resizing::after { background: #00a8ff; }
+.cartwall-resizer { width: 6px; cursor: col-resize; flex-shrink: 0; background: transparent; position: relative; display: flex; align-items: center; justify-content: center; z-index: 10; margin: 0 -1px; }
+.cartwall-resizer::after { content: ''; width: 2px; height: 30px; background: #444; border-radius: 2px; transition: background 0.2s; }
+.cartwall-resizer:hover::after, .cartwall-resizer.resizing::after { background: #00a8ff; }
 .tabs { display: flex; background-color: #1a1a1c; border-bottom: 1px solid #333; flex-shrink: 0;}
 .tabs button { flex: 1; background: none; border: none; color: #aaa; padding: 10px 5px; cursor: pointer; font-weight: bold; transition: 0.2s; border-bottom: 2px solid transparent;}
 .tabs button.active { color: white; border-bottom: 2px solid #00a8ff; background-color: #222225; }
@@ -522,6 +525,8 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
    ========================================================= */
 .cartwall-panel {
     width: 350px;
+    min-width: 280px;
+    flex-shrink: 0;
     background-color: #222225;
     border: 1px solid #333;
     border-radius: 4px;
@@ -529,6 +534,12 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
     flex-direction: column;
     overflow: hidden;
 }
+.update-banner { display: flex; align-items: center; gap: 10px; padding: 5px 14px; background: #222225; border-bottom: 1px solid #333; border-left: 3px solid #00a8ff; font-size: 12px; color: #e0e0e0; flex-shrink: 0; }
+.update-banner-text { flex: 1; }
+.update-banner-btn { background: transparent; border: 1px solid transparent; border-radius: 3px; color: #aaa; font-size: 12px; font-weight: bold; padding: 3px 8px; cursor: pointer; font-family: inherit; transition: color 0.15s, background 0.15s, border-color 0.15s; }
+.update-banner-btn:hover { color: #00a8ff; background: #333; border-color: #444; }
+.update-banner-close { background: none; border: none; color: #555; cursor: pointer; font-size: 13px; padding: 2px 6px; transition: color 0.15s; line-height: 1; font-family: inherit; }
+.update-banner-close:hover { color: #aaa; }
 
 .cw-header {
     display: flex;
