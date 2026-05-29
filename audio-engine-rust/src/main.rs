@@ -3980,20 +3980,49 @@ fn start_time_locution(
     player.set_volume(gain.clamp(0.0, 2.0));
 
     let meter = Arc::new(PlayerMeter::default());
+
+    // ── Fase 1: medir la duración TOTAL real de la pista virtual (HRS+MIN)
+    // ANTES de encolar nada. `total_duration()` es confiable para WAV/FLAC y
+    // MP3 con header Xing/VBRI; para MP3 VBR sin header devuelve None y antes
+    // ese segmento (normalmente MINxx) NO se sumaba a total_ms → la duración
+    // total quedaba corta y el frontend adelantaba el avance (cortando MINxx)
+    // o se quedaba esperando el `timeLocutionEnded` real (bache al aire).
+    // Cuando falta metadata escaneamos el archivo (decodificar y contar
+    // samples): los archivos de locución son cortos (1-3 s), el costo es trivial.
     let mut total_ms: u64 = 0;
+    for path in &files {
+        let probe_file = File::open(path)
+            .map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
+        let probe = Decoder::try_from(probe_file)
+            .map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
+        let measured_ms = match probe.total_duration() {
+            Some(d) => d.as_millis() as u64,
+            None => {
+                // VBR sin header: contar samples interleaved del archivo entero.
+                // sample_rate()/channels() se leen ANTES de count() (que consume).
+                let sr = probe.sample_rate().get() as u64;
+                let ch = probe.channels().get() as u64;
+                let samples = probe.count() as u64;
+                if sr > 0 && ch > 0 { (samples / ch) * 1000 / sr } else { 0 }
+            }
+        };
+        total_ms = total_ms.saturating_add(measured_ms);
+    }
+    if total_ms == 0 {
+        return Err("La locucion de hora dura 0 ms (decoders sin metadata de duracion).".to_string());
+    }
+
+    // ── Fase 2: encolar los archivos en el Player. rodio empieza a reproducir
+    // en cuanto se hace el primer `append`, por eso esto va DESPUÉS de medir:
+    // así `time_locution_started_at` (más abajo) coincide con el inicio real
+    // del audio y el reloj acumulativo no arranca desfasado.
     for path in &files {
         let file = File::open(path)
             .map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
         let decoder = Decoder::try_from(file)
             .map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
-        if let Some(d) = decoder.total_duration() {
-            total_ms = total_ms.saturating_add(d.as_millis() as u64);
-        }
         let metered = MeteredSource::new(decoder, Arc::clone(&meter));
         player.append(metered);
-    }
-    if total_ms == 0 {
-        return Err("La locucion de hora dura 0 ms (decoders sin metadata de duracion).".to_string());
     }
 
     // Reemplazar player previo (si quedaba uno colgado de una locución anterior).
