@@ -15,6 +15,9 @@ const { normalizeAudioPrefs } = require('./audio_prefs');
 const { AudioEngineClient, RustAudioEngineAdapter } = require('./audio_engine_client');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
+const { ShortcutManager } = require('./shortcut_manager');
+const { DEFAULT_SHORTCUTS } = require('./command_registry');
+const shortcutManager = new ShortcutManager();
 
 
 document.addEventListener('dragover', (e) => e.preventDefault());
@@ -314,7 +317,7 @@ function clearPlayerPlaybackMeta(player) {
 
 let uiPrefs = loadConfig(uiPrefsPath, { controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, playlistColumnWidths: [92, 520, 96, 82, 82] });
 let fxPrefs = loadConfig(fxPrefsPath, { preamp: 0, pan: 0, mono: false, eq_bands: [0, 0, 0, 0, 0, 0, 0, 0], eq_on: false, comp_on: false, lim_on: false, order: ['eq', 'comp', 'limiter'], custom_presets: {}, active_preset: 'def_Plano (Reset)' });
-let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 1.0, duckingVolume: 20, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false }));
+let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
 generalPrefs.modeRepeatTrack = false;
 saveConfig(generalPrefsPath, generalPrefs);
 let clockwheelPrefs = loadConfig(clockwheelPrefsPath, { pattern: '', targetMinutes: 60, sepArtist: 4, sepTitle: 8, sepFolder: 2, clearList: false });
@@ -843,6 +846,28 @@ function setQueuedNextManual(row) {
     }
     updateNextTrackVisuals();
     saveSessionSnapshot();
+}
+
+function executePlaylistClickAction(actionKey, targetRow) {
+    switch (actionKey) {
+        case 'smart_play':
+            if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
+                setQueuedNextManual(targetRow);
+            } else {
+                playRow(targetRow, false, 0, { forceFollowView: true, startCause: 'manual-jump' });
+            }
+            break;
+        case 'smart_skip':
+            playRow(targetRow, false, 0, { forceFollowView: true, startCause: 'manual-jump' });
+            break;
+        case 'preview': {
+            const ruta = targetRow?.dataset?.ruta;
+            if (ruta) ipcRenderer.send('open-preview', ruta);
+            break;
+        }
+        default: // 'mark_next'
+            setQueuedNextManual(targetRow);
+    }
 }
 
 function setQueuedNextAutomatic(row) {
@@ -5576,9 +5601,9 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         const targetRow = resolveNextOperationalRow(tr, false);
         if (!targetRow) return;
         if (e.ctrlKey) {
-            playRow(targetRow, false, 0, { forceFollowView: true, startCause: 'manual-jump' });
+            executePlaylistClickAction(generalPrefs.ctrlDblClickAction || 'smart_skip', targetRow);
         } else {
-            setQueuedNextManual(targetRow);
+            executePlaylistClickAction(generalPrefs.dblClickAction || 'mark_next', targetRow);
         }
     };
     tr.onclick = (e) => {
@@ -11727,7 +11752,8 @@ function renderCartwallGrid() {
         if (btnInfo.bg) btn.style.backgroundColor = btnInfo.bg;
         if (btnInfo.text) btn.style.color = btnInfo.text;
 
-        btn.innerHTML = `<span class="cw-index">${btnInfo.id}</span><span class="cw-name">${btnInfo.name || ''}</span><span class="cw-timer" id="cw-timer-${btnInfo.id}">${getCartwallButtonReadyText(btnInfo)}</span><div class="cw-progress-container"><div class="cw-progress-bar" id="cw-progress-${btnInfo.id}"></div></div>`;
+        const _cwScHint = btnInfo.shortcut ? `<span class="cw-shortcut">${btnInfo.shortcut}</span>` : '';
+        btn.innerHTML = `<span class="cw-index">${btnInfo.id}</span>${_cwScHint}<span class="cw-name">${btnInfo.name || ''}</span><span class="cw-timer" id="cw-timer-${btnInfo.id}">${getCartwallButtonReadyText(btnInfo)}</span><div class="cw-progress-container"><div class="cw-progress-bar" id="cw-progress-${btnInfo.id}"></div></div>`;
 
         btn.onclick = () => {
             if (isCartwallButtonPlayable(btnInfo)) handleCartwallPlay(btnInfo, btn);
@@ -12963,4 +12989,109 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         console.error('[wizard] init error:', err);
     }
 })();
+
+// ── Atajos de teclado personalizables ────────────────────────────────────────
+function updateContextMenuShortcuts(shortcutsMap) {
+    document.querySelectorAll('.cm-sc[data-action-id]').forEach(el => {
+        el.textContent = shortcutsMap[el.dataset.actionId] || '';
+    });
+}
+
+function _buildShortcutMap(saved) {
+    const map = { ...DEFAULT_SHORTCUTS };
+    Object.entries(saved || {}).forEach(([id, key]) => {
+        if (key === '' || key === null) delete map[id];
+        else if (key) map[id] = key;
+    });
+    return map;
+}
+
+(async () => {
+    try {
+        const saved = await ipcRenderer.invoke('get-keyboard-shortcuts');
+        const _initMap = _buildShortcutMap(saved);
+        shortcutManager.loadKeyMap(_initMap);
+        updateContextMenuShortcuts(_initMap);
+    } catch (_) {
+        const _defMap = { ...DEFAULT_SHORTCUTS };
+        shortcutManager.loadKeyMap(_defMap);
+        updateContextMenuShortcuts(_defMap);
+    }
+
+    shortcutManager.registerHandlers({
+        'playlist.play':            () => resumeCurrentPlayback(),
+        'playlist.stop':            () => stopAllWithRemovePlayed(),
+        'playlist.next':            () => skipToNextTrack(),
+        'playlist.set_next':        () => {
+            const sel = resolveNextOperationalRow(document.querySelector('.selected-row'), false);
+            if (sel) setQueuedNextManual(sel);
+        },
+        'playlist.stop_after':      () => toggleStopAfter(),
+        'playlist.delete_selected': () => {
+            const rows = Array.from(document.querySelectorAll('.selected-row'));
+            if (rows.length) { rows.forEach(r => r.remove()); calcularHorasPlaylist(); updateNextTrackVisuals(); }
+        },
+        'playlist.toggle_temp':     () => {
+            document.querySelectorAll('.selected-row').forEach(tr => {
+                tr.dataset.temp = tr.dataset.temp === 'true' ? 'false' : 'true';
+            });
+            saveSessionSnapshot();
+            updateNextTrackVisuals();
+        },
+        'playlist.shuffle':         () => handleShuffleActivePlaylist(),
+        'playlist.clear':           () => handleClearPlaylist(),
+        'playlist.loop_mode':       () => setLoopPlaylistMode(),
+        'playlist.repeat_mode':     () => setRepeatTrackMode(),
+        'playlist.remove_mode':     () => setRemovePlayedMode(),
+        'app.open_settings':        () => ipcRenderer.send('open-settings'),
+        'app.open_library':         () => ipcRenderer.send('open-library'),
+        'app.open_encoder':         () => ipcRenderer.send('open-encoder'),
+        'app.open_catalog':         () => ipcRenderer.send('open-artist-catalog'),
+        'app.open_genre_editor':    () => ipcRenderer.send('open-genre-editor'),
+        'app.open_commercial_mgr':  () => ipcRenderer.send('open-commercial-manager'),
+        'app.open_event_editor':    () => ipcRenderer.send('open-event-editor', null),
+        'app.open_calendar':        () => ipcRenderer.send('open-calendar'),
+        'app.open_rotation':        () => openRotationModal(),
+        'app.toggle_menu_bar':      () => ipcRenderer.send('toggle-menu-bar'),
+        'insert.time_locution':     () => addTimeLocutionToPlaylist(),
+        'insert.temperature':       () => addClimateLocutionToPlaylist('temperature'),
+        'insert.humidity':          () => addClimateLocutionToPlaylist('humidity'),
+        'overlay.time':             () => playTimeLocution(),
+        'overlay.temperature':      () => playClimateLocution('temperature'),
+        'overlay.humidity':         () => playClimateLocution('humidity'),
+        'insert.stop_marker':       () => insertSpecialRow('stop'),
+        'insert.note':              async () => {
+            const txt = await requestPlaylistNoteText('');
+            if (txt !== null) insertSpecialRow('note', null, txt);
+        },
+        'insert.open_playlist':     () => handleOpenPlaylist(),
+        'insert.save_playlist':     () => handleSavePlaylist(),
+        'insert.clear_playlist':    () => handleClearPlaylist(),
+        'playlist.clear_played':    () => handleClearPlayedTracks(),
+        'playlist.check_links':     () => handleCheckBrokenLinks(),
+    });
+
+    // Fallback: atajos de botones del cartwall en modo acoplado
+    shortcutManager.setCartwallFallback((combo) => {
+        if (isCartwallUndocked) return false;
+        const profile = getActiveCwProfile();
+        if (!profile?.paletas) return false;
+        for (let ti = 0; ti < profile.paletas.length; ti++) {
+            for (const btn of (profile.paletas[ti]?.botones || [])) {
+                if (btn.shortcut === combo && (btn.file || btn.type !== 'audio')) {
+                    handleCartwallPlay({ ...btn }, null);
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+})();
+
+ipcRenderer.on('shortcuts-updated', (e, payload) => {
+    if (!payload?.shortcuts) return;
+    const _updMap = _buildShortcutMap(payload.shortcuts);
+    shortcutManager.loadKeyMap(_updMap);
+    updateContextMenuShortcuts(_updMap);
+});
 

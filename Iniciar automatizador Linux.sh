@@ -1,7 +1,7 @@
 #!/bin/bash
 cd "$(dirname "$0")"
 
-echo "Iniciando LF Automatizador 0.9.0..."
+echo "Iniciando LF Automatizador v0.9.11..."
 
 # Arrancar en segundo plano, completamente desvinculado de la terminal
 nohup npm start > error_log.txt 2>&1 < /dev/null &

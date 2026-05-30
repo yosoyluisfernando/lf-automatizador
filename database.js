@@ -686,6 +686,11 @@ function migrateGenreTypes() {
 }
 migrateGenreTypes();
 
+function migrateKeyboardShortcuts() {
+    db.prepare("INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('keyboard_shortcuts', '{}', ?)")
+      .run(new Date().toISOString());
+}
+migrateKeyboardShortcuts();
 
 // Exportar función de checkpoint para uso externo (ej. cierre de app)
 db.walCheckpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) {} };

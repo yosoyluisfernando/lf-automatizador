@@ -14,7 +14,7 @@
             <button class="settings-tab" data-target="tab-time">Hora y Clima</button>
             <button class="settings-tab" data-target="tab-ducking">Pisadores (Ducking)</button>
             <button class="settings-tab" data-target="tab-cartwall">Perfiles Cartwall</button>
-            <button class="settings-tab" data-target="tab-shortcuts" style="color: #666;">Atajos (Proximamente)</button>
+            <button class="settings-tab" data-target="tab-shortcuts">Atajos y Comportamiento</button>
         </div>
 
         <div class="settings-content">
@@ -355,20 +355,58 @@
             </div>
 
             <div id="tab-shortcuts" class="tab-pane">
-                <h3 class="tab-title" style="color: #666;">Atajos de Teclado</h3>
-                <div style="opacity: 0.3; pointer-events: none; position: relative;">
-                    <div style="position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%); background: #e74c3c; color: white; padding: 10px 20px; border-radius: 4px; font-weight: bold; z-index: 10; font-size: 16px;">
-                        MODULO EN DESARROLLO
+                <h3 class="tab-title">Atajos y Comportamiento</h3>
+
+                <!-- SECCIÓN A: Comportamiento de clic en playlist -->
+                <fieldset class="fieldset-dark" style="margin-bottom: 20px;">
+                    <legend>Comportamiento de clic en Playlist</legend>
+                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;">
+                        Define qué acción se ejecuta al hacer doble clic o Ctrl+doble clic sobre una canción en la lista de reproducción.
+                    </p>
+
+                    <div class="setting-row" style="margin-bottom: 14px;">
+                        <label style="width: 200px;">Doble clic:</label>
+                        <select id="sel-dbl-click-action" class="dark-select" style="flex: 1;">
+                            <option value="mark_next">Marcar como siguiente</option>
+                            <option value="smart_play">Arrancar o encolar</option>
+                            <option value="smart_skip">Arrancar o adelantar</option>
+                            <option value="preview">Escucha previa</option>
+                        </select>
                     </div>
-                    <div class="fieldset-dark">
-                        <div class="setting-row"><label style="width: 250px;">Play / Pausa (Playlist):</label><input type="text" class="settings-input" value="P" readonly></div>
-                        <div class="setting-row"><label style="width: 250px;">Detener Todo:</label><input type="text" class="settings-input" value="S" readonly></div>
-                        <div class="setting-row"><label style="width: 250px;">Siguiente Cancion:</label><input type="text" class="settings-input" value="N" readonly></div>
-                        <div class="setting-row"><label style="width: 250px;">Marcar como Siguiente:</label><input type="text" class="settings-input" value="Q" readonly></div>
-                        <div class="setting-row"><label style="width: 250px;">Pausar al Finalizar:</label><input type="text" class="settings-input" value="F" readonly></div>
-                        <div class="setting-row"><label style="width: 250px;">Locucion de Hora:</label><input type="text" class="settings-input" value="Ctrl + H" readonly></div>
+
+                    <div class="setting-row">
+                        <label style="width: 200px;">Ctrl + doble clic:</label>
+                        <select id="sel-ctrl-dbl-click-action" class="dark-select" style="flex: 1;">
+                            <option value="mark_next">Marcar como siguiente</option>
+                            <option value="smart_play">Arrancar o encolar</option>
+                            <option value="smart_skip">Arrancar o adelantar</option>
+                            <option value="preview">Escucha previa</option>
+                        </select>
                     </div>
-                </div>
+
+                    <div style="margin-top: 14px; padding: 10px 12px; background: #1a1a1c; border-radius: 4px; font-size: 12px; color: #888; line-height: 1.7;">
+                        <strong style="color: #aaa;">Arrancar o encolar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, la encola como siguiente canción.<br>
+                        <strong style="color: #aaa;">Arrancar o adelantar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, salta a esta canción ahora mismo.
+                    </div>
+                </fieldset>
+
+                <!-- SECCIÓN B: Atajos de teclado -->
+                <fieldset class="fieldset-dark">
+                    <legend>Atajos de Teclado</legend>
+
+                    <div class="shortcuts-toolbar">
+                        <span id="shortcuts-status" class="shortcuts-status-msg"></span>
+                        <button id="btn-shortcuts-reset" class="settings-btn" style="font-size:11px;padding:4px 10px;margin-left:auto;">Restaurar predeterminados</button>
+                    </div>
+
+                    <div id="shortcuts-general-container"></div>
+
+                    <div style="margin-top:18px;border-top:1px solid #2a2a2c;padding-top:14px;">
+                        <h4 style="margin:0 0 6px;font-size:13px;color:#aaa;font-weight:600;">Botonera de Efectos (Cartwall)</h4>
+                        <p style="font-size:12px;color:#666;margin:0 0 10px;">Asigna teclas a los botones del perfil activo. Un mismo atajo funciona en todas las botoneras simultáneamente.</p>
+                        <div id="shortcuts-cartwall-container"></div>
+                    </div>
+                </fieldset>
             </div>
         </div>
     </div>

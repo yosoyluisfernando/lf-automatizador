@@ -894,4 +894,34 @@ module.exports = function(context) {
     ipcMain.on('emergency-stop-playback', () => {
         writeLog('Parada de reproduccion recibida. Encoder permanece activo.');
     });
+
+    // ── Atajos de teclado personalizables ────────────────────────────────────
+    const _db = require('../../database');
+
+    ipcMain.handle('get-keyboard-shortcuts', () => {
+        try {
+            const row = _db.prepare("SELECT value FROM app_settings WHERE key = 'keyboard_shortcuts'").get();
+            return row ? JSON.parse(row.value || '{}') : {};
+        } catch (e) {
+            return {};
+        }
+    });
+
+    ipcMain.handle('save-keyboard-shortcuts', (e, shortcutsObj) => {
+        try {
+            if (typeof shortcutsObj !== 'object' || shortcutsObj === null) return { ok: false };
+            const now = new Date().toISOString();
+            _db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('keyboard_shortcuts', ?, ?)")
+               .run(JSON.stringify(shortcutsObj), now);
+            const payload = { shortcutsChanged: true, shortcuts: shortcutsObj };
+            if (context.mainWindow && !context.mainWindow.isDestroyed())
+                context.mainWindow.webContents.send('shortcuts-updated', payload);
+            if (context.cartwallWindow && !context.cartwallWindow.isDestroyed())
+                context.cartwallWindow.webContents.send('shortcuts-updated', payload);
+            if (context.rebuildNativeMenu) context.rebuildNativeMenu(shortcutsObj);
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    });
 };

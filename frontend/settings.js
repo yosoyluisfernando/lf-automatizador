@@ -3,6 +3,8 @@ const path = require('path');
 const { ipcRenderer } = require('electron');
 const { normalizeAudioPrefs } = require('./audio_prefs');
 const { getConfigDir } = require('../backend/utils/app_paths');
+const { COMMANDS, DEFAULT_SHORTCUTS, MANDATORY_ACTIONS, ALWAYS_RESERVED, COMMAND_CATEGORIES } = require('./command_registry');
+const { buildComboString } = require('./shortcut_manager');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 
@@ -74,12 +76,13 @@ function normalizeFileTypes(types) {
 let fileTypesData = normalizeFileTypes(loadConfig(fileTypesPath, defaultFileTypes));
 let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, {
     modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, 
-    timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 1.0, duckingVolume: 20,
+    timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80,
     outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default',
     monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default',
     playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true,
     repeatForgetProtectionEnabled: false, repeatForgetProtectionMax: 10, repeatDisableOnManualNext: true,
     removePlayedProtectionEnabled: false, removePlayedProtectionMinRemaining: 2,
+    dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip',
     chk_mus_fadein: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false,
     num_mus_fadein: 0, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14
 }));
@@ -688,8 +691,28 @@ document.getElementById('btn-cw-export').addEventListener('click', async () => {
     if (prof) await ipcRenderer.invoke('exportar-bdeplf', prof);
 });
 
-document.getElementById('num-duck-vol').value = generalPrefs.duckingVolume || 20;
-document.getElementById('num-duck-fade').value = generalPrefs.duckingFade || 1.0;
+document.getElementById('num-duck-vol').value = generalPrefs.duckingVolume ?? 80;
+document.getElementById('num-duck-fade').value = generalPrefs.duckingFade || 0.3;
+
+// Comportamiento de clic en playlist
+const selDblClick = document.getElementById('sel-dbl-click-action');
+const selCtrlDblClick = document.getElementById('sel-ctrl-dbl-click-action');
+
+function syncClickActionSelects() {
+    if (!selDblClick || !selCtrlDblClick) return;
+    const dblVal = selDblClick.value;
+    const ctrlVal = selCtrlDblClick.value;
+    Array.from(selDblClick.options).forEach(opt => { opt.hidden = opt.value === ctrlVal; });
+    Array.from(selCtrlDblClick.options).forEach(opt => { opt.hidden = opt.value === dblVal; });
+}
+
+if (selDblClick && selCtrlDblClick) {
+    selDblClick.value = generalPrefs.dblClickAction || 'mark_next';
+    selCtrlDblClick.value = generalPrefs.ctrlDblClickAction || 'smart_skip';
+    syncClickActionSelects();
+    selDblClick.addEventListener('change', syncClickActionSelects);
+    selCtrlDblClick.addEventListener('change', syncClickActionSelects);
+}
 
 [
     'chk-monitor-enabled',
@@ -737,8 +760,10 @@ function saveAll() {
     generalPrefs.audioEngineMode = 'rustAudio';
     generalPrefs.rustPlaylistOwnerEnabled = true;
     
-    generalPrefs.duckingVolume = parseInt(document.getElementById('num-duck-vol').value) || 20;
-    generalPrefs.duckingFade = parseFloat(document.getElementById('num-duck-fade').value) || 1.0;
+    generalPrefs.duckingVolume = parseInt(document.getElementById('num-duck-vol').value) || 80;
+    generalPrefs.duckingFade = parseFloat(document.getElementById('num-duck-fade').value) || 0.3;
+    if (selDblClick) generalPrefs.dblClickAction = selDblClick.value;
+    if (selCtrlDblClick) generalPrefs.ctrlDblClickAction = selCtrlDblClick.value;
     
     localStorage.setItem('sel-out-cue', generalPrefs.outCue);
 
@@ -755,6 +780,15 @@ function saveAll() {
     generalPrefs = normalizeAudioPrefs(generalPrefs);
     delete generalPrefs.num_mus_mix_fadeout;
     saveConfig(generalPrefsPath, generalPrefs);
+
+    if (currentShortcuts !== null) {
+        ipcRenderer.invoke('save-keyboard-shortcuts', currentShortcuts);
+    }
+    if (cwShortcutsModified && cwState?.profiles?.length) {
+        ipcRenderer.invoke('save-cartwall-profiles', cwState);
+        cwShortcutsModified = false;
+    }
+
     ipcRenderer.send('settings-updated', {
         audioChanged: hasAudioRoutingPrefsChanged(previousPrefs, generalPrefs),
         audioEngineModeChanged: previousPrefs.audioEngineMode !== generalPrefs.audioEngineMode
@@ -820,6 +854,307 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
     // en los selectores se descartan.
     restoreSettingsSnapshot();
     window.close();
+});
+
+// ── Atajos de teclado ─────────────────────────────────────────────────────────
+// currentShortcuts es el mapa de overrides guardado en DB.
+// getEffectiveShortcuts() fusiona con DEFAULT_SHORTCUTS para obtener el mapa completo.
+let currentShortcuts = null;   // null = no cargado aún
+let captureKeydownHandler = null;
+let cwShortcutsModified = false;
+
+function getEffectiveShortcuts() {
+    const result = { ...DEFAULT_SHORTCUTS };
+    Object.entries(currentShortcuts || {}).forEach(([aid, key]) => {
+        if (key === '' || key === null) delete result[aid];
+        else if (key) result[aid] = key;
+    });
+    return result;
+}
+
+function getCwButtonShortcut(tabIdx, btnId) {
+    const profile = cwState?.profiles?.find(p => p.id === cwState?.activeProfileId);
+    return profile?.paletas?.[tabIdx]?.botones?.find(b => b.id === btnId)?.shortcut || '';
+}
+
+function setCwButtonShortcut(tabIdx, btnId, combo) {
+    const profile = cwState?.profiles?.find(p => p.id === cwState?.activeProfileId);
+    const btn = profile?.paletas?.[tabIdx]?.botones?.find(b => b.id === btnId);
+    if (btn) { btn.shortcut = combo; cwShortcutsModified = true; }
+}
+
+function findConflictInGeneral(combo, excludeActionId) {
+    const eff = getEffectiveShortcuts();
+    for (const [aid, key] of Object.entries(eff)) {
+        if (key === combo && aid !== excludeActionId) return aid;
+    }
+    return null;
+}
+
+function findConflictInCwActiveTab(combo, excludeTabIdx, excludeBtnId) {
+    const profile = cwState?.profiles?.find(p => p.id === cwState?.activeProfileId);
+    for (let ti = 0; ti < (profile?.paletas?.length || 0); ti++) {
+        for (const btn of (profile.paletas[ti]?.botones || [])) {
+            if (btn.shortcut === combo && !(ti === excludeTabIdx && btn.id === excludeBtnId))
+                return { tabIdx: ti, btnId: btn.id };
+        }
+    }
+    return null;
+}
+
+function showShortcutStatus(msg, type = 'ok') {
+    const el = document.getElementById('shortcuts-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'shortcuts-status-msg sc-status-' + type;
+    clearTimeout(el._scTimer);
+    el._scTimer = setTimeout(() => { el.textContent = ''; el.className = 'shortcuts-status-msg'; }, 4000);
+}
+
+function cancelCapture() {
+    if (!captureKeydownHandler) return;
+    document.removeEventListener('keydown', captureKeydownHandler, true);
+    captureKeydownHandler = null;
+    document.querySelectorAll('.shortcut-input.sc-capturing').forEach(el => {
+        el.classList.remove('sc-capturing');
+        const row = el.closest('[data-action-id]') || el.closest('[data-cw-key]');
+        if (!row) return;
+        if (row.dataset.actionId) {
+            el.value = getEffectiveShortcuts()[row.dataset.actionId] || '';
+        } else if (row.dataset.cwKey) {
+            const [ti, bid] = row.dataset.cwKey.split(':').map(Number);
+            el.value = getCwButtonShortcut(ti, bid);
+        }
+        el.placeholder = 'Sin asignar';
+    });
+}
+
+function startCapture(inputEl, isCw, actionIdOrTabIdx, cwBtnId) {
+    cancelCapture();
+    inputEl.value = '';
+    inputEl.placeholder = 'Presiona una tecla…';
+    inputEl.classList.add('sc-capturing');
+    inputEl.focus();
+
+    captureKeydownHandler = (e) => {
+        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (e.key === 'Escape') { cancelCapture(); return; }
+
+        const combo = buildComboString(e);
+        if (!combo) return;
+
+        // Tecla reservada de sistema
+        const baseKey = combo.split('+').pop();
+        if (ALWAYS_RESERVED.has(baseKey) || ALWAYS_RESERVED.has(combo)) {
+            showShortcutStatus(`"${combo}" es una tecla del sistema y no puede asignarse.`, 'error');
+            cancelCapture(); return;
+        }
+
+        if (isCw) {
+            // Verificar conflicto con acciones generales
+            const genConflict = findConflictInGeneral(combo, null);
+            if (genConflict) {
+                const cmd = COMMANDS.find(c => c.id === genConflict);
+                if (MANDATORY_ACTIONS.has(genConflict)) {
+                    showShortcutStatus(`"${combo}" está asignada a "${cmd?.label}" (obligatoria). Cambia esa acción primero.`, 'error');
+                    cancelCapture(); return;
+                }
+                if (!currentShortcuts) currentShortcuts = {};
+                currentShortcuts[genConflict] = '';
+                updateShortcutRowValue(genConflict, '');
+            }
+            // Conflicto con otro botón del cartwall
+            const cwConflict = findConflictInCwActiveTab(combo, actionIdOrTabIdx, cwBtnId);
+            if (cwConflict) { setCwButtonShortcut(cwConflict.tabIdx, cwConflict.btnId, ''); updateCwRowValue(cwConflict.tabIdx, cwConflict.btnId, ''); }
+            setCwButtonShortcut(actionIdOrTabIdx, cwBtnId, combo);
+            inputEl.value = combo; inputEl.placeholder = 'Sin asignar'; inputEl.classList.remove('sc-capturing');
+            if (!genConflict) showShortcutStatus(`"${combo}" asignada.`, 'ok');
+        } else {
+            const conflict = findConflictInGeneral(combo, actionIdOrTabIdx);
+            if (conflict) {
+                const cmd = COMMANDS.find(c => c.id === conflict);
+                if (MANDATORY_ACTIONS.has(conflict)) {
+                    showShortcutStatus(`"${combo}" está asignada a "${cmd?.label}" (obligatoria). Cambia esa acción primero.`, 'error');
+                    cancelCapture(); return;
+                }
+                if (!currentShortcuts) currentShortcuts = {};
+                currentShortcuts[conflict] = '';
+                updateShortcutRowValue(conflict, '');
+                showShortcutStatus(`"${combo}" se desasignó de: ${cmd?.label || conflict}`, 'warning');
+            }
+            if (!currentShortcuts) currentShortcuts = {};
+            currentShortcuts[actionIdOrTabIdx] = combo;
+            inputEl.value = combo; inputEl.placeholder = 'Sin asignar'; inputEl.classList.remove('sc-capturing');
+            if (!conflict) showShortcutStatus(`"${combo}" asignada.`, 'ok');
+        }
+
+        document.removeEventListener('keydown', captureKeydownHandler, true);
+        captureKeydownHandler = null;
+        updateConflictBadges();
+    };
+
+    document.addEventListener('keydown', captureKeydownHandler, true);
+}
+
+function updateShortcutRowValue(actionId, value) {
+    const row = document.querySelector(`[data-action-id="${actionId}"]`);
+    if (row) { const inp = row.querySelector('.shortcut-input'); if (inp) inp.value = value; }
+}
+
+function updateCwRowValue(tabIdx, btnId, value) {
+    const row = document.querySelector(`[data-cw-key="${tabIdx}:${btnId}"]`);
+    if (row) { const inp = row.querySelector('.shortcut-input'); if (inp) inp.value = value; }
+}
+
+function updateConflictBadges() {
+    const usage = {};
+    document.querySelectorAll('[data-action-id] .shortcut-input').forEach(inp => {
+        if (inp.value) usage[inp.value] = (usage[inp.value] || 0) + 1;
+    });
+    document.querySelectorAll('[data-action-id]').forEach(row => {
+        const inp = row.querySelector('.shortcut-input');
+        const badge = row.querySelector('.sc-conflict-badge');
+        if (!inp || !badge) return;
+        const conflict = inp.value && (usage[inp.value] || 0) > 1;
+        badge.style.display = conflict ? 'inline' : 'none';
+        inp.classList.toggle('sc-conflict', !!conflict);
+    });
+}
+
+function buildShortcutRow(cmd, currentValue) {
+    const isMandatory = MANDATORY_ACTIONS.has(cmd.id);
+    const div = document.createElement('div');
+    div.className = 'shortcut-row';
+    div.dataset.actionId = cmd.id;
+
+    const label = document.createElement('span');
+    label.className = 'shortcut-label';
+    label.textContent = cmd.label;
+    if (isMandatory) {
+        const dot = document.createElement('span');
+        dot.style.cssText = 'font-size:10px;color:#e67e22;margin-left:6px;vertical-align:middle;';
+        dot.title = 'Obligatoria — siempre debe tener una tecla';
+        dot.textContent = '●';
+        label.appendChild(dot);
+    }
+
+    const zone = document.createElement('div');
+    zone.style.cssText = 'display:flex;align-items:center;gap:4px;';
+
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'shortcut-input'; input.readOnly = true;
+    input.value = currentValue || ''; input.placeholder = 'Sin asignar';
+    input.title = 'Clic para asignar una tecla';
+    input.addEventListener('click', () => startCapture(input, false, cmd.id, -1));
+
+    const badge = document.createElement('span');
+    badge.className = 'sc-conflict-badge'; badge.title = 'Conflicto: tecla ya asignada'; badge.textContent = '⚠'; badge.style.display = 'none';
+
+    zone.appendChild(input); zone.appendChild(badge);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'icon-btn shortcut-clear-btn'; clearBtn.textContent = '×';
+    clearBtn.disabled = isMandatory;
+    clearBtn.title = isMandatory ? 'Obligatoria: no puede quedar sin tecla' : 'Quitar atajo';
+    clearBtn.addEventListener('click', () => {
+        if (!currentShortcuts) currentShortcuts = {};
+        currentShortcuts[cmd.id] = '';
+        input.value = '';
+        updateConflictBadges();
+        showShortcutStatus('Atajo eliminado.', 'ok');
+    });
+
+    div.appendChild(label); div.appendChild(zone); div.appendChild(clearBtn);
+    return div;
+}
+
+function renderShortcutsSection(container) {
+    container.innerHTML = '';
+    const eff = getEffectiveShortcuts();
+    const grouped = {};
+    COMMANDS.forEach(cmd => {
+        if (!grouped[cmd.category]) grouped[cmd.category] = [];
+        grouped[cmd.category].push(cmd);
+    });
+    Object.entries(grouped).forEach(([cat, cmds]) => {
+        const hdr = document.createElement('div');
+        hdr.className = 'shortcuts-category-header'; hdr.textContent = cat;
+        container.appendChild(hdr);
+        cmds.forEach(cmd => container.appendChild(buildShortcutRow(cmd, eff[cmd.id] || '')));
+    });
+    updateConflictBadges();
+}
+
+function buildCwShortcutRow(tabIdx, btnId, labelText, currentValue) {
+    const div = document.createElement('div');
+    div.className = 'shortcut-row'; div.dataset.cwKey = `${tabIdx}:${btnId}`;
+
+    const label = document.createElement('span');
+    label.className = 'shortcut-label'; label.style.color = '#aaa'; label.textContent = labelText;
+
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'shortcut-input'; input.readOnly = true;
+    input.value = currentValue || ''; input.placeholder = 'Sin asignar';
+    input.addEventListener('click', () => startCapture(input, true, tabIdx, btnId));
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'icon-btn shortcut-clear-btn'; clearBtn.textContent = '×'; clearBtn.title = 'Quitar atajo';
+    clearBtn.addEventListener('click', () => {
+        setCwButtonShortcut(tabIdx, btnId, '');
+        input.value = '';
+        showShortcutStatus('Atajo eliminado.', 'ok');
+    });
+
+    div.appendChild(label); div.appendChild(input); div.appendChild(clearBtn);
+    return div;
+}
+
+function renderCartwallShortcutsSection(container) {
+    container.innerHTML = '';
+    const profile = cwState?.profiles?.find(p => p.id === cwState?.activeProfileId);
+    if (!profile?.paletas?.length) {
+        container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">No hay perfil de cartwall activo.</div>';
+        return;
+    }
+    let hasAny = false;
+    profile.paletas.forEach((paleta, tabIdx) => {
+        const withContent = (paleta.botones || []).filter(b => b.file || b.name);
+        if (!withContent.length) return;
+        hasAny = true;
+        const hdr = document.createElement('div');
+        hdr.className = 'shortcuts-category-header';
+        hdr.textContent = paleta.nombre || `Botonera ${tabIdx + 1}`;
+        container.appendChild(hdr);
+        withContent.forEach(btn => {
+            const lbl = `Btn ${btn.id}${btn.name ? ` — ${btn.name}` : ''}`;
+            container.appendChild(buildCwShortcutRow(tabIdx, btn.id, lbl, btn.shortcut || ''));
+        });
+    });
+    if (!hasAny) container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">No hay botones configurados en el perfil activo.</div>';
+}
+
+async function initShortcutsTab() {
+    if (currentShortcuts === null) {
+        const saved = await ipcRenderer.invoke('get-keyboard-shortcuts');
+        currentShortcuts = { ...(saved || {}) };
+    }
+    const genEl = document.getElementById('shortcuts-general-container');
+    const cwEl  = document.getElementById('shortcuts-cartwall-container');
+    if (genEl) renderShortcutsSection(genEl);
+    if (cwEl)  renderCartwallShortcutsSection(cwEl);
+}
+
+document.querySelector('[data-target="tab-shortcuts"]')
+    ?.addEventListener('click', initShortcutsTab);
+
+document.getElementById('btn-shortcuts-reset')?.addEventListener('click', () => {
+    currentShortcuts = {};
+    const genEl = document.getElementById('shortcuts-general-container');
+    if (genEl) renderShortcutsSection(genEl);
+    showShortcutStatus('Atajos restaurados a los valores de fábrica.', 'ok');
 });
 
 renderLists();

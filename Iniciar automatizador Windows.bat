@@ -1,8 +1,8 @@
 @echo off
-title LF Automatizador 0.9.0
+title LF Automatizador v0.9.11
 cd /d "%~dp0"
 
-echo Iniciando LF Automatizador 0.9.0...
+echo Iniciando LF Automatizador v0.9.11...
 
 :: Crear un script VBS temporal para lanzar npm de forma completamente invisible
 echo Set WshShell = CreateObject("WScript.Shell") > "%temp%\run_hidden.vbs"

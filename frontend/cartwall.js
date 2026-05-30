@@ -1,5 +1,6 @@
 const { ipcRenderer, webUtils } = require('electron');
 const path = require('path');
+const { buildComboString } = require('./shortcut_manager');
 
 let cartwallState = null;
 let cwActiveTabIndex = 0;
@@ -514,8 +515,9 @@ function renderCartwallGrid() {
         if (btnInfo.bg) btn.style.backgroundColor = btnInfo.bg;
         if (btnInfo.text) btn.style.color = btnInfo.text;
         
-        btn.innerHTML = `<span class="cw-index">${btnInfo.id}</span><span class="cw-name">${btnInfo.name || ''}</span><span class="cw-timer" id="cw-timer-${btnInfo.id}">${getCartwallButtonReadyText(btnInfo)}</span><div class="cw-progress-container"><div class="cw-progress-bar" id="cw-progress-${btnInfo.id}"></div></div>`;
-        
+        const _scHint = btnInfo.shortcut ? `<span class="cw-shortcut">${btnInfo.shortcut}</span>` : '';
+        btn.innerHTML = `<span class="cw-index">${btnInfo.id}</span>${_scHint}<span class="cw-name">${btnInfo.name || ''}</span><span class="cw-timer" id="cw-timer-${btnInfo.id}">${getCartwallButtonReadyText(btnInfo)}</span><div class="cw-progress-container"><div class="cw-progress-bar" id="cw-progress-${btnInfo.id}"></div></div>`;
+
         btn.onclick = () => {
             if (isCartwallButtonPlayable(btnInfo)) {
                 ipcRenderer.send('remote-cw-play', { ...btnInfo, _cwTabIndex: cwActiveTabIndex });
@@ -767,3 +769,31 @@ document.getElementById('btn-save-cw-tab').onclick = async () => {
 };
 
 loadState();
+
+// ── Atajos de teclado del cartwall (modo ventana flotante) ───────────────────
+// Cuando el cartwall está flotante, esta ventana tiene su propio contexto de
+// teclado. Interceptamos en capture phase para actuar antes que cualquier modal.
+window.addEventListener('keydown', (e) => {
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    if (['Escape', 'Enter', 'Tab'].includes(e.key)) return;
+    const tag = document.activeElement?.tagName;
+    if (['INPUT', 'TEXTAREA'].includes(tag) && !e.ctrlKey && !e.altKey) return;
+
+    const combo = buildComboString(e);
+    if (!combo) return;
+
+    const profile = cartwallState?.profiles?.find(p => p.id === cartwallState?.activeProfileId)
+                 || cartwallState?.profiles?.[0];
+    if (!profile?.paletas) return;
+
+    for (let ti = 0; ti < profile.paletas.length; ti++) {
+        for (const btn of (profile.paletas[ti]?.botones || [])) {
+            if (btn.shortcut === combo && (btn.file || btn.type !== 'audio')) {
+                e.preventDefault();
+                e.stopPropagation();
+                ipcRenderer.send('remote-cw-play', { ...btn, _cwTabIndex: ti });
+                return;
+            }
+        }
+    }
+}, true);

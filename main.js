@@ -2073,6 +2073,28 @@ function installNavigationGuards() {
     });
 }
 
+// ── Aceleradores dinámicos del menú nativo ───────────────────────────────────
+let _menuShortcuts = null;
+function _ensureMenuShortcuts() {
+    if (_menuShortcuts) return;
+    try {
+        const _mdb = require('./database');
+        const row = _mdb.prepare("SELECT value FROM app_settings WHERE key = 'keyboard_shortcuts'").get();
+        const saved = row ? JSON.parse(row.value || '{}') : {};
+        const { DEFAULT_SHORTCUTS } = require('./frontend/command_registry');
+        _menuShortcuts = { ...DEFAULT_SHORTCUTS, ...saved };
+        Object.keys(_menuShortcuts).forEach(k => { if (!_menuShortcuts[k]) delete _menuShortcuts[k]; });
+    } catch (_e) {
+        try { _menuShortcuts = { ...require('./frontend/command_registry').DEFAULT_SHORTCUTS }; } catch (_) { _menuShortcuts = {}; }
+    }
+}
+function sc(actionId) {
+    _ensureMenuShortcuts();
+    const raw = _menuShortcuts[actionId];
+    if (!raw) return null;
+    return raw.replace(/^Ctrl\+/i, 'CmdOrCtrl+');
+}
+
 function createWindow() { mainWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),   width: 1280, height: 720, title: `LF Automatizador v${APP_VERSION}`, autoHideMenuBar: false, webPreferences: { nodeIntegration: true, contextIsolation: false, backgroundThrottling: false } }); mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); mainWindow.maximize(); mainWindow.loadFile('frontend/index.html'); mainWindow.on('close', (e) => { if (!forceQuit) { e.preventDefault(); mainWindow.webContents.send('request-close-check'); } }); mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); }); }
 function syncCartwallMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-cartwall') : null; if (item) item.checked = checked; }
 function createApplicationMenu() {
@@ -2080,10 +2102,10 @@ function createApplicationMenu() {
         {
             label: 'Archivo',
             submenu: [
-                { label: '📂 Abrir Playlist...', accelerator: 'CmdOrCtrl+O', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
-                { label: '💾 Guardar Playlist...', accelerator: 'CmdOrCtrl+S', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
+                { label: '📂 Abrir Playlist...', accelerator: sc('insert.open_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
+                { label: '💾 Guardar Playlist...', accelerator: sc('insert.save_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
                 { type: 'separator' },
-                { label: '📄 Limpiar Playlist', accelerator: 'CmdOrCtrl+N', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
+                { label: '📄 Limpiar Playlist', accelerator: sc('insert.clear_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
                 { type: 'separator' },
                 { label: 'Salir', click: () => { if (mainWindow) { mainWindow.webContents.send('request-close-check'); } else { app.quit(); } } }
             ]
@@ -2120,7 +2142,7 @@ function createApplicationMenu() {
                 { label: '📁 Añadir carpeta normal...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-folder', res.filePaths[0]); } },
                 { label: '🔀 Añadir carpeta aleatoria...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-random', res.filePaths[0]); } },
                 { label: '📅 Ejecutar evento...', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-event-command'); } },
-                { label: '⌚ Añadir locución de hora', accelerator: 'CmdOrCtrl+H', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
+                { label: '⌚ Añadir locución de hora', accelerator: sc('insert.time_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
                 { label: '🌡️ Añadir locución de temperatura', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-temperature'); } },
                 { label: '💧 Añadir locución de humedad', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-humidity'); } },
                 { type: 'separator' },
@@ -2136,14 +2158,14 @@ function createApplicationMenu() {
                 },
                 { label: '📝 Añadir Nota', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
                 { type: 'separator' },
-                { label: '🎯 Marcar como Siguiente', accelerator: 'Q', click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
-                { label: '⏳ Marcar / Desmarcar como Temporal', accelerator: 'CmdOrCtrl+T', click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
+                { label: '🎯 Marcar como Siguiente', accelerator: sc('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
+                { label: '⏳ Marcar / Desmarcar como Temporal', accelerator: sc('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
                 { label: '🔀 Mezclar lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-shuffle'); } },
                 { type: 'separator' },
                 { label: '🧹 Limpiar pistas reproducidas', click: () => { if (mainWindow) mainWindow.webContents.send('menu-clear-played'); } },
                 { label: '🔗 Comprobar enlaces rotos', click: () => { if (mainWindow) mainWindow.webContents.send('menu-check-links'); } },
                 { type: 'separator' },
-                { label: '❌ Eliminar seleccionadas', accelerator: 'Delete', click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
+                { label: '❌ Eliminar seleccionadas', accelerator: sc('playlist.delete_selected'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
                 { label: '🗑️ Vaciar toda la lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } }
             ]
         },
@@ -2159,16 +2181,16 @@ function createApplicationMenu() {
         {
             label: 'Herramientas',
             submenu: [
-                { label: '⚙️ Configuración General', accelerator: 'CmdOrCtrl+P', click: () => { ipcMain.emit('open-settings'); } },
-                { label: '📚 Biblioteca de Música', accelerator: 'CmdOrCtrl+B', click: () => { ipcMain.emit('open-library'); } },
+                { label: '⚙️ Configuración General', accelerator: sc('app.open_settings'), click: () => { ipcMain.emit('open-settings'); } },
+                { label: '📚 Biblioteca de Música', accelerator: sc('app.open_library'), click: () => { ipcMain.emit('open-library'); } },
                 { label: '🧩 Generador de playlist', click: () => { if (mainWindow) mainWindow.webContents.send('menu-open-rotation'); } },
                 { type: 'separator' },
                 { label: '📅 Gestor de Eventos', click: () => { ipcMain.emit('open-event-editor', null); } },
                 { label: '🏷️ Gestor de Grupos de Eventos', click: () => { ipcMain.emit('open-event-groups'); } },
                 { type: 'separator' },
-                { label: '📇 Catálogo de Artistas', accelerator: 'CmdOrCtrl+Shift+A', click: () => openArtistCatalogWindow() },
-                { label: '🎨 Editor de Géneros Musicales', accelerator: 'CmdOrCtrl+Shift+G', click: () => openGenreEditorWindow() },
-                { label: '💼 Gestor de Comerciales', accelerator: 'CmdOrCtrl+Shift+C', click: () => openCommercialManagerWindow() },
+                { label: '📇 Catálogo de Artistas', accelerator: sc('app.open_catalog'), click: () => openArtistCatalogWindow() },
+                { label: '🎨 Editor de Géneros Musicales', accelerator: sc('app.open_genre_editor'), click: () => openGenreEditorWindow() },
+                { label: '💼 Gestor de Comerciales', accelerator: sc('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
                 { type: 'separator' },
                 {
                     label: '🚀 Inicializar curaduría desde carpeta raíz',
@@ -2373,6 +2395,15 @@ const sharedState = {
     get settingsWindow() { return settingsWindow; },
     get uiPrefs() { return uiPrefs; },
     saveUiPrefs, syncCartwallMenuState,
+    rebuildNativeMenu: (shortcuts) => {
+        try {
+            const { DEFAULT_SHORTCUTS } = require('./frontend/command_registry');
+            const merged = { ...DEFAULT_SHORTCUTS, ...(shortcuts || {}) };
+            Object.keys(merged).forEach(k => { if (!merged[k]) delete merged[k]; });
+            _menuShortcuts = merged;
+            createApplicationMenu();
+        } catch (_) {}
+    },
     get cartwallDockRequested() { return cartwallDockRequested; },
     set cartwallDockRequested(val) { cartwallDockRequested = val; },
     get BrowserWindow() { return BrowserWindow; },
