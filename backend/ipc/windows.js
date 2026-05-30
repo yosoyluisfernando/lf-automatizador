@@ -526,100 +526,138 @@ module.exports = function(context) {
             '-f', 'mp3', 'pipe:1'];
     }
 
-    // Abre la conexión TCP nativa SHOUTcast SOURCE con headers icy-* correctos.
-    // Ya NO toca el proceso FFmpeg directamente — usa callbacks para desacoplar
-    // el handshake del ciclo de vida del proceso.
+    // Abre la conexión TCP nativa SHOUTcast. Bifurca según serverType:
     //
-    //   onReady(socket)  — handshake OK; el caller debe picar stdout al socket
-    //   onFail(reason)   — error / timeout / rechazo; el caller limpia el proceso
+    //   'shoutcast'      → Protocolo ICY v1 legacy (L2MR, SC1 clásico):
+    //                       password\r\n → OK2 → icy headers → audio inmediato.
+    //                       Sin HTTP, sin Authorization header.
     //
-    // Devuelve el socket para que el caller lo guarde en server.scSocket y lo
-    // destruya en killEncoderServer si corresponde.
+    //   'shoutcast2'     → Protocolo HTTP SOURCE (DNAS 2.x con config legacy):
+    //     (legacy=true)    SOURCE /SID HTTP/1.0 + Authorization:Basic → ICY 200 OK → audio.
+    //
+    // Callbacks:
+    //   onReady(socket)  — handshake OK; el caller pica stdout al socket.
+    //   onFail(reason)   — error / timeout / rechazo; el caller limpia el proceso.
     function openShoutcastSocket(config, sid, onReady, onFail) {
         const net = require('net');
+
+        // SC1 ICY legacy: solo para serverType='shoutcast'.
+        // shoutcast2+legacy usa HTTP SOURCE — distinto protocolo, misma infra.
+        const useIcyLegacy = (config.serverType === 'shoutcast');
+
         const mountSid = config.serverType === 'shoutcast2'
             ? (String(config.mount || '').replace(/[^\d]/g, '') || '1')
             : '1';
-        const auth = Buffer.from(`source:${config.password}`).toString('base64');
         const br = String(config.bitrate || '128');
-
-        // Content-Type correcto según DNAS 2.x:
-        //   MP3  → audio/mpeg
-        //   AAC  → audio/aacp  (SHOUTcast no acepta audio/aac a secas)
+        // MP3 → audio/mpeg | AAC/HE-AAC → audio/aacp (SHOUTcast rechaza audio/aac)
         const contentType = (config.codec === 'mp3') ? 'audio/mpeg' : 'audio/aacp';
 
-        // Handshake SOURCE con máxima compatibilidad para DNAS 2.x y SC1:
-        //   - Authorization: Basic   → requerido por DNAS 2.x
-        //   - icy-password           → requerido por SHOUTcast v1 / DNAS configurado en SC1 mode
-        //   - ice-audio-info         → opcional pero esperado por DNAS 2.x para validar el codec
-        //   - SIN icy-url vacío      → algunos DNAS rechazan el mount si icy-url no es válido
-        const handshake =
-            `SOURCE /${mountSid} HTTP/1.0\r\n` +
-            `Authorization: Basic ${auth}\r\n` +
-            `icy-password: ${config.password}\r\n` +
-            `User-Agent: LF-Radio/1.0\r\n` +
-            `Content-Type: ${contentType}\r\n` +
-            `ice-audio-info: ice-samplerate=44100;ice-bitrate=${br};ice-channels=2\r\n` +
-            `icy-name: ${config.icyName || 'Radio'}\r\n` +
-            `icy-genre: ${config.icyGenre || 'Variado'}\r\n` +
-            `icy-pub: 1\r\n` +
-            `icy-br: ${br}\r\n` +
-            `\r\n`;
-
-        writeLog(`[Srv ${sid}] SHOUTcast nativo: conectando a ${config.ip}:${config.port} → SOURCE /${mountSid} | codec=${config.codec} ${br}kbps | auth=Basic+icy-password`);
+        writeLog(`[Srv ${sid}] SHOUTcast nativo (${useIcyLegacy ? 'ICY v1 legacy' : 'HTTP SOURCE'}): conectando a ${config.ip}:${config.port}${useIcyLegacy ? '' : ' → SOURCE /' + mountSid} | ${config.codec} ${br}kbps`);
 
         const socket = new net.Socket();
-        let handshakeDone = false;
-        let settled = false;     // handshake outcome ya procesado
-        let streaming = false;   // pipe activo post-handshake
+        let settled   = false;
+        let streaming = false;
         let responseBuffer = '';
+        let handshakeDone  = false;
 
-        // settle() se llama UNA sola vez para notificar éxito o fallo.
         function settle(ok, arg) {
             if (settled) return;
             settled = true;
-            if (ok) {
-                onReady(socket);
-            } else {
-                try { socket.destroy(); } catch (_) {}
-                onFail(arg);
-            }
+            if (ok) { onReady(socket); }
+            else    { try { socket.destroy(); } catch (_) {} onFail(arg); }
         }
 
         socket.setTimeout(10000);
         socket.connect(parseInt(config.port, 10), config.ip, () => {
             socket.setTimeout(0);
-            socket.write(handshake);
+
+            if (useIcyLegacy) {
+                // ── SHOUTcast 1.x ICY legacy ──────────────────────────────────
+                // Paso 1: contraseña en texto plano (sin HTTP, sin Base64).
+                socket.write(`${config.password}\r\n`);
+            } else {
+                // ── DNAS 2.x HTTP SOURCE ──────────────────────────────────────
+                // Authorization:Basic + icy-password para máxima compatibilidad.
+                // ice-audio-info le informa al DNAS el codec antes del primer frame.
+                const auth = Buffer.from(`source:${config.password}`).toString('base64');
+                socket.write(
+                    `SOURCE /${mountSid} HTTP/1.0\r\n` +
+                    `Authorization: Basic ${auth}\r\n` +
+                    `icy-password: ${config.password}\r\n` +
+                    `User-Agent: LF-Radio/1.0\r\n` +
+                    `Content-Type: ${contentType}\r\n` +
+                    `ice-audio-info: ice-samplerate=44100;ice-bitrate=${br};ice-channels=2\r\n` +
+                    `icy-name: ${config.icyName || 'Radio'}\r\n` +
+                    `icy-genre: ${config.icyGenre || 'Variado'}\r\n` +
+                    `icy-pub: 1\r\n` +
+                    `icy-br: ${br}\r\n` +
+                    `\r\n`
+                );
+            }
         });
 
         socket.on('data', (data) => {
             if (handshakeDone) return;
             responseBuffer += data.toString('latin1');
-            // Acepta respuesta cuando hay doble CRLF o cuando ya tiene "ICY 200"
-            // (algunos servidores envían la línea sin body adicional).
-            const hasEnd   = responseBuffer.includes('\r\n\r\n') || responseBuffer.includes('\n\n');
-            const hasICY   = /ICY 200/i.test(responseBuffer);
-            if (!hasEnd && !hasICY) return;
-            handshakeDone = true;
-            if (hasICY || /200 OK/i.test(responseBuffer)) {
-                writeLog(`[Srv ${sid}] SHOUTcast handshake OK → transmitiendo`);
-                setServerStatus(sid, 'live');
-                streaming = true;
-                if (context.mainWindow) setTimeout(() => {
-                    if (context.mainWindow && !context.mainWindow.isDestroyed())
-                        context.mainWindow.webContents.send('force-metadata-update');
-                }, 3000);
-                settle(true);
+
+            if (useIcyLegacy) {
+                // ── ICY v1: esperar al menos una línea de respuesta ────────────
+                if (!responseBuffer.includes('\n')) return;
+                handshakeDone = true;
+
+                if (/^OK2/i.test(responseBuffer.trimStart())) {
+                    // Paso 2: auth OK → enviar icy headers.
+                    // El servidor NO responde tras los headers; el audio puede
+                    // empezar inmediatamente a continuación.
+                    socket.write(
+                        `icy-name:${config.icyName || 'Radio'}\r\n` +
+                        `icy-genre:${config.icyGenre || 'Variado'}\r\n` +
+                        `icy-pub:1\r\n` +
+                        `icy-br:${br}\r\n` +
+                        `icy-url:http://\r\n` +
+                        `content-type:${contentType}\r\n` +
+                        `\r\n`
+                    );
+                    writeLog(`[Srv ${sid}] SHOUTcast ICY OK2 → headers enviados, transmitiendo`);
+                    setServerStatus(sid, 'live');
+                    streaming = true;
+                    if (context.mainWindow) setTimeout(() => {
+                        if (context.mainWindow && !context.mainWindow.isDestroyed())
+                            context.mainWindow.webContents.send('force-metadata-update');
+                    }, 3000);
+                    settle(true);
+                } else {
+                    const resp = responseBuffer.replace(/\r/g, '').trim().slice(0, 200);
+                    writeLog(`[Srv ${sid}] SHOUTcast ICY rechazado: ${resp}`);
+                    if (context.encoderWindow && !context.encoderWindow.isDestroyed())
+                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast ICY rechazó: ${resp}` });
+                    settle(false, `ICY rechazó: ${resp}`);
+                }
+
             } else {
-                const firstLine = responseBuffer.split(/\r?\n/)[0].trim();
-                // Loggear TODA la respuesta del servidor para diagnóstico preciso.
-                // Sin esto, mensajes como "icy-response: mountpoint in use" o
-                // "WWW-Authenticate: Basic realm=..." se pierden.
-                const fullResp = responseBuffer.replace(/\r/g, '').trim().slice(0, 400);
-                writeLog(`[Srv ${sid}] SHOUTcast handshake rechazado:\n${fullResp}`);
-                if (context.encoderWindow && !context.encoderWindow.isDestroyed())
-                    context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast rechazó la conexión: ${firstLine}` });
-                settle(false, `SHOUTcast rechazó: ${firstLine}`);
+                // ── HTTP SOURCE: esperar doble-CRLF o ICY 200 ─────────────────
+                const hasEnd = responseBuffer.includes('\r\n\r\n') || responseBuffer.includes('\n\n');
+                const hasICY = /ICY 200/i.test(responseBuffer);
+                if (!hasEnd && !hasICY) return;
+                handshakeDone = true;
+
+                if (hasICY || /200 OK/i.test(responseBuffer)) {
+                    writeLog(`[Srv ${sid}] SHOUTcast HTTP SOURCE OK → transmitiendo`);
+                    setServerStatus(sid, 'live');
+                    streaming = true;
+                    if (context.mainWindow) setTimeout(() => {
+                        if (context.mainWindow && !context.mainWindow.isDestroyed())
+                            context.mainWindow.webContents.send('force-metadata-update');
+                    }, 3000);
+                    settle(true);
+                } else {
+                    const firstLine = responseBuffer.split(/\r?\n/)[0].trim();
+                    const fullResp  = responseBuffer.replace(/\r/g, '').trim().slice(0, 400);
+                    writeLog(`[Srv ${sid}] SHOUTcast HTTP SOURCE rechazado:\n${fullResp}`);
+                    if (context.encoderWindow && !context.encoderWindow.isDestroyed())
+                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast rechazó: ${firstLine}` });
+                    settle(false, `SHOUTcast rechazó: ${firstLine}`);
+                }
             }
         });
 
@@ -635,12 +673,10 @@ module.exports = function(context) {
 
         socket.on('close', () => {
             if (!settled) {
-                // Cerrado antes de que llegara la respuesta del handshake.
                 writeLog(`[Srv ${sid}] SHOUTcast socket cerrado antes del handshake`);
                 settle(false, 'Conexión cerrada por el servidor antes del handshake');
             } else if (streaming) {
-                // El servidor cerró la conexión mientras se transmitía.
-                writeLog(`[Srv ${sid}] SHOUTcast socket cerrado por el servidor (stream finalizado)`);
+                writeLog(`[Srv ${sid}] SHOUTcast socket cerrado por el servidor`);
                 onFail('Servidor cerró la conexión durante la transmisión');
             }
         });
