@@ -25,9 +25,48 @@ module.exports = function(context) {
         } catch (_) { _fdkAacAvailable = false; }
     }());
 
+    // ── Registro multi-servidor del encoder ──────────────────────────────────
+    // Cada servidor de streaming tiene su propio proceso FFmpeg, alimentado por
+    // UNA sola fuente PCM compartida (el tap del motor Rust). El registro mapea
+    // serverId -> runtime del servidor.
+    if (!context.encoderServers) context.encoderServers = new Map();
+
+    function getEncoderServer(id) { return context.encoderServers.get(String(id)); }
+    function countLiveServers() {
+        let n = 0;
+        for (const s of context.encoderServers.values()) if (s.proc) n++;
+        return n;
+    }
+
+    // Estado global agregado (para el badge del encoder en la ventana principal).
+    // live si algún servidor está en vivo; connecting si alguno conecta; si no, disconnected.
+    function recomputeGlobalEncoderStatus() {
+        let anyLive = false, anyConnecting = false;
+        for (const s of context.encoderServers.values()) {
+            if (s.status === 'live') anyLive = true;
+            else if (s.status === 'connecting') anyConnecting = true;
+        }
+        const global = anyLive ? 'live' : (anyConnecting ? 'connecting' : 'disconnected');
+        context.encoderRuntimeStatus = global;
+        if (context.mainWindow && !context.mainWindow.isDestroyed()) context.mainWindow.webContents.send('encoder-global-status', global);
+        return global;
+    }
+
+    // Estado de UN servidor → notifica a la ventana del encoder con serverId y
+    // recalcula el agregado global.
+    function setServerStatus(id, status) {
+        const server = getEncoderServer(id);
+        if (server) server.status = status;
+        if (context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+            context.encoderWindow.webContents.send('encoder-status', { serverId: String(id), status });
+        }
+        recomputeGlobalEncoderStatus();
+    }
+
+    // Compat: setEncoderStatus global directo (usado por rutas legacy de error).
     function setEncoderStatus(status) {
         context.encoderRuntimeStatus = status;
-        if (context.encoderWindow && !context.encoderWindow.isDestroyed()) context.encoderWindow.webContents.send('encoder-status', status);
+        if (context.encoderWindow && !context.encoderWindow.isDestroyed()) context.encoderWindow.webContents.send('encoder-status', { serverId: null, status });
         if (context.mainWindow && !context.mainWindow.isDestroyed()) context.mainWindow.webContents.send('encoder-global-status', status);
     }
 
@@ -153,23 +192,60 @@ module.exports = function(context) {
         }).catch(err => writeLog(`RustAudio encoder ${action}: ${err.message || err}`));
     }
 
-    function killFfmpegProcess(reason = '', options = {}) {
-        const proc = context.ffmpegProcess;
-        if (!proc) return;
+    // Detiene la fuente PCM compartida y la captura SOLO si ya no queda ningún
+    // servidor con proceso vivo. Llamar tras matar un servidor.
+    function maybeStopEncoderInput(options = {}) {
+        if (countLiveServers() > 0) return;
         logEncoderWriteStats('stop');
         stopRustPcmEncoderSource();
         notifyRustEncoder('stop', context.encoderSourceContract || context.activeEncoderConfig || {});
-        try {
-            if (proc.stdin && !proc.stdin.destroyed) proc.stdin.destroy();
-        } catch (err) {}
-        try { proc.kill('SIGKILL'); } catch (err) {
-            try { proc.kill(); } catch (innerErr) {}
+        if (!options.suppressStopCapture && context.mainWindow && !context.mainWindow.isDestroyed()) {
+            context.mainWindow.webContents.send('stop-audio-capture');
         }
-        context.ffmpegProcess = null;
-        if (!options.suppressStatus) setEncoderStatus('disconnected');
-        if (!options.suppressStopCapture && context.mainWindow && !context.mainWindow.isDestroyed()) context.mainWindow.webContents.send('stop-audio-capture');
-        if (context.encoderWindow) {
-            if (reason && !options.suppressError) context.encoderWindow.webContents.send('encoder-error', reason);
+    }
+
+    // Mata el proceso FFmpeg de UN servidor (sin afectar a los demás).
+    function killEncoderServer(id, reason = '', options = {}) {
+        const server = getEncoderServer(id);
+        if (!server) return;
+        const proc = server.proc;
+        const scSocket = server.scSocket;
+        server.proc = null;
+        server.scSocket = null;
+        if (scSocket) { try { scSocket.destroy(); } catch (err) {} }
+        if (proc) {
+            try { if (proc.stdin && !proc.stdin.destroyed) proc.stdin.destroy(); } catch (err) {}
+            try { proc.kill('SIGKILL'); } catch (err) { try { proc.kill(); } catch (innerErr) {} }
+        }
+        if (!options.suppressStatus) setServerStatus(id, 'disconnected');
+        if (reason && !options.suppressError && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+            context.encoderWindow.webContents.send('encoder-error', { serverId: String(id), message: reason });
+        }
+        maybeStopEncoderInput(options);
+    }
+
+    // Mata TODOS los servidores (desconectar todo / parada de emergencia).
+    function killAllEncoderServers(reason = '', options = {}) {
+        const ids = Array.from(context.encoderServers.keys());
+        for (const id of ids) {
+            const server = getEncoderServer(id);
+            const proc = server && server.proc;
+            if (server) server.proc = null;
+            if (proc) {
+                try { if (proc.stdin && !proc.stdin.destroyed) proc.stdin.destroy(); } catch (err) {}
+                try { proc.kill('SIGKILL'); } catch (err) { try { proc.kill(); } catch (innerErr) {} }
+            }
+            if (!options.suppressStatus) setServerStatus(id, 'disconnected');
+        }
+        maybeStopEncoderInput(options);
+    }
+
+    // Compat: nombre legacy usado en rutas de error que aún no conocen serverId.
+    // Mata todos los servidores (comportamiento equivalente al modo de 1 servidor).
+    function killFfmpegProcess(reason = '', options = {}) {
+        killAllEncoderServers(reason, options);
+        if (reason && !options.suppressError && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+            context.encoderWindow.webContents.send('encoder-error', reason);
         }
     }
 
@@ -319,20 +395,15 @@ module.exports = function(context) {
         const serverType = ['icecast', 'shoutcast', 'shoutcast2'].includes(rawType) ? rawType : 'icecast';
         const password = config.password || config.pass || '';
         const bitrate = Math.min(320, Math.max(32, parseInt(config.bitrate, 10) || 128));
-        const providerLower = String(config.encoderProvider || 'auto').trim().toLowerCase();
         const source = config.source === 'mic' ? 'mic' : 'master';
-        const rustMaster = source === 'master' && readAudioEngineMode() === 'rustAudio';
-        const rawEncoderProvider = rustMaster
-            ? 'rust'
-            : ['rust', 'rustaudio', 'rustaudioengine'].includes(providerLower)
-            ? 'rust'
-            : ['webaudio', 'webaudiorenderer'].includes(providerLower)
-                ? 'webAudio'
-                : 'auto';
+        // Usuario del source: por defecto 'source' (estándar Icecast/SHOUTcast).
+        // Solo Icecast 2 permite usuarios personalizados según el proveedor.
+        const user = String(config.user || config.username || '').trim() || 'source';
         return {
             ...config,
             serverType,
             type: serverType,
+            user,
             password,
             pass: password,
             ip: String(config.ip || '').trim(),
@@ -342,8 +413,12 @@ module.exports = function(context) {
             tapPoint: config.tapPoint === 'preFx' ? 'preFx' : 'postFx',
             micId: config.micId || config.mic || '',
             codec: config.codec === 'mp3' ? 'mp3' : config.codec === 'aac_he' ? 'aac_he' : 'aac',
-            encoderProvider: rawEncoderProvider,
-            bitrate: String(bitrate)
+            // El motor de audio es siempre Rust (WebAudio fue retirado del programa).
+            encoderProvider: 'rust',
+            bitrate: String(bitrate),
+            legacy: config.legacy === true,
+            icyName: String(config.icyName || config.name || 'Radio').trim() || 'Radio',
+            icyGenre: String(config.icyGenre || 'Variado').trim() || 'Variado'
         };
     }
 
@@ -355,17 +430,28 @@ module.exports = function(context) {
 
     function buildStreamUrl(config) {
         const safePassword = encodeURIComponent(String(config.password || ''));
-        // SHOUTcast (clásico o moderno) usa /1 hardcoded como Stream ID 1, que es
-        // el default de Listen2MyRadio y la mayoría de proveedores free. La
-        // diferencia entre 'shoutcast' y 'shoutcast2' NO está en la URL sino en
-        // el método HTTP que envía FFmpeg (SOURCE legacy vs PUT moderno),
-        // controlado por `-legacy_icecast` en buildCodecArgs().
-        if (config.serverType === 'shoutcast' || config.serverType === 'shoutcast2') {
+        const safeUser = encodeURIComponent(String(config.user || 'source').trim() || 'source');
+
+        // SHOUTcast clásico (Listen2MyRadio): usuario 'source' fijo y Stream ID /1
+        // hardcoded — es el único valor que aceptan los proveedores free. La
+        // diferencia con shoutcast2 NO está en la URL sino en el método HTTP
+        // (SOURCE legacy vs PUT moderno), controlado por `-legacy_icecast`.
+        if (config.serverType === 'shoutcast') {
             return `icecast://source:${safePassword}@${config.ip}:${config.port}/1`;
         }
+
+        // SHOUTcast 2.x (DNAS): puede alojar varios streams por Stream ID (SID).
+        // Tomamos el SID del campo mount (que en la UI se muestra como "Stream ID"),
+        // sanitizando a dígitos. Por defecto SID 1.
+        if (config.serverType === 'shoutcast2') {
+            const sid = String(config.mount || '').replace(/[^\d]/g, '') || '1';
+            return `icecast://source:${safePassword}@${config.ip}:${config.port}/${sid}`;
+        }
+
+        // Icecast 2: usuario configurable (default 'source') + mount libre.
         let mountStr = normalizeMount(config.mount);
         if (mountStr === '/' || !mountStr) mountStr = '/stream';
-        return `icecast://source:${safePassword}@${config.ip}:${config.port}${mountStr}`;
+        return `icecast://${safeUser}:${safePassword}@${config.ip}:${config.port}${mountStr}`;
     }
 
     function buildCodecArgs(config) {
@@ -384,20 +470,153 @@ module.exports = function(context) {
         // Tres modos según el dropdown del encoder:
         //   - 'icecast'    → PUT moderno (Icecast 2.4+, Zeno.fm)
         //   - 'shoutcast'  → SOURCE legacy (Shoutcast 1.x / 2.x clásico, L2MR)
-        //   - 'shoutcast2' → PUT moderno (DNAS 2.x con HTTP PUT habilitado)
-        const legacyShoutcast = config.serverType === 'shoutcast' ? ['-legacy_icecast', '1'] : [];
-        if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+        //   - 'shoutcast2' → PUT moderno por defecto; SOURCE legacy si config.legacy=true
+        //                    (necesario en proveedores como Listen2MyRadio que corren
+        //                    DNAS 2.x pero solo aceptan el método SOURCE, no HTTP PUT)
+        const needsLegacy = config.serverType === 'shoutcast' || (config.serverType === 'shoutcast2' && config.legacy === true);
+        const legacyShoutcast = needsLegacy ? ['-legacy_icecast', '1'] : [];
+        // SHOUTcast DNAS 2.x valida los headers icy-* tras el handshake SOURCE.
+        // FFmpeg internamente usa "Ice-" (Icecast) pero los envía igualmente. El
+        // user-agent debe identificarse como cliente SHOUTcast compatible para no
+        // ser rechazado por el DNAS. icy-br no lo envía FFmpeg automáticamente.
+        const icyMeta = needsLegacy ? [
+            '-ice_name', config.icyName || 'Radio',
+            '-ice_genre', config.icyGenre || 'Variado',
+            '-ice_public', '1',
+            '-user_agent', `LF-Radio/1.0 (Lavf; SHOUTcast; br=${config.bitrate || 128})`
+        ] : [];
+        if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
         if (config.codec === 'aac_he') {
             // Usar libfdk_aac solo si el probe de inicio confirmó que está disponible.
             // En ffmpeg-static/gyan.dev (GPL) no está incluido por ser non-free, así
             // que caemos al encoder nativo aac (AAC-LC). El aviso al usuario se emite
             // en startFfmpegProcess() antes de llamar a esta función.
             if (_fdkAacAvailable === true) {
-                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
             }
-            return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, '-f', 'adts', '-content_type', 'audio/aac'];
+            return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
         }
-        return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, '-f', 'mp3', '-content_type', 'audio/mpeg'];
+        return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, ...icyMeta, '-f', 'mp3', '-content_type', 'audio/mpeg'];
+    }
+
+    // Codec args para SHOUTcast nativo: FFmpeg solo codifica y escribe a pipe:1.
+    // El handshake SOURCE, los headers icy-* y el TCP lo maneja Node.js directamente.
+    function buildShoutcastPipeArgs(config) {
+        const needsResample = config.captureFormat !== 'pcm_s16le';
+        const resampleFilter = needsResample ? ['-af', 'aresample=async=1:first_pts=0'] : [];
+        const common = ['-vn', '-ac', '2', '-ar', '44100', ...resampleFilter];
+        const br = config.bitrate || '128';
+        if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
+        if (config.codec === 'aac_he') {
+            if (_fdkAacAvailable === true)
+                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
+            return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
+        }
+        return [...common, '-c:a', 'libmp3lame', '-b:a', `${br}k`, '-minrate', `${br}k`, '-maxrate', `${br}k`, '-bufsize', `${parseInt(br) * 2}k`, '-f', 'mp3', 'pipe:1'];
+    }
+
+    // Abre la conexión TCP nativa SHOUTcast SOURCE con headers icy-* correctos.
+    // Ya NO toca el proceso FFmpeg directamente — usa callbacks para desacoplar
+    // el handshake del ciclo de vida del proceso.
+    //
+    //   onReady(socket)  — handshake OK; el caller debe picar stdout al socket
+    //   onFail(reason)   — error / timeout / rechazo; el caller limpia el proceso
+    //
+    // Devuelve el socket para que el caller lo guarde en server.scSocket y lo
+    // destruya en killEncoderServer si corresponde.
+    function openShoutcastSocket(config, sid, onReady, onFail) {
+        const net = require('net');
+        const mountSid = config.serverType === 'shoutcast2'
+            ? (String(config.mount || '').replace(/[^\d]/g, '') || '1')
+            : '1';
+        const auth = Buffer.from(`source:${config.password}`).toString('base64');
+        const contentType = (config.codec === 'mp3') ? 'audio/mpeg' : 'audio/aac';
+        const handshake =
+            `SOURCE /${mountSid} HTTP/1.0\r\n` +
+            `Authorization: Basic ${auth}\r\n` +
+            `User-Agent: LF-Radio/1.0\r\n` +
+            `Content-Type: ${contentType}\r\n` +
+            `icy-name: ${config.icyName || 'Radio'}\r\n` +
+            `icy-genre: ${config.icyGenre || 'Variado'}\r\n` +
+            `icy-pub: 1\r\n` +
+            `icy-br: ${config.bitrate || '128'}\r\n` +
+            `icy-url: http://\r\n` +
+            `\r\n`;
+
+        const socket = new net.Socket();
+        let handshakeDone = false;
+        let settled = false;     // handshake outcome ya procesado
+        let streaming = false;   // pipe activo post-handshake
+        let responseBuffer = '';
+
+        // settle() se llama UNA sola vez para notificar éxito o fallo.
+        function settle(ok, arg) {
+            if (settled) return;
+            settled = true;
+            if (ok) {
+                onReady(socket);
+            } else {
+                try { socket.destroy(); } catch (_) {}
+                onFail(arg);
+            }
+        }
+
+        socket.setTimeout(10000);
+        socket.connect(parseInt(config.port, 10), config.ip, () => {
+            socket.setTimeout(0);
+            socket.write(handshake);
+        });
+
+        socket.on('data', (data) => {
+            if (handshakeDone) return;
+            responseBuffer += data.toString('latin1');
+            // Acepta respuesta cuando hay doble CRLF o cuando ya tiene "ICY 200"
+            // (algunos servidores envían la línea sin body adicional).
+            const hasEnd   = responseBuffer.includes('\r\n\r\n') || responseBuffer.includes('\n\n');
+            const hasICY   = /ICY 200/i.test(responseBuffer);
+            if (!hasEnd && !hasICY) return;
+            handshakeDone = true;
+            if (hasICY || /200 OK/i.test(responseBuffer)) {
+                writeLog(`[Srv ${sid}] SHOUTcast handshake OK → transmitiendo`);
+                setServerStatus(sid, 'live');
+                streaming = true;
+                if (context.mainWindow) setTimeout(() => {
+                    if (context.mainWindow && !context.mainWindow.isDestroyed())
+                        context.mainWindow.webContents.send('force-metadata-update');
+                }, 3000);
+                settle(true);
+            } else {
+                const firstLine = responseBuffer.split(/\r?\n/)[0].trim();
+                writeLog(`[Srv ${sid}] SHOUTcast handshake rechazado: ${firstLine}`);
+                if (context.encoderWindow && !context.encoderWindow.isDestroyed())
+                    context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast rechazó la conexión: ${firstLine}` });
+                settle(false, `SHOUTcast rechazó: ${firstLine}`);
+            }
+        });
+
+        socket.on('timeout', () => {
+            writeLog(`[Srv ${sid}] SHOUTcast timeout conectando`);
+            settle(false, 'SHOUTcast: timeout de conexión (10 s)');
+        });
+
+        socket.on('error', (err) => {
+            writeLog(`[Srv ${sid}] SHOUTcast socket error: ${err.message}`);
+            settle(false, `Error de socket: ${err.message}`);
+        });
+
+        socket.on('close', () => {
+            if (!settled) {
+                // Cerrado antes de que llegara la respuesta del handshake.
+                writeLog(`[Srv ${sid}] SHOUTcast socket cerrado antes del handshake`);
+                settle(false, 'Conexión cerrada por el servidor antes del handshake');
+            } else if (streaming) {
+                // El servidor cerró la conexión mientras se transmitía.
+                writeLog(`[Srv ${sid}] SHOUTcast socket cerrado por el servidor (stream finalizado)`);
+                onFail('Servidor cerró la conexión durante la transmisión');
+            }
+        });
+
+        return socket;
     }
 
     function buildEncoderInputArgs(config) {
@@ -409,7 +628,13 @@ module.exports = function(context) {
     }
 
     function writeEncoderAudioChunk(chunk, source = 'renderer') {
-        if (!context.ffmpegProcess || !context.ffmpegProcess.stdin || context.ffmpegProcess.stdin.destroyed) return false;
+        // La fuente PCM es única (la mezcla del programa). Se reparte el MISMO
+        // buffer al stdin de cada servidor con proceso vivo. La medición de
+        // entrada (Pico/RMS) y las estadísticas de bytes se hacen UNA sola vez
+        // porque la entrada es compartida; el backpressure se gestiona por
+        // servidor para que un destino lento no afecte a los demás.
+        if (countLiveServers() === 0) return false;
+        let wroteAny = false;
         try {
             const buffer = Buffer.from(chunk);
             if (context.encoderWriteStats) {
@@ -417,34 +642,47 @@ module.exports = function(context) {
                 context.encoderWriteStats.bytes += buffer.length;
             }
             updateEncoderInputMeter(buffer, source);
-            const accepted = context.ffmpegProcess.stdin.write(buffer);
-            if (!accepted && context.encoderWriteStats && !context.encoderWriteStats.waitingDrain) {
-                const stats = context.encoderWriteStats;
-                stats.backpressure++;
-                stats.flowControlEvents++;
-                stats.waitingDrain = true;
-                stats.lastBackpressureAt = Date.now();
-                context.ffmpegProcess.stdin.once('drain', () => {
-                    if (!context.encoderWriteStats) return;
-                    const drainMs = Date.now() - (context.encoderWriteStats.lastBackpressureAt || Date.now());
-                    context.encoderWriteStats.waitingDrain = false;
-                    context.encoderWriteStats.drainEvents++;
-                    context.encoderWriteStats.maxDrainMs = Math.max(context.encoderWriteStats.maxDrainMs || 0, drainMs);
-                    if (drainMs > 1000) {
-                        context.encoderWriteStats.slowDrainEvents++;
-                        const now = Date.now();
-                        if (!context.encoderWriteStats.lastSlowDrainLogAt || now - context.encoderWriteStats.lastSlowDrainLogAt > 30000) {
-                            context.encoderWriteStats.lastSlowDrainLogAt = now;
-                            writeLog(`Encoder PCM drain lento (${source}): ${Math.round(drainMs)}ms. FFmpeg recupero la escritura.`);
+
+            for (const server of context.encoderServers.values()) {
+                const proc = server.proc;
+                if (!proc || !proc.stdin || proc.stdin.destroyed) continue;
+                try {
+                    const accepted = proc.stdin.write(buffer);
+                    wroteAny = true;
+                    if (!accepted && !server.waitingDrain) {
+                        server.waitingDrain = true;
+                        server.lastBackpressureAt = Date.now();
+                        if (context.encoderWriteStats) {
+                            context.encoderWriteStats.backpressure++;
+                            context.encoderWriteStats.flowControlEvents++;
                         }
+                        proc.stdin.once('drain', () => {
+                            const drainMs = Date.now() - (server.lastBackpressureAt || Date.now());
+                            server.waitingDrain = false;
+                            if (context.encoderWriteStats) {
+                                context.encoderWriteStats.drainEvents++;
+                                context.encoderWriteStats.maxDrainMs = Math.max(context.encoderWriteStats.maxDrainMs || 0, drainMs);
+                                if (drainMs > 1000) {
+                                    context.encoderWriteStats.slowDrainEvents++;
+                                    const now = Date.now();
+                                    if (!context.encoderWriteStats.lastSlowDrainLogAt || now - context.encoderWriteStats.lastSlowDrainLogAt > 30000) {
+                                        context.encoderWriteStats.lastSlowDrainLogAt = now;
+                                        writeLog(`Encoder PCM drain lento (srv ${server.id}): ${Math.round(drainMs)}ms. FFmpeg recupero la escritura.`);
+                                    }
+                                }
+                            }
+                        });
                     }
-                });
+                } catch (errWrite) {
+                    if (context.encoderWriteStats) context.encoderWriteStats.errors++;
+                }
             }
+
             if (context.encoderWriteStats && Date.now() - context.encoderWriteStats.lastSummaryAt > 60000) {
                 logEncoderWriteStats('minute');
             }
             reportRustPcmSilence(source);
-            return true;
+            return wroteAny;
         } catch (err) {
             if (context.encoderWriteStats) context.encoderWriteStats.errors++;
             writeLog(`Error escribiendo audio al encoder (${source}): ${err.message || err}`);
@@ -466,7 +704,11 @@ module.exports = function(context) {
         }
     }
 
-    function startFfmpegProcess(rawConfig = {}) {
+    // Lanza el proceso FFmpeg de UN servidor (sin tocar los demás). La fuente PCM
+    // compartida (tap de Rust o chunks del renderer) alimenta a todos los procesos
+    // vía writeEncoderAudioChunk. `id` identifica el servidor en el registro.
+    function startServerFfmpeg(id, rawConfig = {}) {
+        const sid = String(id);
         const config = normalizeEncoderConfig(rawConfig);
         const localTesting = process.env.LOCAL_TESTING === 'true' || config?.localTesting === true;
         const streamUrl = buildStreamUrl(config);
@@ -475,22 +717,87 @@ module.exports = function(context) {
             const fallbackMsg = _fdkAacAvailable === null
                 ? 'Verificando soporte AAC+ en FFmpeg, transmitiendo como AAC-LC por ahora.'
                 : 'AAC+ (libfdk_aac) no esta disponible en este FFmpeg. Transmitiendo como AAC-LC. Para HE-AAC real usa un FFmpeg compilado con --enable-libfdk-aac.';
-            context.encoderWindow.webContents.send('encoder-warn', fallbackMsg);
+            context.encoderWindow.webContents.send('encoder-warn', { serverId: sid, message: fallbackMsg });
         }
         const codecArgs = buildCodecArgs(config);
         try {
-            if (context.ffmpegProcess) killFfmpegProcess('');
+            // Reset de estadísticas de entrada solo cuando arranca el PRIMER servidor
+            // (la entrada PCM es compartida entre todos).
+            if (countLiveServers() === 0) resetEncoderWriteStats();
+
+            // Si este servidor ya tenía proceso (reconexión), lo matamos primero.
+            const existing = getEncoderServer(sid);
+            if (existing) {
+                if (existing.scSocket) { try { existing.scSocket.destroy(); } catch (e) {} existing.scSocket = null; }
+                if (existing.proc) {
+                    try { if (existing.proc.stdin && !existing.proc.stdin.destroyed) existing.proc.stdin.destroy(); } catch (e) {}
+                    try { existing.proc.kill('SIGKILL'); } catch (e) { try { existing.proc.kill(); } catch (e2) {} }
+                    existing.proc = null;
+                }
+            }
+
             const inputArgs = buildEncoderInputArgs(config);
-            const ffmpegArgs = localTesting ? ['-hide_banner', '-nostdin', ...inputArgs, '-f', 'null', '-'] : ['-hide_banner', '-nostdin', ...inputArgs, ...codecArgs, streamUrl];
+            const useNativeShoutcast = !localTesting && (config.serverType === 'shoutcast' || (config.serverType === 'shoutcast2' && config.legacy === true));
+            const ffmpegArgs = localTesting
+                ? ['-hide_banner', '-nostdin', ...inputArgs, '-f', 'null', '-']
+                : useNativeShoutcast
+                    ? ['-hide_banner', '-nostdin', ...inputArgs, ...buildShoutcastPipeArgs(config)]
+                    : ['-hide_banner', '-nostdin', ...inputArgs, ...codecArgs, streamUrl];
             const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? (_fdkAacAvailable === true ? 'AAC+ (HE-AAC)' : 'AAC-LC (fallback de AAC+)') : 'AAC-LC';
-            writeLog(`Encoder FFmpeg iniciado. Codec: ${_codecLabel} ${config.bitrate || 128}kbps, servidor: ${config.serverType || 'icecast'}, entrada: ${config.captureFormat || 'webm-opus'}${config.sampleRate ? ' ' + config.sampleRate + 'Hz' : ''}`);
-            resetEncoderWriteStats();
+            writeLog(`Encoder FFmpeg [srv ${sid}] iniciado. Codec: ${_codecLabel} ${config.bitrate || 128}kbps, modo: ${useNativeShoutcast ? 'SHOUTcast-nativo' : (config.serverType || 'icecast')}${useNativeShoutcast ? `, icy-name="${config.icyName || 'Radio'}"` : ''}`);
             notifyRustEncoder('start', config);
-            context.ffmpegProcess = cp.spawn(ffmpegPath, ffmpegArgs, { windowsHide: true });
-            setEncoderStatus('connecting');
+
+            const proc = cp.spawn(ffmpegPath, ffmpegArgs, { windowsHide: true, stdio: ['pipe', useNativeShoutcast ? 'pipe' : 'ignore', 'pipe'] });
+            const server = existing || { id: sid };
+            server.id = sid;
+            server.config = config;
+            server.proc = proc;
+            server.waitingDrain = false;
+            server.scSocket = null;
+            context.encoderServers.set(sid, server);
+
+            if (useNativeShoutcast) {
+                // ── ANTI-DEADLOCK: consumir stdout de FFmpeg desde el primer instante ──
+                // FFmpeg empieza a codificar y escribir en pipe:1 inmediatamente. Si
+                // nadie lee stdout, el buffer del kernel (~64 KB en Windows) se llena
+                // en pocos segundos → FFmpeg bloquea → deja de leer stdin → el tap PCM
+                // de Rust se congela → todo colapsa. Solución: acumular los chunks en
+                // memoria mientras el handshake TCP está en curso. En cuanto el servidor
+                // responde ICY 200, volcamos el buffer al socket y hacemos pipe del resto.
+                const audioBuffer = [];
+                let stdoutLive = false;
+                proc.stdout.on('data', (chunk) => {
+                    if (!stdoutLive) audioBuffer.push(Buffer.from(chunk));
+                });
+                // Silenciar errores de stdout (p.ej. broken-pipe si el socket cierra).
+                proc.stdout.on('error', () => {});
+
+                let scFailCalled = false;
+                const onScReady = (socket) => {
+                    // Handshake OK: volcar buffer pre-handshake y hacer pipe del resto.
+                    stdoutLive = true;
+                    proc.stdout.removeAllListeners('data');
+                    for (const ch of audioBuffer) {
+                        if (!socket.destroyed && socket.writable) socket.write(ch);
+                    }
+                    audioBuffer.length = 0;
+                    if (!socket.destroyed) proc.stdout.pipe(socket, { end: false });
+                };
+                const onScFail = (reason) => {
+                    if (scFailCalled) return;
+                    scFailCalled = true;
+                    stdoutLive = true;   // detener acumulación
+                    audioBuffer.length = 0;
+                    // killEncoderServer limpia proc + socket + estado + PCM tap si procede
+                    killEncoderServer(sid, reason);
+                };
+                server.scSocket = openShoutcastSocket(config, sid, onScReady, onScFail);
+            }
+            setServerStatus(sid, 'connecting');
+
             let isFfmpegLive = false;
             let ffmpegLastStderr = '';
-            context.ffmpegProcess.stderr.on('data', (data) => {
+            proc.stderr.on('data', (data) => {
                 const out = data.toString();
                 ffmpegLastStderr = (ffmpegLastStderr + out).slice(-2000);
                 const bitrateMatch = out.match(/bitrate=\s*([\d.]+)\s*kbits\/s/i);
@@ -498,6 +805,7 @@ module.exports = function(context) {
                 const timeMatch = out.match(/time=(\d+:\d+:\d+(?:\.\d+)?)/i);
                 if (bitrateMatch && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
                     const throughput = {
+                        serverId: sid,
                         bitrateKbps: Number(bitrateMatch[1]),
                         speed: speedMatch ? Number(speedMatch[1]) : null,
                         ffmpegTime: timeMatch ? timeMatch[1] : ''
@@ -505,44 +813,53 @@ module.exports = function(context) {
                     context.encoderWindow.webContents.send('encoder-throughput', throughput);
                     notifyRustEncoder('health', { ...config, ...throughput });
                 }
-                if (!isFfmpegLive && out.includes('time=') && out.includes('bitrate=')) {
+                // En modo SHOUTcast nativo el estado 'live' lo pone el handshake TCP
+                // (openShoutcastSocket), NO el stderr de FFmpeg: FFmpeg escribe a pipe:1
+                // e imprime time=/bitrate= aunque el socket aún no se haya conectado.
+                // Usar el stderr para marcar 'live' aquí causaría un flash falso antes
+                // del handshake y enmascaría rechazos del servidor.
+                if (!useNativeShoutcast && !isFfmpegLive && out.includes('time=') && out.includes('bitrate=')) {
                     isFfmpegLive = true;
-                    setEncoderStatus('live');
+                    setServerStatus(sid, 'live');
                     if (context.mainWindow) {
                         setTimeout(() => { if (context.mainWindow && !context.mainWindow.isDestroyed()) context.mainWindow.webContents.send('force-metadata-update'); }, 3000);
                     }
                 }
             });
-            context.ffmpegProcess.stdin.on('error', (err) => {
+            proc.stdin.on('error', (err) => {
                 if (context.encoderWriteStats) context.encoderWriteStats.errors++;
-                writeLog(`Encoder stdin: ${err.message}`);
+                writeLog(`Encoder stdin [srv ${sid}]: ${err.message}`);
             });
-            context.ffmpegProcess.on('error', (err) => { killFfmpegProcess(`FFmpeg no pudo iniciar: ${err.message || err}`); });
-            context.ffmpegProcess.on('close', (code) => {
-                logEncoderWriteStats('close');
-                stopRustPcmEncoderSource();
+            proc.on('error', (err) => { killEncoderServer(sid, `FFmpeg no pudo iniciar: ${err.message || err}`); });
+            proc.on('close', (code) => {
+                const s = getEncoderServer(sid);
+                // Solo procesamos efectos si este proceso sigue siendo el activo del
+                // servidor. Si fue reemplazado/matado intencionalmente, s.proc !== proc.
+                const wasCurrent = !!(s && s.proc === proc);
+                if (s && s.proc === proc) s.proc = null;
                 notifyRustEncoder('stop', config);
-                writeLog(`Encoder FFmpeg cerrado. Codigo: ${code}. Ultima salida: ${ffmpegLastStderr || 'sin salida'}`);
-                if (context.ffmpegProcess) context.ffmpegProcess = null;
-                if (context.suppressNextFfmpegCloseSideEffects && Date.now() < context.suppressNextFfmpegCloseSideEffects) {
-                    context.suppressNextFfmpegCloseSideEffects = 0;
-                    return;
+                writeLog(`Encoder FFmpeg [srv ${sid}] cerrado. Codigo: ${code}. Ultima salida: ${ffmpegLastStderr || 'sin salida'}`);
+                if (wasCurrent) {
+                    if (code && code !== 0 && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+                        const cleanErr = (ffmpegLastStderr || 'Error de conexion desconocido. Revisa la IP, puerto y clave.').replace(/\n/g, ' ').trim();
+                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `FFmpeg termino con codigo ${code}: ${cleanErr}` });
+                    }
+                    setServerStatus(sid, 'disconnected');
                 }
-                if (code && code !== 0 && context.encoderWindow) {
-                    const cleanErr = (ffmpegLastStderr || 'Error de conexion desconocido. Revisa la IP, puerto y clave.').replace(/\n/g, ' ').trim();
-                    context.encoderWindow.webContents.send('encoder-error', `FFmpeg termino con codigo ${code}: ${cleanErr}`);
-                }
-                setEncoderStatus('disconnected');
-                if (context.mainWindow) {
-                    context.mainWindow.webContents.send('stop-audio-capture');
-                }
+                maybeStopEncoderInput();
             });
             return { success: true };
         } catch (err) {
-            setEncoderStatus('disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', 'Error critico lanzando FFmpeg.');
+            setServerStatus(sid, 'disconnected');
+            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: 'Error critico lanzando FFmpeg.' });
             return { success: false, error: err.message || String(err) };
         }
+    }
+
+    // Compat legacy: arranca un único servidor con id '0' (usado por init-ffmpeg /
+    // pruebas locales). El multi-servidor real usa connectEncoderServer por cada id.
+    function startFfmpegProcess(rawConfig = {}) {
+        return startServerFfmpeg('0', rawConfig);
     }
 
     function startRendererEncoderCapture(config) {
@@ -550,7 +867,10 @@ module.exports = function(context) {
         if (context.mainWindow) context.mainWindow.webContents.send('start-audio-capture', config);
     }
 
-    function startRustPcmEncoderCapture(config) {
+    // Asegura que la fuente PCM compartida (tap nativo del motor Rust) esté
+    // activa. Idempotente: si ya está enganchada, no hace nada — así varios
+    // servidores comparten la misma entrada sin re-enganchar el tap.
+    function ensureEncoderInput(config) {
         const sampleRate = Math.max(8000, Math.min(192000, parseInt(config.sampleRate, 10) || 44100));
         const engine = context.rustAudioEngine;
         if (!engine || !engine.isRunning?.() || typeof engine.attachPcmConsumer !== 'function') {
@@ -570,29 +890,45 @@ module.exports = function(context) {
         };
         context.activeEncoderConfig = resolved;
         context.encoderSourceContract = { ...(context.encoderSourceContract || {}), ...resolved, active: false };
-        const ffmpegStarted = startFfmpegProcess(resolved);
-        if (!ffmpegStarted.success) return ffmpegStarted;
 
-        stopRustPcmEncoderSource(); // limpia consumer previo
-
-        // FASE D · sub-paso 8.2 — Encoder 100% Rust nativo, sin WebAudio.
-        // El motor escribe chunks PCM s16le base64 por stdout en cada PushTick
-        // (20 ms). El probe Node los decodifica y se los entrega a este
-        // callback, que los pipea al stdin de FFmpeg. Sin proceso bridge
-        // adicional, sin WebAudio MediaStream, sin Renderer en el medio.
-        engine.attachPcmConsumer(chunk => writeEncoderAudioChunk(chunk, 'rust-pcm'));
-        context.rustPcmEncoderSource = {
-            _tap: true,
-            isRunning: () => !!engine.isRunning(),
-            stop: () => { try { engine.detachPcmConsumer(); } catch (err) { } },
-            status: () => ({ tap: true, running: engine.isRunning() })
-        };
-        writeLog(`Encoder en modo Rust PCM tap nativo (${resolved.tapPoint}).`);
-
-        if (context.mainWindow && !context.mainWindow.isDestroyed()) {
-            context.mainWindow.webContents.send('start-rust-pcm-encoder-sync', resolved);
+        // El tap se engancha UNA sola vez (fuente compartida). Si ya existe un
+        // tap activo, reutilizarlo — así varios servidores comparten la misma
+        // fuente PCM sin re-enganchar el consumer.
+        // Excepción: si rustPcmEncoderSource existe pero el engine reporta que
+        // ya NO hay consumer activo (p.ej. tras una conexión fallida que llamó
+        // detachPcmConsumer sin limpiar el objeto), re-enganchar igual.
+        const tapAlreadyActive = context.rustPcmEncoderSource
+            && context.rustPcmEncoderSource.isRunning?.()
+            && (typeof engine.isPcmConsumerAttached !== 'function' || engine.isPcmConsumerAttached());
+        if (!tapAlreadyActive) {
+            // Asegurar que no quede un consumer previo colgado antes de enganchar.
+            try { engine.detachPcmConsumer?.(); } catch (_) {}
+            engine.attachPcmConsumer(chunk => writeEncoderAudioChunk(chunk, 'rust-pcm'));
+            context.rustPcmEncoderSource = {
+                _tap: true,
+                isRunning: () => !!engine.isRunning(),
+                stop: () => { try { engine.detachPcmConsumer(); } catch (err) { } },
+                status: () => ({ tap: true, running: engine.isRunning() })
+            };
+            writeLog(`Encoder en modo Rust PCM tap nativo (${resolved.tapPoint}).`);
+            if (context.mainWindow && !context.mainWindow.isDestroyed()) {
+                context.mainWindow.webContents.send('start-rust-pcm-encoder-sync', resolved);
+            }
         }
         return { success: true };
+    }
+
+    // Conecta UN servidor del path master (Rust): arranca su FFmpeg y se asegura
+    // de que la fuente PCM compartida esté activa.
+    function connectEncoderServer(id, config) {
+        const started = startServerFfmpeg(id, config);
+        if (!started.success) return started;
+        const input = ensureEncoderInput(config);
+        if (!input.success) {
+            killEncoderServer(id, input.error);
+            return input;
+        }
+        return started;
     }
 
     function reportRustPcmSilence(source = '') {
@@ -632,27 +968,30 @@ module.exports = function(context) {
         })}`);
     }
 
-    function startEncoderCapture(config) {
+    function startEncoderCapture(config, id = '0') {
+        const sid = String(id);
         if ((config.source || 'master') === 'master' && (config.captureProvider === 'rustAudioEngine' || config.owner === 'rustAudioEngine' || config.requestedOwner === 'rustAudioEngine')) {
-            const started = startRustPcmEncoderCapture(config);
+            const started = connectEncoderServer(sid, config);
             if (started.success) return;
             if (readAudioEngineMode() === 'rustAudio') {
-                writeLog(`Rust PCM encoder no inicio (${started.error || 'sin detalle'}). Modo Rust exclusivo: no se activa WebAudio.`);
-                setEncoderStatus('disconnected');
-                if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', started.error || 'Rust PCM encoder no inicio.');
+                writeLog(`Rust PCM encoder [srv ${sid}] no inicio (${started.error || 'sin detalle'}). Modo Rust exclusivo: no se activa WebAudio.`);
+                setServerStatus(sid, 'disconnected');
+                if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: started.error || 'Rust PCM encoder no inicio.' });
                 return;
             }
-            writeLog(`Rust PCM encoder no inicio (${started.error || 'sin detalle'}). Ruta WebAudio master retirada: no se activa ruta alternativa.`);
-            setEncoderStatus('disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', started.error || 'Rust PCM encoder no inicio y la ruta WebAudio master fue retirada.');
+            writeLog(`Rust PCM encoder [srv ${sid}] no inicio (${started.error || 'sin detalle'}). Ruta WebAudio master retirada: no se activa ruta alternativa.`);
+            setServerStatus(sid, 'disconnected');
+            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: started.error || 'Rust PCM encoder no inicio y la ruta WebAudio master fue retirada.' });
             return;
         }
         if ((config.source || 'master') === 'master') {
             writeLog('Encoder master bloqueado: el master ya no usa captura WebAudio del renderer.');
-            setEncoderStatus('disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', 'El encoder master requiere Rust PCM tap; la captura WebAudio fue retirada.');
+            setServerStatus(sid, 'disconnected');
+            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: 'El encoder master requiere Rust PCM tap; la captura WebAudio fue retirada.' });
             return;
         }
+        // Path de micrófono / entrada externa (renderer capture): legacy de servidor
+        // único. El renderer arranca FFmpeg vía init-ffmpeg y manda audio-chunk.
         const rendererCapture = config.captureProvider === 'rustAudioEngine'
             ? {
                 ...config,
@@ -796,22 +1135,54 @@ module.exports = function(context) {
         });
         context.encoderWindow.loadFile('frontend/encoder.html');
         context.encoderWindow.webContents.on('did-finish-load', () => {
-            context.encoderWindow.webContents.send('encoder-status', context.encoderRuntimeStatus || (context.ffmpegProcess ? 'connecting' : 'disconnected'));
+            // Enviar el estado actual de cada servidor para que la UI reabierta
+            // refleje las transmisiones que siguen en vivo.
+            const snapshot = [];
+            for (const s of context.encoderServers.values()) {
+                snapshot.push({ serverId: s.id, status: s.status || (s.proc ? 'connecting' : 'disconnected') });
+            }
+            context.encoderWindow.webContents.send('encoder-servers-snapshot', snapshot);
         });
         context.encoderWindow.on('close', (e) => {
-            if (!context.isAppQuitting && context.ffmpegProcess) {
+            if (!context.isAppQuitting && countLiveServers() > 0) {
                 e.preventDefault();
                 context.encoderWindow.hide();
             }
         });
         context.encoderWindow.on('closed', () => { context.encoderWindow = null; });
     });
-    ipcMain.on('start-encoder', (e, config) => {
-        const normalized = normalizeEncoderConfig(config);
+    // Conecta un servidor a partir de su config cruda (resuelve contrato + arranca).
+    function connectOneFromConfig(id, rawConfig) {
+        const normalized = normalizeEncoderConfig(rawConfig);
         const contract = buildEncoderSourceContract(normalized, false);
         const resolved = { ...normalized, ...contract };
         context.encoderSourceContract = { ...(context.encoderSourceContract || {}), ...contract, active: false };
-        startEncoderCapture(resolved);
+        startEncoderCapture(resolved, id);
+    }
+
+    // start-encoder: acepta un ARRAY de configs (conectar todos / botón maestro) o
+    // un único objeto (compatibilidad con el modo de un solo servidor). Cada config
+    // puede traer su propio `serverId`; si no, se usa el índice.
+    ipcMain.on('start-encoder', (e, payload) => {
+        const list = Array.isArray(payload) ? payload : [payload];
+        list.forEach((cfg, idx) => {
+            const id = (cfg && (cfg.serverId !== undefined && cfg.serverId !== null)) ? cfg.serverId : idx;
+            connectOneFromConfig(id, cfg || {});
+        });
+    });
+
+    // start-encoder-server: conecta/reconecta UN servidor individual (botón por
+    // servidor o reconexión automática del frontend).
+    ipcMain.on('start-encoder-server', (e, payload = {}) => {
+        const id = (payload.serverId !== undefined && payload.serverId !== null) ? payload.serverId : '0';
+        connectOneFromConfig(id, payload);
+    });
+
+    // stop-encoder-server: detiene UN servidor individual sin afectar a los demás.
+    ipcMain.on('stop-encoder-server', (e, payload) => {
+        const id = (payload && typeof payload === 'object') ? payload.serverId : payload;
+        if (id === undefined || id === null) return;
+        killEncoderServer(id, '');
     });
 
     // FIX: el operador conmutó Pre-FX / Post-FX desde la ventana del encoder.
@@ -823,33 +1194,46 @@ module.exports = function(context) {
         }
     });
     
+    // Construye la URL de actualización de metadata remota para un servidor según
+    // su tipo. Devuelve { url, headers } o null si el tipo no la soporta.
+    function buildMetadataUpdate(conf, encodedMeta) {
+        if (conf.serverType === 'icecast') {
+            const mountStr = encodeURIComponent(normalizeMount(conf.mount));
+            return {
+                url: `http://${conf.ip}:${conf.port}/admin/metadata?mount=${mountStr}&mode=updinfo&song=${encodedMeta}`,
+                headers: { 'Authorization': 'Basic ' + Buffer.from(`admin:${conf.password}`).toString('base64') }
+            };
+        }
+        if (conf.serverType === 'shoutcast' || conf.serverType === 'shoutcast2') {
+            // El `sid` (stream ID) es obligatorio en SHOUTcast DNAS 2.x — sin él
+            // responde 404. Para clásico (L2MR) usamos sid=1 (su /1 fijo); para
+            // shoutcast2 usamos el SID que el operador configuró (campo mount).
+            const sid = conf.serverType === 'shoutcast2'
+                ? (String(conf.mount || '').replace(/[^\d]/g, '') || '1')
+                : '1';
+            return {
+                url: `http://${conf.ip}:${conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&sid=${sid}&song=${encodedMeta}`,
+                headers: {}
+            };
+        }
+        return null;
+    }
+
     ipcMain.on('update-metadata', async (e, metaText) => {
         try { const txtPath = path.join(configDir, 'NowPlaying.txt'); fs.writeFileSync(txtPath, metaText, 'utf-8'); } catch(err) { writeLog("Error escribiendo NowPlaying.txt: " + err); }
-        if (context.ffmpegProcess && context.activeEncoderConfig) {
+        // Empujar la metadata a CADA servidor en vivo con su propia configuración.
+        const encodedMeta = encodeURIComponent(String(metaText || '').slice(0, 255));
+        for (const server of context.encoderServers.values()) {
+            if (!server.proc || !server.config) continue;
             try {
-                const conf = normalizeEncoderConfig(context.activeEncoderConfig);
-                const encodedMeta = encodeURIComponent(String(metaText || '').slice(0, 255));
-                let metaUrl = '';
-                let authHeader = '';
-                if (conf.serverType === 'icecast') {
-                    const mountStr = encodeURIComponent(normalizeMount(conf.mount));
-                    metaUrl = `http://${conf.ip}:${conf.port}/admin/metadata?mount=${mountStr}&mode=updinfo&song=${encodedMeta}`;
-                    authHeader = 'Basic ' + Buffer.from(`admin:${conf.password}`).toString('base64');
-                } else if (conf.serverType === 'shoutcast' || conf.serverType === 'shoutcast2') {
-                    // El campo `sid` (stream ID) es obligatorio en SHOUTcast DNAS 2.x
-                    // — sin él el servidor responde 404 y la metadata no se actualiza.
-                    // Hardcodeamos sid=1 igual que el mountpoint `/1` que usa
-                    // buildStreamUrl(). Para SHOUTcast v1 el parámetro extra es
-                    // ignorado, así que es seguro en ambos modos (clásico y moderno).
-                    metaUrl = `http://${conf.ip}:${conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&sid=1&song=${encodedMeta}`;
+                const conf = normalizeEncoderConfig(server.config);
+                const meta = buildMetadataUpdate(conf, encodedMeta);
+                if (meta && meta.url) {
+                    fetch(meta.url, { headers: meta.headers || {} }).then((res) => {
+                        if (!res.ok) writeLog(`Metadata remota [srv ${server.id}] respondio HTTP ${res.status}`);
+                    }).catch(err => writeLog(`Error actualizando metadata remota [srv ${server.id}]: ` + err));
                 }
-                if (metaUrl) {
-                    const headers = authHeader ? { 'Authorization': authHeader } : {};
-                    fetch(metaUrl, { headers }).then((res) => {
-                        if (!res.ok) writeLog(`Metadata remota respondio HTTP ${res.status}`);
-                    }).catch(e => writeLog("Error actualizando metadata remota: " + e));
-                }
-            } catch(err) { writeLog("Error preparando metadata remote: " + err); }
+            } catch(err) { writeLog(`Error preparando metadata remota [srv ${server.id}]: ` + err); }
         }
     });
     
@@ -883,12 +1267,14 @@ module.exports = function(context) {
     ipcMain.on('audio-chunk', (e, chunk) => {
         writeEncoderAudioChunk(chunk, 'renderer');
     });
+    // stop-encoder: detiene TODOS los servidores (botón "Desconectar todo" /
+    // parada general). El stop individual usa stop-encoder-server.
     ipcMain.on('stop-encoder', () => {
-        killFfmpegProcess('');
+        killAllEncoderServers('');
         context.activeEncoderConfig = null;
-        if (context.mainWindow) {
+        if (context.mainWindow && !context.mainWindow.isDestroyed()) {
             context.mainWindow.webContents.send('stop-audio-capture');
-            setEncoderStatus('disconnected');
+            context.mainWindow.webContents.send('encoder-global-status', 'disconnected');
         }
     });
     ipcMain.on('emergency-stop-playback', () => {
