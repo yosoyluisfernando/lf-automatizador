@@ -501,18 +501,29 @@ module.exports = function(context) {
 
     // Codec args para SHOUTcast nativo: FFmpeg solo codifica y escribe a pipe:1.
     // El handshake SOURCE, los headers icy-* y el TCP lo maneja Node.js directamente.
+    //
+    // IMPORTANTE — MP3: se suprimen las cabeceras ID3 (-id3v2_version 0 -write_id3v1 0).
+    // Sin esto, FFmpeg puede escribir un bloque ID3 al inicio del pipe que el DNAS 2.x
+    // no entiende como audio válido y aborta la conexión a los ~1-2 segundos.
+    // ADTS (AAC) no tiene este problema — es un formato de stream puro sin contenedor.
     function buildShoutcastPipeArgs(config) {
         const needsResample = config.captureFormat !== 'pcm_s16le';
         const resampleFilter = needsResample ? ['-af', 'aresample=async=1:first_pts=0'] : [];
         const common = ['-vn', '-ac', '2', '-ar', '44100', ...resampleFilter];
         const br = config.bitrate || '128';
+        // AAC: ADTS es un bitstream puro, sin cabecera de contenedor. Ideal para streaming.
         if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
         if (config.codec === 'aac_he') {
             if (_fdkAacAvailable === true)
                 return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
             return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
         }
-        return [...common, '-c:a', 'libmp3lame', '-b:a', `${br}k`, '-minrate', `${br}k`, '-maxrate', `${br}k`, '-bufsize', `${parseInt(br) * 2}k`, '-f', 'mp3', 'pipe:1'];
+        // MP3: CBR estricto + sin cabeceras ID3 para que el primer byte sea 0xFF (sync frame).
+        return [...common,
+            '-c:a', 'libmp3lame', '-b:a', `${br}k`, '-minrate', `${br}k`, '-maxrate', `${br}k`,
+            '-bufsize', `${parseInt(br) * 2}k`,
+            '-id3v2_version', '0', '-write_id3v1', '0',
+            '-f', 'mp3', 'pipe:1'];
     }
 
     // Abre la conexión TCP nativa SHOUTcast SOURCE con headers icy-* correctos.
@@ -530,18 +541,32 @@ module.exports = function(context) {
             ? (String(config.mount || '').replace(/[^\d]/g, '') || '1')
             : '1';
         const auth = Buffer.from(`source:${config.password}`).toString('base64');
-        const contentType = (config.codec === 'mp3') ? 'audio/mpeg' : 'audio/aac';
+        const br = String(config.bitrate || '128');
+
+        // Content-Type correcto según DNAS 2.x:
+        //   MP3  → audio/mpeg
+        //   AAC  → audio/aacp  (SHOUTcast no acepta audio/aac a secas)
+        const contentType = (config.codec === 'mp3') ? 'audio/mpeg' : 'audio/aacp';
+
+        // Handshake SOURCE con máxima compatibilidad para DNAS 2.x y SC1:
+        //   - Authorization: Basic   → requerido por DNAS 2.x
+        //   - icy-password           → requerido por SHOUTcast v1 / DNAS configurado en SC1 mode
+        //   - ice-audio-info         → opcional pero esperado por DNAS 2.x para validar el codec
+        //   - SIN icy-url vacío      → algunos DNAS rechazan el mount si icy-url no es válido
         const handshake =
             `SOURCE /${mountSid} HTTP/1.0\r\n` +
             `Authorization: Basic ${auth}\r\n` +
+            `icy-password: ${config.password}\r\n` +
             `User-Agent: LF-Radio/1.0\r\n` +
             `Content-Type: ${contentType}\r\n` +
+            `ice-audio-info: ice-samplerate=44100;ice-bitrate=${br};ice-channels=2\r\n` +
             `icy-name: ${config.icyName || 'Radio'}\r\n` +
             `icy-genre: ${config.icyGenre || 'Variado'}\r\n` +
             `icy-pub: 1\r\n` +
-            `icy-br: ${config.bitrate || '128'}\r\n` +
-            `icy-url: http://\r\n` +
+            `icy-br: ${br}\r\n` +
             `\r\n`;
+
+        writeLog(`[Srv ${sid}] SHOUTcast nativo: conectando a ${config.ip}:${config.port} → SOURCE /${mountSid} | codec=${config.codec} ${br}kbps | auth=Basic+icy-password`);
 
         const socket = new net.Socket();
         let handshakeDone = false;
@@ -587,7 +612,11 @@ module.exports = function(context) {
                 settle(true);
             } else {
                 const firstLine = responseBuffer.split(/\r?\n/)[0].trim();
-                writeLog(`[Srv ${sid}] SHOUTcast handshake rechazado: ${firstLine}`);
+                // Loggear TODA la respuesta del servidor para diagnóstico preciso.
+                // Sin esto, mensajes como "icy-response: mountpoint in use" o
+                // "WWW-Authenticate: Basic realm=..." se pierden.
+                const fullResp = responseBuffer.replace(/\r/g, '').trim().slice(0, 400);
+                writeLog(`[Srv ${sid}] SHOUTcast handshake rechazado:\n${fullResp}`);
                 if (context.encoderWindow && !context.encoderWindow.isDestroyed())
                     context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast rechazó la conexión: ${firstLine}` });
                 settle(false, `SHOUTcast rechazó: ${firstLine}`);
