@@ -287,6 +287,7 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
 .playlist-col-resizing, .playlist-col-resizing * { cursor: col-resize !important; }
 .playlist-table td { padding: 6px 10px; border-bottom: 1px solid #222; user-select: none; }
 .playlist-table tr { transition: background-color 0.1s; }
+.playlist-table tbody tr { content-visibility: auto; contain-intrinsic-height: auto 26px; }
 .playlist-table tr:hover { background-color: #2a2a2d; cursor: pointer; }
 
 .playlist-footer { background: #1a1a1c; border-top: 1px solid #333; padding: 8px 15px; display: flex; align-items: center; font-size: 13px; font-weight: bold; color: #aaa; }

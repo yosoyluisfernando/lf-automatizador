@@ -1351,20 +1351,25 @@ function getClockwheelCandidates(trackRows = [], categoryDefs = [], fileTypes = 
 
 function wasClockwheelRecentlyUsed(value, recent, distance) {
     if (!value || distance <= 0) return false;
-    return recent.slice(-distance).includes(value);
+    // Evita crear un array nuevo con slice() en cada llamada — itera en reversa directamente
+    const start = Math.max(0, recent.length - distance);
+    for (let i = recent.length - 1; i >= start; i--) {
+        if (recent[i] === value) return true;
+    }
+    return false;
 }
 
 function pickClockwheelTrack(pool, recent, prefs) {
     if (!pool || pool.length === 0) return null;
     const passes = [
-        track => (isClockwheelTimeLocutionTrack(track) || !recent.paths.includes(track.filePath))
+        track => (isClockwheelTimeLocutionTrack(track) || !recent.pathsSet.has(track.filePath))
             && !wasClockwheelRecentlyUsed(track.artistKey, recent.artists, prefs.sepArtist)
             && !wasClockwheelRecentlyUsed(track.titleKey, recent.titles, prefs.sepTitle)
             && !wasClockwheelRecentlyUsed(track.folderKey, recent.folders, prefs.sepFolder),
-        track => (isClockwheelTimeLocutionTrack(track) || !recent.paths.includes(track.filePath))
+        track => (isClockwheelTimeLocutionTrack(track) || !recent.pathsSet.has(track.filePath))
             && !wasClockwheelRecentlyUsed(track.artistKey, recent.artists, Math.floor(prefs.sepArtist / 2))
             && !wasClockwheelRecentlyUsed(track.titleKey, recent.titles, Math.floor(prefs.sepTitle / 2)),
-        track => isClockwheelTimeLocutionTrack(track) || !recent.paths.includes(track.filePath),
+        track => isClockwheelTimeLocutionTrack(track) || !recent.pathsSet.has(track.filePath),
         () => true
     ];
     for (const predicate of passes) {
@@ -1389,7 +1394,8 @@ function buildClockwheelPlan(payload = {}) {
     const categoryDefs = getClockwheelCategoryDefs(trackRows, fileTypes);
     const pattern = getClockwheelPatternCategories(prefs.pattern, categoryDefs, fileTypes);
     const byCategory = getClockwheelCandidates(trackRows, categoryDefs, fileTypes, explicitTypes);
-    const recent = { paths: [], artists: [], titles: [], folders: [] };
+    // pathsArr mantiene orden para evicción FIFO; pathsSet permite lookup O(1)
+    const recent = { pathsArr: [], pathsSet: new Set(), artists: [], titles: [], folders: [] };
     const tracks = [];
     const missing = new Map();
     const targetSeconds = prefs.targetMinutes * 60;
@@ -1411,11 +1417,12 @@ function buildClockwheelPlan(payload = {}) {
 
         tracks.push({ ...track, category: item.category });
         totalSeconds += track.duration;
-        recent.paths.push(track.filePath);
+        recent.pathsArr.push(track.filePath);
+        recent.pathsSet.add(track.filePath);
+        if (recent.pathsArr.length > 60) recent.pathsSet.delete(recent.pathsArr.shift());
         recent.artists.push(track.artistKey);
         recent.titles.push(track.titleKey);
         recent.folders.push(track.folderKey);
-        if (recent.paths.length > 60) recent.paths.shift();
         if (recent.artists.length > 60) recent.artists.shift();
         if (recent.titles.length > 60) recent.titles.shift();
         if (recent.folders.length > 60) recent.folders.shift();

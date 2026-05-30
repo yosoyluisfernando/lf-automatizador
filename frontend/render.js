@@ -2900,6 +2900,7 @@ async function loadDatabasesFromSQLite() {
         ]);
         eventsMasterDB = Array.isArray(events) ? events : [];
         eventGroupsDB = Array.isArray(groups) ? groups : [];
+        ipcRenderer.send('events-clock-sync', eventsMasterDB); // sincronizar reloj del Main Process
         if (eventGroupsDB.length === 0) { eventGroupsDB = [{ id: 'g_general', name: 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }]; }
         renderEventsList();
         updateEventCountdowns();
@@ -3683,7 +3684,10 @@ const EXPLICIT_TYPES_PATH = path.join(configDir, 'explicit_types.json');
 let explicitTypesDB = {};
 try { if (fs.existsSync(EXPLICIT_TYPES_PATH)) explicitTypesDB = JSON.parse(fs.readFileSync(EXPLICIT_TYPES_PATH, 'utf-8')); } catch (e) { }
 function saveExplicitTypes() { try { fs.writeFileSync(EXPLICIT_TYPES_PATH, JSON.stringify(explicitTypesDB, null, 2)); } catch (e) { } }
-function saveEventsDB() { ipcRenderer.send('db-save-events-full', eventsMasterDB); }
+function saveEventsDB() {
+    ipcRenderer.send('db-save-events-full', eventsMasterDB);
+    ipcRenderer.send('events-clock-sync', eventsMasterDB); // sincronizar reloj del Main Process
+}
 
 let selectedEventId = null; let collapsedGroups = new Set(); let rightClickedGroupId = null;
 
@@ -3696,6 +3700,7 @@ function updateSelectedEventControls() {
 
 ipcRenderer.on('refresh-events', async (e, savedEvent) => {
     eventsMasterDB = await ipcRenderer.invoke('db-get-events');
+    ipcRenderer.send('events-clock-sync', eventsMasterDB); // sincronizar reloj del Main Process
     eventRuntimeQueue.clear();
     eventPreflightPromises.clear();
     eventsMasterDB.forEach(ev => { ev.checkedForThisCycle = false; });
@@ -5026,47 +5031,42 @@ setInterval(() => {
         }
     });
 
-    const masterEnable = document.getElementById('chk-events-master') ? document.getElementById('chk-events-master').checked : true;
-    const manualOnly = document.getElementById('chk-events-manual') ? document.getElementById('chk-events-manual').checked : false;
-    if (!masterEnable || manualOnly) return;
-
-    const now = new Date(); const currentH = now.getHours(); const currentM = now.getMinutes(); const currentS = now.getSeconds();
-    const currentStr = `${currentH.toString().padStart(2, '0')}:${currentM.toString().padStart(2, '0')}:${currentS.toString().padStart(2, '0')}`;
-
-    eventsMasterDB.forEach(ev => {
-        if (!isDateValidForEvent(now, ev)) return;
-        if (isEventQueuedWithMaxDelay(ev.id)) return;
-        if (ev.requirePlaying && (!eventPreHoldActive && (!currentPlayingRow || isPlayerClockPaused(activePlayer)))) {
-            let expandedTimes = getExpandedEventTimes(ev);
-            if (expandedTimes.includes(currentStr)) {
-                const todayStr = now.toDateString(); const fireId = getEventFireId(ev, currentStr, now); const ignoreId = `${ev.id}_${currentStr}_${todayStr}`;
-                if (ev.lastFired !== fireId && !ignoredEventTriggers.includes(ignoreId)) {
-                    const entry = getEventQueueEntryForOccurrence(ev, { date: new Date(now.getTime()), timeStr: currentStr });
-                    if (entry) setEventQueueStatus(entry, 'skipped', 'OMITIDO', 'Requiere audio al aire');
-                    ev.lastFired = fireId;
-                    saveEventsDB();
-                    recordIncident(`[EVENTOS] ${ev.name}: omitido porque no habia audio al aire.`, { category: 'events', level: 'warn' });
-                    renderEventTimeline(true);
-                }
-            }
-            return;
-        }
-
-        let expandedTimes = getExpandedEventTimes(ev);
-        expandedTimes.forEach(tTime => {
-            if (currentStr === tTime) {
-                const todayStr = now.toDateString(); const fireId = getEventFireId(ev, tTime, now); const ignoreId = `${ev.id}_${tTime}_${todayStr}`;
-                if (ev.lastFired !== fireId && !ignoredEventTriggers.includes(ignoreId)) {
-                    ev.lastFired = fireId;
-                    saveEventsDB();
-                    queueEventForEmission(ev, { occurrence: { date: new Date(now.getTime()), timeStr: tTime } }).catch(() => {
-                        recordIncident(`[EVENTOS] ${ev.name}: disparo bloqueado por error interno.`, { category: 'events', level: 'error' });
-                    });
-                }
-            }
-        });
-    });
+    // La comprobación de hora de eventos se delegó al Main Process (event-clock-tick).
+    // Este setInterval mantiene solo la lógica de retardo máximo que requiere acceso al DOM.
 }, 1000);
+
+// Receptor del reloj de eventos delegado al Main Process.
+// El backend detecta la coincidencia de hora y nos avisa; aquí manejamos los
+// controles que requieren estado del DOM (masterEnable, manualOnly, requirePlaying, etc.)
+ipcRenderer.on('event-clock-tick', (e, { evId, timeStr, nowMs, fireId, ignoreId }) => {
+    const chkMaster = document.getElementById('chk-events-master');
+    const chkManual = document.getElementById('chk-events-manual');
+    if (chkMaster && !chkMaster.checked) return;
+    if (chkManual && chkManual.checked) return;
+
+    const ev = eventsMasterDB.find(ev => ev.id === evId);
+    if (!ev) return;
+    if (ev.lastFired === fireId) return; // guarda de seguridad: no re-disparar
+    if (isEventQueuedWithMaxDelay(ev.id)) return;
+    if (ignoredEventTriggers.includes(ignoreId)) return;
+
+    const now = new Date(nowMs);
+    ev.lastFired = fireId; // mantener copia renderer sincronizada con el backend
+
+    if (ev.requirePlaying && (!eventPreHoldActive && (!currentPlayingRow || isPlayerClockPaused(activePlayer)))) {
+        const entry = getEventQueueEntryForOccurrence(ev, { date: now, timeStr });
+        if (entry) setEventQueueStatus(entry, 'skipped', 'OMITIDO', 'Requiere audio al aire');
+        saveEventsDB();
+        recordIncident(`[EVENTOS] ${ev.name}: omitido porque no habia audio al aire.`, { category: 'events', level: 'warn' });
+        renderEventTimeline(true);
+        return;
+    }
+
+    saveEventsDB();
+    queueEventForEmission(ev, { occurrence: { date: now, timeStr } }).catch(() => {
+        recordIncident(`[EVENTOS] ${ev.name}: disparo bloqueado por error interno.`, { category: 'events', level: 'error' });
+    });
+});
 
 explorerContainer.addEventListener('click', () => { hideAllMenus(); clearSelection(); });
 
