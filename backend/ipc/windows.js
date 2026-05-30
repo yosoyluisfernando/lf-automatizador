@@ -528,12 +528,15 @@ module.exports = function(context) {
 
     // Abre la conexión TCP nativa SHOUTcast. Bifurca según serverType:
     //
-    //   'shoutcast'      → Protocolo ICY v1 legacy (L2MR, SC1 clásico):
-    //                       password\r\n → OK2 → icy headers → audio inmediato.
-    //                       Sin HTTP, sin Authorization header.
+    //   'shoutcast'      → ICY v1 legacy (L2MR, SC1 clásico, cualquier DNAS):
+    //   'shoutcast2'       password\r\n → OK2 → icy headers → audio inmediato.
+    //     (legacy=true)    Sin HTTP, sin Authorization header.
+    //                      Los servidores etiquetados "Shoutcast2" (L2MR) también
+    //                      usan este protocolo en su puerto de fuente.
     //
-    //   'shoutcast2'     → Protocolo HTTP SOURCE (DNAS 2.x con config legacy):
-    //     (legacy=true)    SOURCE /SID HTTP/1.0 + Authorization:Basic → ICY 200 OK → audio.
+    //   'shoutcast2'     → HTTP SOURCE (DNAS 2.x puro con PUT desactivado):
+    //     (legacy=false)   SOURCE /SID HTTP/1.0 + Authorization:Basic → ICY 200 OK.
+    //                      Usado cuando el servidor NO acepta HTTP PUT pero sí SOURCE HTTP.
     //
     // Callbacks:
     //   onReady(socket)  — handshake OK; el caller pica stdout al socket.
@@ -541,9 +544,11 @@ module.exports = function(context) {
     function openShoutcastSocket(config, sid, onReady, onFail) {
         const net = require('net');
 
-        // SC1 ICY legacy: solo para serverType='shoutcast'.
-        // shoutcast2+legacy usa HTTP SOURCE — distinto protocolo, misma infra.
-        const useIcyLegacy = (config.serverType === 'shoutcast');
+        // ICY v1 para 'shoutcast' Y para 'shoutcast2'+legacy.
+        // Muchos servidores etiquetados como "Shoutcast 2" (L2MR, RadioFe, etc.)
+        // SOLO aceptan ICY v1 en el puerto fuente — no HTTP SOURCE ni HTTP PUT.
+        const useIcyLegacy = (config.serverType === 'shoutcast') ||
+                             (config.serverType === 'shoutcast2' && config.legacy === true);
 
         const mountSid = config.serverType === 'shoutcast2'
             ? (String(config.mount || '').replace(/[^\d]/g, '') || '1')

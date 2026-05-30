@@ -275,7 +275,7 @@ function buildServerCard(s) {
             <div class="row row-user" style="${isIce ? '' : 'display:none;'}"><label>Usuario:</label><input type="text" class="enc-input fld-user" placeholder="source"></div>
             <div class="row"><label>Contraseña:</label><input type="password" class="enc-input fld-pass" placeholder="Mountpass o Password"></div>
             <div class="row row-mount" style="${isIce || isSc2 ? '' : 'display:none;'}"><label class="lbl-mount">${mountLabel}</label><input type="text" class="enc-input fld-mount" placeholder="${mountPh}"></div>
-            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>Conexión legacy (SOURCE):</label><input type="checkbox" class="fld-legacy" title="Actívalo si el servidor SHOUTcast2 no acepta HTTP PUT (ej. Listen2MyRadio)"></div>
+            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>Protocolo ICY legacy:</label><input type="checkbox" class="fld-legacy" title="Actívalo para L2MR, RadioFe y otros 'Shoutcast 2' que solo aceptan ICY v1 (contraseña directa). Sin esto se usa HTTP PUT."></div>
             <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Nombre Estación:</label><input type="text" class="enc-input fld-icyname" placeholder="ej. Mi Radio" title="Nombre que verán los oyentes (requerido por SHOUTcast)"></div>
             <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Género:</label><input type="text" class="enc-input fld-genre" placeholder="ej. Variado" title="Género musical (requerido por SHOUTcast DNAS 2.x)"></div>
             <div class="row"><label>Formato (Codec):</label>
