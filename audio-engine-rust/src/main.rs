@@ -160,6 +160,14 @@ struct EngineState {
     dsp_params: Arc<DspParams>,
     /// Players a reanudar automáticamente tras un reset del program_mixer.
     pending_resume: Vec<PendingResumeSpec>,
+    /// Productores de ring buffers para streams PCM activos (key = player_id).
+    /// El hilo IPC escribe samples f32; el thread de audio los consume via
+    /// PcmRingSource. Cuando se llama `stream_stop`, el productor se retira aquí
+    /// y el flag `finished` le indica al Source que ya no habrá más datos.
+    stream_producers: HashMap<String, rtrb::Producer<f32>>,
+    /// Flags de fin de stream por player. `true` → el PcmRingSource drena el
+    /// buffer restante y devuelve None al vaciarse, deteniendo el Source.
+    stream_finished_flags: HashMap<String, Arc<AtomicBool>>,
 }
 
 impl Default for EngineState {
@@ -193,6 +201,8 @@ impl Default for EngineState {
             encoder_tap_post_consumer: None,
             dsp_params: Arc::new(DspParams::default()),
             pending_resume: Vec::new(),
+            stream_producers: HashMap::new(),
+            stream_finished_flags: HashMap::new(),
         }
     }
 }
@@ -2103,6 +2113,65 @@ where
             self.window_right_peak = 0.0;
         }
         result
+    }
+}
+
+// ============================================================================
+// PcmRingSource — fuente de audio desde ring buffer rtrb (streams en vivo)
+// ============================================================================
+// Permite inyectar audio PCM de una fuente externa (p.ej. FFmpeg leyendo una
+// URL de radio) directamente en el program_mixer. El hilo IPC escribe f32 en
+// el ring buffer via `stream_chunk`; el hilo de audio (rodio) los consume aquí.
+//
+// Comportamiento:
+//   - Buffer vacío + finished=false → silencio (underrun sin parar la cadena).
+//   - Buffer vacío + finished=true  → devuelve None (fin de stream, rodio
+//     descarta este Source del Player y pasa al siguiente, si hay).
+//
+// Capacidad típica: 2 s de audio stereo a 44100 Hz = 176 400 muestras f32.
+// El hilo IPC descarta el chunk si el ring está lleno (overrun), evitando
+// que el stream se adelante en el tiempo respecto a la reproducción en vivo.
+
+struct PcmRingSource {
+    consumer: rtrb::Consumer<f32>,
+    finished: Arc<AtomicBool>,
+    channels: ChannelCount,
+    sample_rate: SampleRate,
+}
+
+impl Iterator for PcmRingSource {
+    type Item = f32;
+
+    #[inline]
+    fn next(&mut self) -> Option<f32> {
+        match self.consumer.pop() {
+            Ok(sample) => Some(sample),
+            Err(_) => {
+                if self.finished.load(Ordering::Relaxed) {
+                    None     // stream terminado y buffer drenado → fin de Source
+                } else {
+                    Some(0.0) // underrun temporal → silencio sin cortar la cadena
+                }
+            }
+        }
+    }
+}
+
+impl Source for PcmRingSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None // continuo (rodio no puede optimizar chunks)
+    }
+    fn channels(&self) -> ChannelCount {
+        self.channels
+    }
+    fn sample_rate(&self) -> SampleRate {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None // duración desconocida (stream vivo)
+    }
+    fn try_seek(&mut self, _pos: Duration) -> Result<(), SeekError> {
+        Ok(()) // seek no aplicable a streams en vivo
     }
 }
 
@@ -4761,6 +4830,162 @@ fn main() {
                 // Saltamos el emit_status al final del bloque con continue.
                 continue 'main_loop;
             }
+            // ================================================================
+            // stream_start / stream_chunk / stream_stop — inyección PCM vivo
+            // ================================================================
+            // Permiten retransmitir una URL de radio (o cualquier fuente PCM
+            // externa) a través del program_mixer. El backend Node lanza FFmpeg
+            // apuntando a la URL, lee el stdout PCM s16le y lo envía en chunks
+            // base64 via `stream_chunk`. El audio fluye por el mismo camino DSP
+            // que cualquier pista local (EQ/Comp/Limiter → encoder tap).
+
+            "stream_start" => {
+                let bus_id = json_get_string(&line, "bus")
+                    .unwrap_or_else(|| "master".to_string());
+                let gain = json_get_f32(&line, "gain").unwrap_or(1.0);
+                let output_id = json_get_string(&line, "outputId")
+                    .unwrap_or_else(|| "default".to_string());
+                let channels_raw = json_get_u64(&line, "channels").unwrap_or(2) as u16;
+                let sample_rate_raw = json_get_u64(&line, "sampleRate").unwrap_or(44100) as u32;
+
+                // Garantizar program_mixer si el bus es de programa.
+                if is_program_bus(&bus_id) && state.program_mixer_input.is_none() {
+                    let master_out = state.routes.get("master")
+                        .map(|r| r.output_device_id.clone())
+                        .filter(|id| !id.trim().is_empty())
+                        .unwrap_or_else(|| output_id.clone());
+                    if let Err(err) = ensure_program_mixer(&mut state, &master_out) {
+                        emit_error(&err, &request_id);
+                        emit_status(&state, &request_id);
+                        continue 'main_loop;
+                    }
+                }
+
+                // Buffer de ~2 s para absorber jitter del IPC.
+                let capacity = (sample_rate_raw as usize) * (channels_raw as usize) * 2;
+                let (producer, consumer) = rtrb::RingBuffer::<f32>::new(capacity);
+                let finished = Arc::new(AtomicBool::new(false));
+
+                let source = PcmRingSource {
+                    consumer,
+                    finished: Arc::clone(&finished),
+                    channels: NonZeroU16::new(channels_raw.max(1)).unwrap(),
+                    sample_rate: NonZeroU32::new(sample_rate_raw.max(1)).unwrap(),
+                };
+
+                // Conectar al program_mixer o al sink directo.
+                let use_program_mixer = is_program_bus(&bus_id)
+                    && state.program_mixer_input.is_some();
+                let player = if use_program_mixer {
+                    let mixer = state.program_mixer_input.as_ref().unwrap().clone();
+                    Player::connect_new(&mixer)
+                } else {
+                    let resolved = resolve_output_for_bus(&state, &bus_id, &output_id);
+                    match state.outputs.get(&resolved) {
+                        Some(output) => Player::connect_new(output.sink.mixer()),
+                        None => {
+                            emit_error("stream_start: output no disponible.", &request_id);
+                            emit_status(&state, &request_id);
+                            continue 'main_loop;
+                        }
+                    }
+                };
+
+                player.set_volume(gain.clamp(0.0, 2.0));
+
+                let runtime = state.players.entry(player_id.clone()).or_default();
+                if let Some(old_player) = runtime.player.take() {
+                    old_player.stop();
+                }
+                // Limpiar stream anterior si existía en este player.
+                state.stream_producers.remove(&player_id);
+                if let Some(old_flag) = state.stream_finished_flags.remove(&player_id) {
+                    old_flag.store(true, Ordering::Relaxed);
+                }
+
+                let runtime = state.players.entry(player_id.clone()).or_default();
+                runtime.meter = Arc::new(PlayerMeter::default());
+                let metered = MeteredSource::new(source, Arc::clone(&runtime.meter));
+                player.append(metered);
+                runtime.state.path = format!("stream://{}", player_id);
+                runtime.state.status = "playing".to_string();
+                runtime.state.position_ms = 0;
+                runtime.state.duration_ms = 0; // duración desconocida
+                runtime.state.gain = gain.clamp(0.0, 2.0);
+                runtime.state.bus_id = bus_id.clone();
+                runtime.state.fade_active = false;
+                runtime.state.repeat_active = false;
+                runtime.player = Some(player);
+
+                state.stream_producers.insert(player_id.clone(), producer);
+                state.stream_finished_flags.insert(player_id.clone(), finished);
+
+                println!(
+                    "{{\"type\":\"stream_ready\",\"player\":\"{}\",\"updatedAt\":{}}}",
+                    player_id,
+                    now_ms()
+                );
+                let _ = io::stdout().flush();
+            }
+
+            "stream_chunk" => {
+                use base64::Engine;
+                let data_b64 = match json_get_string(&line, "data") {
+                    Some(d) => d,
+                    None => {
+                        // chunk sin datos: ignorar silenciosamente (no emitir error
+                        // para no saturar el log cuando hay underruns frecuentes).
+                        emit_status(&state, &request_id);
+                        continue 'main_loop;
+                    }
+                };
+
+                if let Some(producer) = state.stream_producers.get_mut(&player_id) {
+                    match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+                        Ok(bytes) => {
+                            let mut i = 0usize;
+                            while i + 1 < bytes.len() {
+                                let sample_i16 = i16::from_le_bytes([bytes[i], bytes[i + 1]]);
+                                let sample_f32 = sample_i16 as f32 / 32768.0;
+                                if producer.push(sample_f32).is_err() {
+                                    // Ring lleno (overrun): descartar el resto del chunk.
+                                    // El overrun en streams vivos es preferible al lag.
+                                    break;
+                                }
+                                i += 2;
+                            }
+                        }
+                        Err(_) => {
+                            // Base64 inválido: ignorar sin crashear (puede ocurrir en
+                            // el arranque/cierre del proceso FFmpeg).
+                        }
+                    }
+                }
+                // stream_chunk no emite status push (muy frecuente: 50/s).
+                continue 'main_loop;
+            }
+
+            "stream_stop" => {
+                // Señalar al PcmRingSource que ya no habrá más datos.
+                if let Some(finished) = state.stream_finished_flags.remove(&player_id) {
+                    finished.store(true, Ordering::Relaxed);
+                }
+                // Retirar el productor → ningún hilo puede escribir más.
+                state.stream_producers.remove(&player_id);
+
+                // Actualizar estado del player.
+                if let Some(runtime) = state.players.get_mut(&player_id) {
+                    runtime.state.status = "stopped".to_string();
+                }
+
+                println!(
+                    "{{\"type\":\"stream_stopped\",\"player\":\"{}\",\"updatedAt\":{}}}",
+                    player_id,
+                    now_ms()
+                );
+                let _ = io::stdout().flush();
+            }
+
             "" => emit_error("Comando sin campo cmd.", &request_id),
             other => emit_error(&format!("Comando no soportado: {}", other), &request_id),
         }

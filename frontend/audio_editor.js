@@ -1062,7 +1062,12 @@ window.addEventListener('blur', () => {
 // FIX BUG (resize en modo Rust): mismo motivo que el resizeObserver — la
 // guarda `if (audioBuffer)` era false porque el motor Rust hace el decode.
 window.addEventListener('resize', () => { if(waveformPeaks) drawWaveform(); });
-window.browsePisador = function(id) { const input = document.createElement('input'); input.type = 'file'; input.accept = 'audio/*'; input.onchange = e => { if(e.target.files.length > 0) document.getElementById(`file-${id}`).value = e.target.files[0].path; }; input.click(); };
+window.browsePisador = async function(id) {
+    const filePath = await ipcRenderer.invoke('dialog:openFile');
+    if (filePath) {
+        document.getElementById(`file-${id}`).value = filePath;
+    }
+};
 window.addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return; if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); togglePlay(); } });
 
 // Bug 4 fix: vincular el botón Play explícitamente con addEventListener

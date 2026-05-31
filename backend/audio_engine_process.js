@@ -205,10 +205,23 @@ class RustAudioEngineProbe {
 
     stop() {
         if (!this.process) return { success: true, stopped: false };
+        const pid = this.process.pid;
         try {
             this.stopping = true;
             this.process.kill();
         } catch (err) {}
+        // En Windows, kill() sólo envía TerminateProcess al proceso raíz.
+        // taskkill /F /T garantiza que el árbol completo (incluyendo hilos de
+        // audio WASAPI) cierre y libere la tarjeta de sonido antes de que una
+        // nueva instancia intente abrirla.
+        if (process.platform === 'win32' && pid) {
+            try {
+                require('child_process').execSync(
+                    `taskkill /F /T /PID ${pid}`,
+                    { windowsHide: true, timeout: 3000 }
+                );
+            } catch (_) {}
+        }
         this.logEvent('stop');
         this.process = null;
         this.readline = null;
@@ -338,6 +351,8 @@ class RustAudioEngineProbe {
         if (message.type === 'timeLocutionStarted') return null;
         if (message.type === 'playlistAction') return null;
         if (message.type === 'playlistModeChanged') return null;
+        if (message.type === 'stream_ready') return null;
+        if (message.type === 'stream_stopped') return null;
         const pending = this.pending.shift();
         if (pending?.requestId) this.pendingByRequestId.delete(pending.requestId);
         return pending || null;
@@ -350,6 +365,21 @@ class RustAudioEngineProbe {
             clearTimeout(pending.timeout);
             pending.resolve({ success: false, error });
         });
+    }
+
+    /**
+     * Escribe un comando en stdin del motor sin esperar respuesta (fire-and-forget).
+     * Uso típico: `stream_chunk` (alta frecuencia, ~50/s) donde Rust no emite reply.
+     * Devuelve true si se escribió, false si el motor no está corriendo.
+     */
+    send(command = {}) {
+        if (!this.isRunning()) return false;
+        try {
+            this.process.stdin.write(`${JSON.stringify(command)}\n`);
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     command(command = {}, timeoutMs = null) {

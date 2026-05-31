@@ -468,6 +468,7 @@
     </div>
 
     <div id="playlist-context-menu" class="context-menu" style="display: none;">
+        <div class="context-item" id="pm-stream-edit" style="display:none;">📡 Editar emisora... (Beta)</div>
         <div class="context-item" id="pm-preview">🔊 Escucha previa</div>
         <div class="context-separator"></div>
         <div class="context-item" id="pm-cut">Cortar</div>
@@ -757,6 +758,104 @@
                 <button id="wizard-btn-next" class="settings-btn" style="background: #00a8ff;">Siguiente</button>
                 <button id="wizard-btn-finish" class="settings-btn" style="background: #27ae60; display: none;">Cerrar</button>
             </div>
+        </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         Modal: Agregar URL de emisora de radio (stream_url)
+         Estética coherente con el encoder y el wizard de primer uso.
+         Se abre desde: Menú Lista → Agregar URL de emisora
+                        Menú contextual → Agregar URL de emisora aquí
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="add-stream-url-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center; flex-direction:column;">
+        <div style="background:#222225; border:1px solid #444; border-radius:8px; padding:24px; width:480px; max-width:95vw; box-shadow:0 12px 48px rgba(0,0,0,0.9); display:flex; flex-direction:column; gap:16px;">
+
+            <!-- Título -->
+            <div style="display:flex; align-items:center; gap:10px; border-bottom:1px solid #333; padding-bottom:12px;">
+                <span style="font-size:20px;">📡</span>
+                <div style="display: flex; flex-direction: column;">
+                    <span style="font-size:16px; font-weight:bold; color:#fff;">Agregar URL de emisora <span style="font-size:12px; font-weight:normal; color:#f39c12;">(Beta)</span></span>
+                    <span style="margin: 4px 0 0; color:#8f96a3; font-size: 12px;">En desarrollo, puede ser inestable.</span>
+                </div>
+                <span style="flex:1;"></span>
+                <button id="add-stream-close-btn" style="background:none; border:none; color:#888; font-size:18px; cursor:pointer; padding:0 4px;" title="Cerrar">✕</button>
+            </div>
+
+            <!-- URL -->
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12px; color:#aaa;">URL de la emisora</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input id="add-stream-url-input" type="text" placeholder="https://stream.ejemplo.com:8000/live"
+                        style="flex:1; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:8px 10px; font-size:13px; outline:none;">
+                    <button id="add-stream-detect-btn" class="settings-btn" style="white-space:nowrap; padding:6px 12px;">🔍 Detectar</button>
+                </div>
+                <div id="add-stream-detect-result" style="font-size:11px; color:#888; min-height:16px;"></div>
+            </div>
+
+            <!-- Nombre -->
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12px; color:#aaa;">Nombre en la playlist</label>
+                <input id="add-stream-name-input" type="text" placeholder="Nombre de la emisora"
+                    style="background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:8px 10px; font-size:13px; outline:none;">
+            </div>
+
+            <!-- Duración -->
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <label style="font-size:12px; color:#aaa;">Duración en playlist</label>
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="radio" name="stream-stop-policy" id="add-stream-policy-manual" value="manual" checked>
+                    <span style="font-size:13px; color:#ddd;">🔄 Indefinida <span style="color:#888; font-size:11px;">(avanza solo con "Siguiente")</span></span>
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="radio" name="stream-stop-policy" id="add-stream-policy-timer" value="timer">
+                    <span style="font-size:13px; color:#ddd;">⏱ Tiempo fijo:</span>
+                    <input id="add-stream-hours" type="number" min="0" max="23" value="0"
+                        style="width:48px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:4px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#888; font-size:12px;">h</span>
+                    <input id="add-stream-minutes" type="number" min="0" max="59" value="30"
+                        style="width:48px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:4px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#888; font-size:12px;">m</span>
+                    <input id="add-stream-seconds-field" type="number" min="0" max="59" value="0"
+                        style="width:48px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:4px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#888; font-size:12px;">s</span>
+                </label>
+            </div>
+
+            <!-- Modo de metadatos -->
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <label style="font-size:12px; color:#aaa;">Metadatos enviados al encoder y NowPlaying.txt</label>
+                <select id="add-stream-meta-mode"
+                    style="background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:7px 10px; font-size:13px; outline:none; cursor:pointer;">
+                    <option value="icy">📡 Metadatos de la emisora (StreamTitle en vivo)</option>
+                    <option value="station">🏷️ Solo el nombre de la emisora</option>
+                    <option value="custom">✏️ Texto personalizado...</option>
+                </select>
+                <input id="add-stream-meta-custom" type="text" placeholder="Texto fijo que se enviará al encoder"
+                    style="display:none; background:#111; color:#fff; border:1px solid #00a8ff; border-radius:4px; padding:7px 10px; font-size:13px; outline:none;">
+            </div>
+
+            <!-- Configuración avanzada -->
+            <div style="display:flex; gap:16px; align-items:center; background:#1a1a1c; border-radius:4px; padding:10px 12px;">
+                <span style="font-size:11px; color:#888;">⚙ Avanzado:</span>
+                <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
+                    Espera conexión
+                    <input id="add-stream-timeout" type="number" min="2" max="60" value="10"
+                        style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#666; font-size:11px;">s</span>
+                </label>
+                <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
+                    Máx. reintentos
+                    <input id="add-stream-retries" type="number" min="0" max="20" value="3"
+                        style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
+                </label>
+            </div>
+
+            <!-- Botones -->
+            <div style="display:flex; gap:10px; justify-content:flex-end; padding-top:4px; border-top:1px solid #333;">
+                <button id="add-stream-cancel-btn" class="settings-btn" style="background:#444;">Cancelar</button>
+                <button id="add-stream-ok-btn" class="settings-btn" style="background:#27ae60; font-weight:bold; padding:8px 20px;">📡 Agregar a la lista</button>
+            </div>
+
         </div>
     </div>
 

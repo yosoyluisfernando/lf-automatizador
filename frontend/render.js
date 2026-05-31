@@ -624,7 +624,14 @@ function serializePlaylistRow(row) {
         noteText: row.dataset.noteText || null,
         targetTab: Number.isInteger(parseInt(row.dataset.targetTab, 10)) ? parseInt(row.dataset.targetTab, 10) : null,
         eventId: row.dataset.eventId || null,
-        eventName: row.dataset.eventName || null
+        eventName: row.dataset.eventName || null,
+        // stream_url specific fields
+        stopPolicy: row.dataset.stopPolicy || null,
+        stopSeconds: row.dataset.stopSeconds ? parseInt(row.dataset.stopSeconds, 10) : null,
+        connectTimeoutSec: row.dataset.connectTimeoutSec ? parseInt(row.dataset.connectTimeoutSec, 10) : null,
+        maxRetries:        row.dataset.maxRetries ? parseInt(row.dataset.maxRetries, 10) : null,
+        metadataMode:      row.dataset.metadataMode || null,
+        customMetadata:    row.dataset.customMetadata || null,
     };
 }
 
@@ -803,6 +810,9 @@ function isPlaylistJumpRow(row) {
 
 function isPlaylistExecuteEventRow(row) {
     return !!row && (row.dataset.type || '') === 'execute_event';
+}
+function isStreamUrlRow(row) {
+    return !!row && (row.dataset.type || '') === 'stream_url';
 }
 
 function getNextPlaylistCandidate(row, allowLoop = false) {
@@ -1330,6 +1340,8 @@ function buildPlaybackGuardToken() {
 }
 
 function isPlaybackActuallyOnAir() {
+    // Un stream de URL activo cuenta como "en el aire" aunque el player HTML5 esté en pausa.
+    if (currentStreamId && currentPlayingRow && isStreamUrlRow(currentPlayingRow)) return true;
     return !!(currentPlayingRow && activePlayer && !isPlayerClockPaused(activePlayer) && !activePlayer.ended);
 }
 
@@ -2863,6 +2875,11 @@ function haltPlaybackOnFatalError(message, options = {}) {
 function runPlaybackGuard() {
     if (playbackHoldByUser || stopAfterCurrent || !currentPlayingRow || !isTrackReady) return;
     if (!document.body.contains(currentPlayingRow)) return;
+    // Los streams de URL van directo al motor Rust; el player HTML5 está pausa-
+    // do (currentTime=0). Sin este bypass la guarda malinterpreta el silencio
+    // del player como stall y llama triggerPlaybackGuardRecovery → reinicia el
+    // stream o, si falla, deja la app en Stop.
+    if (currentStreamId && isStreamUrlRow(currentPlayingRow)) return;
 
     const token = buildPlaybackGuardToken();
     const now = Date.now();
@@ -3325,6 +3342,16 @@ const explorerContainer = document.getElementById('file-explorer');
 
 let currentPlayingRow = null;
 let queuedNextRow = null;
+// ── Stream URL (retransmisión de emisoras) ────────────────────────────────
+let currentStreamId = null;         // streamId activo devuelto por 'stream-url-start'
+let streamStopTimer = null;         // timer de stop automático (stopPolicy='timer')
+let currentStreamIcyTitle = '';     // último StreamTitle ICY recibido ('' = ninguno aún)
+let streamElapsedTimer = null;      // setInterval del reloj transcurrido/restante
+let streamLiveStartAt = 0;          // Date.now() cuando el stream pasó a 'live'
+let streamTimerStopSecs = 0;        // stopSeconds del stream activo (0 = indefinido)
+let streamMetaMode = 'icy';         // 'icy'|'station'|'custom' del stream activo
+let streamCustomMeta = '';          // texto fijo si metaMode='custom'
+const STREAM_LIVE_PLAYER_ID = 'stream-live'; // ID del player Rust para streams
 let rustPlaylistAutoMixPendingUntil = 0;
 let currentDuration = 0;
 let trackStartTime = null;
@@ -3797,16 +3824,23 @@ function applyMenuLogic() {
 function positionSubmenu(parentItem, submenu) { submenu.style.visibility = 'hidden'; submenu.style.display = 'block'; const rect = parentItem.getBoundingClientRect(); const subRect = submenu.getBoundingClientRect(); if (rect.right + subRect.width > window.innerWidth) { submenu.style.left = 'auto'; submenu.style.right = '100%'; } else { submenu.style.left = '100%'; submenu.style.right = 'auto'; } if (rect.top + subRect.height > window.innerHeight) { submenu.style.top = 'auto'; submenu.style.bottom = '0'; } else { submenu.style.top = '0'; submenu.style.bottom = 'auto'; } submenu.style.display = ''; submenu.style.visibility = ''; }
 
 function setPlaylistContextMenuMode(mode) {
-    const menuItemIds = ['pm-preview', 'pm-copy', 'pm-cut', 'pm-paste', 'pm-tools', 'pm-toggle-temp', 'pm-shuffle', 'pm-set-next', 'pm-clear', 'pm-delete'];
+    const menuItemIds = ['pm-stream-edit', 'pm-preview', 'pm-copy', 'pm-cut', 'pm-paste', 'pm-tools', 'pm-toggle-temp', 'pm-shuffle', 'pm-set-next', 'pm-clear', 'pm-delete'];
     let enabledIds = menuItemIds;
     if (mode === 'empty') {
         enabledIds = ['pm-paste', 'pm-shuffle', 'pm-clear'];
     } else if (mode === 'note') {
         enabledIds = ['pm-paste', 'pm-clear', 'pm-delete'];
+    } else if (mode === 'stream') {
+        enabledIds = ['pm-stream-edit', 'pm-copy', 'pm-cut', 'pm-paste', 'pm-toggle-temp', 'pm-set-next', 'pm-clear', 'pm-delete'];
     }
     menuItemIds.forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.classList.toggle('context-disabled', !enabledIds.includes(id));
+        if (!el) return;
+        // pm-stream-edit: visible solo en modo stream
+        if (id === 'pm-stream-edit') {
+            el.style.display = mode === 'stream' ? '' : 'none';
+        }
+        el.classList.toggle('context-disabled', !enabledIds.includes(id));
     });
 }
 
@@ -3878,7 +3912,7 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
     const normalizedRows = rawRows.map(item => normalizePlaylistItem(item));
     const rows = normalizedRows.filter(item => item.ruta);
     const playableRows = rows.filter(item => item.type === 'normal' || item.type === 'random');
-    const missingRows = playableRows.filter(item => !fs.existsSync(item.ruta));
+    const missingRows = playableRows.filter(item => item.type !== 'stream_url' && !fs.existsSync(item.ruta));
 
     if (!rows.length) {
         logSystem(`[PLAYLIST] No se insertaron pistas: ${rawRows.length} entrada(s), 0 ruta(s) reconocible(s).`);
@@ -3913,6 +3947,22 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                     if (lastInsertedRow && rowType === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) lastInsertedRow.dataset.targetTab = parseInt(item.targetTab, 10);
                     if (lastInsertedRow && rowType === 'note' && item.noteText) lastInsertedRow.dataset.noteText = item.noteText;
                     if (lastInsertedRow && rowType === 'execute_event') { lastInsertedRow.dataset.eventId = item.eventId || item.ruta || ''; lastInsertedRow.dataset.eventName = item.eventName || item.titulo || ''; }
+                    if (lastInsertedRow && rowType === 'stream_url') {
+                        if (item.stopPolicy) lastInsertedRow.dataset.stopPolicy = item.stopPolicy;
+                        if (item.stopSeconds != null) lastInsertedRow.dataset.stopSeconds = String(parseInt(item.stopSeconds, 10) || 0);
+                        if (item.connectTimeoutSec != null) lastInsertedRow.dataset.connectTimeoutSec = String(parseInt(item.connectTimeoutSec, 10) || 5);
+                        if (item.maxRetries != null)        lastInsertedRow.dataset.maxRetries        = String(parseInt(item.maxRetries, 10) || 3);
+                        if (item.metadataMode)   lastInsertedRow.dataset.metadataMode   = item.metadataMode;
+                        if (item.customMetadata) lastInsertedRow.dataset.customMetadata = item.customMetadata;
+                        // Recalcular la celda de duración (se generó con el default '∞' antes de conocer stopPolicy).
+                        const _secs = parseInt(lastInsertedRow.dataset.stopSeconds, 10) || 0;
+                        const _hasTimer = lastInsertedRow.dataset.stopPolicy === 'timer' && _secs > 0;
+                        if (lastInsertedRow.children[2]) {
+                            lastInsertedRow.children[2].innerText = _hasTimer
+                                ? `${Math.floor(_secs/3600).toString().padStart(2,'0')}:${Math.floor((_secs%3600)/60).toString().padStart(2,'0')}:${(_secs%60).toString().padStart(2,'0')}`
+                                : '∞';
+                        }
+                    }
                 }
                 if (lastInsertedRow && item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
                 if (lastInsertedRow && (item.temp || /^[\u23f3\u231b]/.test(item.titulo || ''))) lastInsertedRow.dataset.temp = 'true';
@@ -3958,7 +4008,13 @@ function normalizePlaylistItem(item = {}) {
         noteText: item.noteText || item.NoteText || item.nota || item.Nota || null,
         targetTab: Number.isInteger(parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10)) ? parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10) : null,
         eventId: item.eventId || item.EventId || item.eventID || item.idEvento || item.IdEvento || null,
-        eventName: item.eventName || item.EventName || item.nombreEvento || item.NombreEvento || null
+        eventName: item.eventName || item.EventName || item.nombreEvento || item.NombreEvento || null,
+        stopPolicy: item.stopPolicy || item.StopPolicy || null,
+        stopSeconds: item.stopSeconds != null ? parseInt(item.stopSeconds, 10) : null,
+        connectTimeoutSec: item.connectTimeoutSec != null ? parseInt(item.connectTimeoutSec, 10) : null,
+        maxRetries:        item.maxRetries != null ? parseInt(item.maxRetries, 10) : null,
+        metadataMode:      item.metadataMode || null,
+        customMetadata:    item.customMetadata || null,
     };
 }
 
@@ -4801,7 +4857,10 @@ function resolvePriorityNextRow(candidate) {
     if (naturalNext === candidate) return candidate;
 
     if (candidate && candidate.closest('tbody') === currentPlayingRow.closest('tbody') && !isRowAfterAnchor(candidate, currentPlayingRow)) {
-        if (candidate.dataset.manualNext === "true") return candidate;
+        if (candidate.dataset.manualNext === "true") {
+            if (naturalNext.dataset.eventId && getPlaylistRowEventRank(naturalNext) >= 3) return naturalNext;
+            return candidate;
+        }
         return resolveNextOperationalRow(naturalNext, false);
     }
 
@@ -5512,6 +5571,30 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         }
     }
 
+    // ── stream_url: emisora de radio en vivo ──────────────────────────────
+    if (type === 'stream_url') {
+        tr.style.backgroundColor = 'rgba(231, 76, 60, 0.10)';
+        tr.style.color = '#e74c3c';
+        tr.style.fontWeight = 'bold';
+        // stopPolicy y stopSeconds pueden llegar en el nombre codificado o en dataset
+        if (!tr.dataset.stopPolicy) tr.dataset.stopPolicy = 'manual';
+        if (!tr.dataset.stopSeconds) tr.dataset.stopSeconds = '0';
+        const hasTimer = tr.dataset.stopPolicy === 'timer' && parseInt(tr.dataset.stopSeconds, 10) > 0;
+        if (hasTimer) {
+            const secs = parseInt(tr.dataset.stopSeconds, 10);
+            const hh = Math.floor(secs / 3600).toString().padStart(2, '0');
+            const mm = Math.floor((secs % 3600) / 60).toString().padStart(2, '0');
+            const ss = (secs % 60).toString().padStart(2, '0');
+            duracionStr = `${hh}:${mm}:${ss}`;
+        } else {
+            duracionStr = '∞';
+        }
+        introTxt = '—';
+        outroTxt = '—';
+        // Prefijo visual de antena
+        if (!String(displayedName).startsWith('📡')) displayedName = '📡 ' + displayedName;
+        tr.dataset.pureName = displayedName;
+    }
     tr.innerHTML = '<td>--:--:--</td><td style="font-weight:bold;">' + displayedName + '</td><td>' + duracionStr + '</td><td>' + introTxt + '</td><td>' + outroTxt + '</td>';
     normalizeTimeLocutionRow(tr);
 
@@ -5677,7 +5760,7 @@ if (playlistSection) {
         fileTypesData.forEach(t => { const isChecked = (explicitId === t.id); const div = document.createElement('div'); div.className = 'context-item'; div.innerHTML = `${isChecked ? '✓ ' : '&nbsp;&nbsp;&nbsp;'} ${t.name}`; div.style.color = t.color; div.onclick = () => window.setExplicitType(t.id); typeMenu.appendChild(div); });
 
 
-        setPlaylistContextMenuMode(tr.dataset.type === 'note' ? 'note' : 'row');
+        setPlaylistContextMenuMode(tr.dataset.type === 'note' ? 'note' : tr.dataset.type === 'stream_url' ? 'stream' : 'row');
 
         showContextMenu(playlistContextMenu, e.pageX, e.pageY);
         applyMenuLogic();
@@ -5697,6 +5780,47 @@ document.getElementById('pm-paste').addEventListener('click', () => { if (clipbo
 document.getElementById('pm-delete').addEventListener('click', () => { document.querySelectorAll('.selected-row').forEach(tr => { if (tr === queuedNextRow) queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, false); tr.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); hideAllMenus(); });
 document.getElementById('pm-clear').addEventListener('click', () => { handleClearPlaylist(); hideAllMenus(); });
 document.getElementById('pm-preview').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-preview', rightClickedRow.dataset.ruta); hideAllMenus(); });
+
+// Editar emisora de radio (solo activo para stream_url)
+document.getElementById('pm-stream-edit').addEventListener('click', () => {
+    if (!rightClickedRow || !isStreamUrlRow(rightClickedRow)) { hideAllMenus(); return; }
+    const tr = rightClickedRow;
+    const prefill = {
+        url:              tr.dataset.ruta || '',
+        name:             (tr.dataset.pureName || '').replace(/^📡\s*/, '').trim(),
+        stopPolicy:       tr.dataset.stopPolicy || 'manual',
+        stopSeconds:      parseInt(tr.dataset.stopSeconds, 10) || 0,
+        connectTimeoutSec: parseInt(tr.dataset.connectTimeoutSec, 10) || 5,
+        maxRetries:       parseInt(tr.dataset.maxRetries, 10) || 3,
+    };
+    hideAllMenus();
+    // Abrimos el modal pre-llenado. Al confirmar, actualizamos la fila.
+    if (typeof window.openAddStreamUrlModal === 'function') {
+        window.openAddStreamUrlModal(tr, prefill, (updated) => {
+            // Callback de confirmación: actualizar los dataset de la fila existente
+            const newName = '📡 ' + updated.displayName;
+            tr.dataset.ruta             = updated.url;
+            tr.dataset.pureName         = newName;
+            tr.dataset.stopPolicy       = updated.stopPolicy;
+            tr.dataset.stopSeconds      = String(updated.stopSeconds);
+            tr.dataset.connectTimeoutSec = String(updated.connectTimeoutSec);
+            tr.dataset.maxRetries       = String(updated.maxRetries);
+            tr.dataset.metadataMode     = updated.metadataMode || 'icy';
+            tr.dataset.customMetadata   = updated.customMetadata || '';
+            if (tr.children[1]) tr.children[1].innerText = newName;
+            // Recalcular duración mostrada
+            if (updated.stopPolicy === 'timer' && updated.stopSeconds > 0) {
+                const s = updated.stopSeconds;
+                const durStr = `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+                if (tr.children[2]) tr.children[2].innerText = durStr;
+            } else {
+                if (tr.children[2]) tr.children[2].innerText = '∞';
+            }
+            calcularHorasPlaylist();
+            saveSessionSnapshot();
+        });
+    }
+});
 
 document.getElementById('pm-edit-name').addEventListener('click', () => {
     if (!rightClickedRow) return;
@@ -5833,6 +5957,7 @@ function getPlaylistRowColor(rowOrType, ruta = '') {
         return getLocutionTypeData()?.color || '#2ecc71';
     }
     if (type === 'random') return '#f39c12';
+    if (type === 'stream_url') return '#e74c3c';
     const typeData = getTrackTypeData(filePath);
     return typeData ? typeData.color : '#e0e0e0';
 }
@@ -8321,6 +8446,58 @@ let lastOverlayTriggerInfo = null;
 const rustPlaylistPreDuckingGains = new Map();
 const rustOverlayRuntimes = new Map();
 
+// Caché síncrono de duraciones de archivos de pisador. Se precalienta al
+// iniciar cada pista (precachePisadorDurations) para que handleTimeUpdate
+// pueda consultar la duración sin await y calcular correctamente el modo
+// "Termina en" (el pisador debe arrancar N segundos antes de la marca).
+const overlayDurationCache = new Map();
+
+async function resolveOverlayFileDuration(filePath) {
+    if (!filePath) return 0;
+    try {
+        if (!fs.existsSync(filePath)) return 0;
+        let targetPath = filePath;
+        if (fs.statSync(filePath).isDirectory()) {
+            const files = fs.readdirSync(filePath).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f));
+            if (files.length > 0) targetPath = path.join(filePath, files[0]);
+            else return 0;
+        }
+        return await getAudioDuration(targetPath);
+    } catch (e) {
+        return 0;
+    }
+}
+
+async function precachePisadorDurations(mc) {
+    if (!mc) return;
+    // P1, P2, P3: obtener duración real del archivo de audio del pisador
+    for (let i = 1; i <= 3; i++) {
+        const file = mc[`p${i}_file`];
+        if (mc[`p${i}_active`] && file) {
+            try {
+                const dur = await resolveOverlayFileDuration(file);
+                if (dur > 0) overlayDurationCache.set(file, dur);
+            } catch (e) {}
+        }
+    }
+    // Phora: estimar duración sumando los archivos de la locución horaria
+    // actual (hora + minuto). Si no se puede resolver, se usa 5s de fallback.
+    if (mc.phora_active && mc.phora_time) {
+        try {
+            const folder = generalPrefs.timeFolder;
+            const files = resolveTimeLocutionFiles(folder);
+            let totalDur = 0;
+            for (const f of files) {
+                const dur = await getAudioDuration(f);
+                if (dur > 0) totalDur += dur;
+            }
+            overlayDurationCache.set('__phora__', totalDur > 0 ? totalDur : 5);
+        } catch (e) {
+            overlayDurationCache.set('__phora__', 5);
+        }
+    }
+}
+
 function applyRustPlaylistDucking() {
     if (!isRustPlaylistOwnerActive()) return;
     const duckGain = Math.max(0, Math.min(1, (parseInt(generalPrefs.duckingVolume, 10) || 20) / 100));
@@ -8730,7 +8907,8 @@ function handleTimeUpdate(player) {
                     const trigger = resolveTimedOverlayTrigger({
                         markerTime: mc[`p${i}_time`],
                         mode: mc[`p${i}_mode`] || 'start',
-                        startOffset
+                        startOffset,
+                        estimatedDuration: overlayDurationCache.get(mc[`p${i}_file`]) || 0
                     });
                     if (trigger) {
                         const { marker, triggerTime, adjustedMode } = trigger;
@@ -8755,7 +8933,7 @@ function handleTimeUpdate(player) {
                     markerTime: mc.phora_time,
                     mode: mc.phora_mode || 'start',
                     startOffset,
-                    estimatedDuration: 5
+                    estimatedDuration: overlayDurationCache.get('__phora__') || 5
                 });
                 if (trigger) {
                     const { marker, triggerTime, adjustedMode } = trigger;
@@ -8827,6 +9005,18 @@ function visualTimeLoop(now = 0) {
     if (activePlayer && !isPlayerClockPaused(activePlayer) && (now - lastTimeUiRenderAt) >= TIME_UI_FRAME_INTERVAL_MS) {
         lastTimeUiRenderAt = now;
         handleTimeUpdate(activePlayer);
+    } else if (currentStreamId && streamLiveStartAt > 0 && (now - lastTimeUiRenderAt) >= TIME_UI_FRAME_INTERVAL_MS) {
+        // Stream activo: actualizar reloj con la misma precisión que pistas normales
+        lastTimeUiRenderAt = now;
+        const elapsed = (Date.now() - streamLiveStartAt) / 1000;
+        const displayTime = (streamTimerStopSecs > 0)
+            ? Math.max(0, streamTimerStopSecs - elapsed)
+            : elapsed;
+        const m  = Math.floor(displayTime / 60).toString().padStart(2, '0');
+        const s  = Math.floor(displayTime % 60).toString().padStart(2, '0');
+        const ms = Math.floor((displayTime % 1) * 10);
+        const txtT = document.getElementById('txt-tiempo');
+        if (txtT) txtT.innerText = `${m}:${s}.${ms}`;
     }
     requestAnimationFrame(visualTimeLoop);
 }
@@ -9817,6 +10007,21 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         executeEventCommandRow(tr);
         return;
     }
+    if (isStreamUrlRow(tr)) {
+        executeStreamUrlRow(tr, isAutoMix, forcedFadeOutSeconds);
+        return;
+    }
+    // Si había un stream activo y ahora se reproduce una pista normal, detenerlo.
+    if (currentStreamId) {
+        stopActiveStream();
+        // El stream usaba el deck 'stream-live' (separado de los decks de
+        // playlist pl1-pl4). La guarda que activó executeStreamUrlRow vía
+        // sendRustOwnerStopAll no tiene sentido aquí: los decks de playlist ya
+        // estaban detenidos antes del stream. Limpiarla evita que
+        // syncRustPlaylistControlPlane quede bloqueada innecesariamente hasta
+        // 1.5 s mientras la pista nueva intenta sincronizarse.
+        rustPlaylistStopGuardUntil = 0;
+    }
     const outgoingTrackConfig = currentTrackConfig;
     const forceFollowView = options.forceFollowView === true || tr.dataset.forceFollowView === 'true';
     delete tr.dataset.forceFollowView;
@@ -9950,6 +10155,9 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             }
         }
         currentStartTimeOffset = 0; currentFiredDrops = []; lastOverlayEvalSessionId = currentSessionId; lastOverlayEvalElapsed = 0; let manualFin = null;
+        // Precalentar duraciones de pisadores para que "Termina en" funcione
+        overlayDurationCache.clear();
+        if (manualCuesDB[tr.dataset.ruta]) precachePisadorDurations(manualCuesDB[tr.dataset.ruta]);
         const savedResumeStart = parseFloat(tr.dataset.resumeStart || '');
         const resumeStart = type === 'normal' && Number.isFinite(savedResumeStart) && savedResumeStart > 0.25 ? savedResumeStart : null;
         delete tr.dataset.resumeStart;
@@ -10773,6 +10981,171 @@ async function executeEventCommandRow(commandRow) {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Stream URL — retransmisión de emisoras de radio en vivo
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Detiene cualquier stream activo (tanto el proceso FFmpeg via IPC como el
+ * timer de stop automático). Limpia `currentStreamId` y `streamStopTimer`.
+ */
+function stopActiveStream() {
+    if (streamStopTimer) { clearTimeout(streamStopTimer); streamStopTimer = null; }
+    const connectTimeoutId = parseInt(currentPlayingRow?.dataset?._streamConnectTimeoutId, 10);
+    if (connectTimeoutId) {
+        clearTimeout(connectTimeoutId);
+        delete currentPlayingRow.dataset._streamConnectTimeoutId;
+    }
+    if (currentStreamId) {
+        ipcRenderer.invoke('stream-url-stop', { streamId: currentStreamId }).catch(() => {});
+        currentStreamId = null;
+    }
+    currentStreamIcyTitle = '';
+    streamLiveStartAt = 0;
+    streamTimerStopSecs = 0;
+    streamMetaMode = 'icy';
+    streamCustomMeta = '';
+    // Resetear reloj visual
+    try {
+        const txtT = document.getElementById('txt-tiempo');
+        if (txtT) { txtT.innerText = '00:00.0'; txtT.classList.remove('time-warning-blue','time-warning-red','time-flash'); }
+        const lblT = document.getElementById('lbl-tiempo');
+        if (lblT) lblT.innerText = uiPrefs?.showRemainingTime ? 'Tiempo restante' : 'Tiempo transcurrido';
+    } catch (_) {}
+}
+
+function playNextAfterFailedStream(tr) {
+    if (!queuedNextRow || queuedNextRow === tr) {
+        const nextRow = resolveNextOperationalRow(tr.nextElementSibling, generalPrefs.modeLoopPlaylist);
+        queuedNextRow = nextRow && nextRow !== tr ? nextRow : null;
+    }
+    if (currentPlayingRow === tr) {
+        currentPlayingRow = null;
+        tr.classList.remove('row-active');
+    }
+    if (queuedNextRow) playNext(false);
+    else stopAll();
+}
+
+/**
+ * Ejecuta una fila de tipo `stream_url` como si fuera una pista de la playlist.
+ * Conecta el stream a través del motor Rust (program bus) para que el encoder
+ * lo capture automáticamente.
+ */
+async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds = 0) {
+    stopActiveStream();
+
+    const url = tr.dataset.ruta || '';
+    const displayName = (tr.dataset.pureName || '').replace(/^📡\s*/, '').trim() || url;
+    const stopPolicy        = tr.dataset.stopPolicy || 'manual';
+    const stopSeconds       = parseInt(tr.dataset.stopSeconds, 10) || 0;
+    const connectTimeoutSec = Math.max(2, parseInt(tr.dataset.connectTimeoutSec, 10) || 10);
+    const maxRetries        = Math.max(0, parseInt(tr.dataset.maxRetries, 10) || 3);
+    const metaMode          = tr.dataset.metadataMode || 'icy';
+    const customMeta        = tr.dataset.customMetadata || displayName;
+
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+        recordIncident(`[STREAM] URL inválida: ${url}`, { category: 'air', level: 'error', autoAction: false });
+        playNextAfterFailedStream(tr);
+        return;
+    }
+
+    // ── Detener el deck Rust anterior para evitar que su evento 'ended'
+    //    dispare un playNext() mientras el stream se está conectando. ──────
+    crossfadeTriggered = true;          // bloquea handleEnded en el player viejo
+    crossfadeTriggeredForRow = currentPlayingRow;
+    sendRustOwnerStopAll({ fadeSeconds: 0.3 });
+    try { playerA.pause(); playerA.currentTime = 0; clearPlayerPlaybackMeta(playerA); } catch (_) {}
+    try { playerB.pause(); playerB.currentTime = 0; clearPlayerPlaybackMeta(playerB); } catch (_) {}
+
+    // ── Marcar fila como activa ────────────────────────────────────────────
+    if (currentPlayingRow && currentPlayingRow !== tr) {
+        if (currentPlayingRow.dataset.temp === 'true') currentPlayingRow.remove();
+        else currentPlayingRow.classList.remove('row-active');
+    }
+    currentPlayingRow = tr;
+    tr.classList.add('row-active');
+    tr.classList.remove('row-next');
+    trackStartTime = Date.now();
+    isTrackReady = false; // bloquea playbackGuard durante la conexión
+
+    // ── UI ─────────────────────────────────────────────────────────────────
+    try {
+        const titleEl = document.getElementById('txt-cancion');
+        if (titleEl) titleEl.innerText = `📡 ${displayName} — conectando…`;
+        document.getElementById('barra-progreso').style.width = '0%';
+        const txtT = document.getElementById('txt-tiempo');
+        if (txtT) { txtT.innerText = '00:00.0'; txtT.classList.remove('time-warning-blue','time-warning-red','time-flash'); }
+    } catch (_) {}
+
+    logSystem(`[AIRE] Iniciando retransmisión: ${displayName} — timeout ${connectTimeoutSec}s, reintentos ${maxRetries}`);
+
+    let result;
+    try {
+        result = await ipcRenderer.invoke('stream-url-start', {
+            url,
+            playerId: STREAM_LIVE_PLAYER_ID,
+            displayName,
+            maxRetries
+        });
+    } catch (err) {
+        recordIncident(`[STREAM] Error IPC: ${err.message || err}`, { category: 'air', level: 'error', autoAction: false });
+        if (currentPlayingRow === tr) playNextAfterFailedStream(tr);
+        return;
+    }
+
+    if (!result?.success) {
+        recordIncident(`[STREAM] No se pudo iniciar: ${result?.error || 'desconocido'}`, { category: 'air', level: 'error', autoAction: false });
+        if (currentPlayingRow === tr) playNextAfterFailedStream(tr);
+        return;
+    }
+
+    // Guard post-await: si durante el invoke el usuario avanzó a otra pista
+    // (currentPlayingRow ya no apunta a esta fila), abortar el stream que
+    // acaba de crearse en el backend para evitar audio fantasma.
+    if (currentPlayingRow !== tr) {
+        ipcRenderer.invoke('stream-url-stop', { streamId: result.streamId }).catch(() => {});
+        return;
+    }
+
+    currentStreamId = result.streamId;
+    streamMetaMode  = metaMode;
+    streamCustomMeta = customMeta;
+    streamTimerStopSecs = stopSeconds;
+    // Enviar metadata inicial según modo
+    const initialMeta = metaMode === 'custom' ? customMeta : displayName;
+    try { ipcRenderer.send('update-metadata', initialMeta); } catch (_) {}
+
+    // ── Timeout de conexión: si no llega 'live' en connectTimeoutSec → avanzar
+    const connectTimeout = setTimeout(() => {
+        if (currentStreamId !== result.streamId) return;
+        if (currentPlayingRow !== tr) return;
+        recordIncident(`[STREAM] Sin respuesta en ${connectTimeoutSec}s. Avanzando.`, { category: 'air', level: 'warn', autoAction: true });
+        stopActiveStream();
+        // NO limpiar currentPlayingRow aquí: playNext() lo usa para calcular
+        // la siguiente fila con nextElementSibling; playRow() lo limpia al avanzar.
+        tr.classList.remove('row-active');
+        playNext(false);
+    }, connectTimeoutSec * 1000);
+
+    // El listener 'stream-status → live' cancela el timeout (ver al final del archivo)
+    tr.dataset._streamConnectTimeoutId = String(connectTimeout);
+
+    // ── Timer de duración fija (stopPolicy = 'timer') ─────────────────────
+    if (stopPolicy === 'timer' && stopSeconds > 0) {
+        streamStopTimer = setTimeout(() => {
+            if (currentPlayingRow !== tr) return;
+            logSystem(`[STREAM] Tiempo agotado (${stopSeconds}s). Avanzando.`);
+            stopActiveStream();
+            tr.classList.remove('row-active');
+            playNext(false); // playRow limpia currentPlayingRow al avanzar
+        }, stopSeconds * 1000);
+    }
+
+    updateNextTrackVisuals();
+    saveSessionSnapshot();
+}
+
 function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
     // Defensa: si un crossfade anterior dejó este flag stuck (porque playRow
     // fallo antes de poder resetearlo en su try), aquí lo limpiamos antes
@@ -10803,17 +11176,20 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
         // Si el loop está desactivado, rechazar queuedNextRow si apunta hacia atrás en la
         // lista (pointer residual de cuando el loop estaba activo). Cubre la race condition
         // donde el reloj virtual llama playNext() antes de que el clic procese la limpieza.
-        const isStaleLoopPointer = !generalPrefs.modeLoopPlaylist
+        const isStaleLoopPointer = queuedNextRow === currentPlayingRow
+            || (!generalPrefs.modeLoopPlaylist
             && currentPlayingRow
             && document.body.contains(currentPlayingRow)
             && queuedNextRow.closest('tbody') === currentPlayingRow.closest('tbody')
-            && !isRowAfterAnchor(queuedNextRow, currentPlayingRow);
+            && queuedNextRow.dataset.manualNext !== "true"
+            && !isRowAfterAnchor(queuedNextRow, currentPlayingRow));
         if (!isStaleLoopPointer) {
             target = queuedNextRow;
         }
-    } else if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
+    }
+    if (!target && currentPlayingRow && document.body.contains(currentPlayingRow)) {
         target = currentPlayingRow.nextElementSibling;
-    } else {
+    } else if (!target) {
         target = tbodys[pgmTab].firstElementChild;
     }
     target = resolvePriorityNextRow(resolveNextOperationalRow(target, generalPrefs.modeLoopPlaylist));
@@ -10844,6 +11220,8 @@ function stopAll() {
             ? resolveNextOperationalRow(currentPlayingRow.nextElementSibling, generalPrefs.modeLoopPlaylist)
             : null);
     try { ipcRenderer.send('emergency-stop-playback'); } catch (err) { }
+    // Detener stream de retransmisión si hay uno activo.
+    stopActiveStream();
     // Asegurarse de detener también cualquier locución horaria activa en Rust.
     if (rustTimeLocutionContext) {
         stopActiveRustTimeLocution();
@@ -12466,6 +12844,282 @@ if (document.readyState === 'loading') {
 } else {
     initSidebarResizer();
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// IPC listeners — retransmisión de emisoras (stream_url)
+// ════════════════════════════════════════════════════════════════════════════
+
+ipcRenderer.on('stream-status', (_e, { streamId, playerId, status, displayName } = {}) => {
+    if (streamId !== currentStreamId) return;
+    const name = displayName || '';
+    logSystem(`[STREAM] ${name || playerId}: ${status}`);
+
+    if (currentPlayingRow && isStreamUrlRow(currentPlayingRow)) {
+        if (status === 'live') {
+            // ── Conexión exitosa: cancelar timeout y habilitar el guard ────
+            const tid = parseInt(currentPlayingRow.dataset._streamConnectTimeoutId, 10);
+            if (tid) { clearTimeout(tid); delete currentPlayingRow.dataset._streamConnectTimeoutId; }
+            isTrackReady = true;
+            crossfadeTriggered = false;
+            crossfadeTriggeredForRow = null;
+            resetPlaybackGuard();
+            // Solo actualizar el título si NO llegó un ICY title todavía (o si el
+            // modo no es 'icy', en cuyo caso el ICY title no se usa para la UI).
+            try {
+                const titleEl = document.getElementById('txt-cancion');
+                if (titleEl) {
+                    if (streamMetaMode === 'custom') {
+                        titleEl.innerText = `📡 ${streamCustomMeta || name}`;
+                    } else if (streamMetaMode === 'station' || !currentStreamIcyTitle) {
+                        titleEl.innerText = `📡 ${name || playerId}`;
+                    }
+                    // Si metaMode='icy' y ya hay ICY title, no sobreescribir
+                }
+            } catch (_) {}
+            // Enviar metadata al encoder según modo (solo si no hay ICY title previo en modo 'icy')
+            if (streamMetaMode === 'custom') {
+                try { ipcRenderer.send('update-metadata', streamCustomMeta || name); } catch (_) {}
+            } else if (streamMetaMode === 'station') {
+                try { ipcRenderer.send('update-metadata', name || playerId); } catch (_) {}
+            } else if (!currentStreamIcyTitle) {
+                // 'icy' mode pero aún sin título → enviar nombre de emisora
+                try { ipcRenderer.send('update-metadata', name || playerId); } catch (_) {}
+            }
+            currentPlayingRow.style.backgroundColor = 'rgba(231, 76, 60, 0.22)';
+            // ── Reloj elapsed/restante (actualizado por visualTimeLoop vía rAF) ──
+            streamLiveStartAt = Date.now();
+            const lblT = document.getElementById('lbl-tiempo');
+            if (lblT) lblT.innerText = (streamTimerStopSecs > 0) ? 'Tiempo restante' : 'Tiempo transcurrido';
+            // Hora de fin si hay timer
+            if (streamTimerStopSecs > 0) {
+                try {
+                    const endTime = new Date(streamLiveStartAt + streamTimerStopSecs * 1000);
+                    const acabaEl = document.getElementById('txt-acaba');
+                    if (acabaEl) acabaEl.innerText = endTime.toLocaleTimeString('es-PE', { hour12: false });
+                } catch (_) {}
+            }
+
+        } else if (status === 'reconnecting') {
+            isTrackReady = false; // bloquear guard durante reconexión
+            currentPlayingRow.style.backgroundColor = 'rgba(243, 156, 18, 0.15)';
+            try {
+                const titleEl = document.getElementById('txt-cancion');
+                if (titleEl) titleEl.innerText = `📡 ${name || playerId} — reconectando…`;
+            } catch (_) {}
+
+        } else if (status === 'error' || status === 'max-retries') {
+            currentPlayingRow.style.backgroundColor = 'rgba(231, 76, 60, 0.05)';
+            const msg = status === 'max-retries'
+                ? `[STREAM] Máx. reintentos alcanzados en "${name}". Avanzando.`
+                : `[STREAM] Error irrecuperable en "${name}". Avanzando.`;
+            recordIncident(msg, { category: 'air', level: 'error', autoAction: true });
+            // Avanzar a la siguiente pista
+            const failedRow = currentPlayingRow;
+            stopActiveStream();
+            if (currentPlayingRow === failedRow) {
+                failedRow.classList.remove('row-active');
+                playNext(false); // playRow limpia currentPlayingRow al avanzar
+            }
+        }
+    }
+});
+
+ipcRenderer.on('stream-icy-title', (_e, { streamId, title } = {}) => {
+    if (streamId !== currentStreamId) return;
+    if (!title) return;
+    currentStreamIcyTitle = title; // recordar para que 'live' no sobreescriba
+
+    // En modo 'station' o 'custom', los ICY titles no afectan la UI ni el encoder
+    if (streamMetaMode === 'station' || streamMetaMode === 'custom') return;
+
+    // Modo 'icy': mostrar "Nombre Emisora — Título ICY"
+    const stationName = currentPlayingRow && isStreamUrlRow(currentPlayingRow)
+        ? (currentPlayingRow.dataset.pureName || '').replace(/^📡\s*/, '').trim()
+        : '';
+    const fullText = stationName ? `${stationName} — ${title}` : title;
+    try {
+        const titleEl = document.getElementById('txt-cancion');
+        if (titleEl && currentPlayingRow && isStreamUrlRow(currentPlayingRow)) {
+            titleEl.innerText = `📡 ${fullText}`;
+        }
+    } catch (_) {}
+    try { ipcRenderer.send('update-metadata', fullText); } catch (_) {}
+});
+
+ipcRenderer.on('stream-icy-name', (_e, { streamId, name } = {}) => {
+    if (streamId !== currentStreamId) return;
+    // Actualizar el nombre visible en la fila si el usuario no lo editó
+    if (currentPlayingRow && isStreamUrlRow(currentPlayingRow)) {
+        const current = (currentPlayingRow.dataset.pureName || '').replace(/^📡\s*/, '').trim();
+        if (!current || current === currentPlayingRow.dataset.ruta) {
+            currentPlayingRow.dataset.pureName = '📡 ' + name;
+            if (currentPlayingRow.children[1]) currentPlayingRow.children[1].innerText = '📡 ' + name;
+        }
+    }
+});
+
+ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
+    if (streamId !== currentStreamId) return;
+    recordIncident(`[STREAM] ${errMsg || 'Error desconocido'}`, { category: 'air', level: 'error', autoAction: false });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Modal "Agregar URL de emisora"
+// ════════════════════════════════════════════════════════════════════════════
+
+(function initAddStreamUrlModal() {
+    const overlay  = document.getElementById('add-stream-url-overlay');
+    const urlInput = document.getElementById('add-stream-url-input');
+    const nameInput = document.getElementById('add-stream-name-input');
+    const detectBtn = document.getElementById('add-stream-detect-btn');
+    const detectResult = document.getElementById('add-stream-detect-result');
+    const okBtn    = document.getElementById('add-stream-ok-btn');
+    const cancelBtn = document.getElementById('add-stream-cancel-btn');
+    const closeBtn  = document.getElementById('add-stream-close-btn');
+    const policyManual = document.getElementById('add-stream-policy-manual');
+    const policyTimer  = document.getElementById('add-stream-policy-timer');
+    const hoursField   = document.getElementById('add-stream-hours');
+    const minutesField = document.getElementById('add-stream-minutes');
+    const secsField    = document.getElementById('add-stream-seconds-field');
+    const timeoutField   = document.getElementById('add-stream-timeout');
+    const retriesField   = document.getElementById('add-stream-retries');
+    const metaModeSelect = document.getElementById('add-stream-meta-mode');
+    const metaCustomInput = document.getElementById('add-stream-meta-custom');
+    // Mostrar/ocultar campo personalizado según selección del dropdown
+    if (metaModeSelect && metaCustomInput) {
+        metaModeSelect.addEventListener('change', () => {
+            metaCustomInput.style.display = metaModeSelect.value === 'custom' ? '' : 'none';
+        });
+    }
+
+    if (!overlay) return; // seguro si index.html no tiene el modal
+
+    let _insertTarget = null;  // fila antes de la que insertar (null = al final)
+    let _editCallback = null;  // callback(updated) cuando se edita una fila existente
+    let _editRow = null;       // fila que se está editando (null = inserción nueva)
+
+    function closeModal() { overlay.style.display = 'none'; _editCallback = null; _editRow = null; }
+    function openModal(insertTarget = null, prefill = {}, editCallback = null) {
+        _insertTarget = insertTarget;
+        urlInput.value = prefill.url || '';
+        nameInput.value = prefill.name || '';
+        detectResult.textContent = '';
+        policyManual.checked = prefill.stopPolicy !== 'timer';
+        policyTimer.checked  = prefill.stopPolicy === 'timer';
+        const secs = parseInt(prefill.stopSeconds, 10) || 0;
+        hoursField.value   = Math.floor(secs / 3600);
+        minutesField.value = Math.floor((secs % 3600) / 60) || (prefill.stopPolicy === 'timer' ? 0 : 30);
+        secsField.value    = secs % 60;
+        if (timeoutField)   timeoutField.value   = prefill.connectTimeoutSec != null ? prefill.connectTimeoutSec : 5;
+        if (retriesField)   retriesField.value   = prefill.maxRetries != null ? prefill.maxRetries : 3;
+        if (metaModeSelect) { metaModeSelect.value = prefill.metadataMode || 'icy'; }
+        if (metaCustomInput) {
+            metaCustomInput.value   = prefill.customMetadata || '';
+            metaCustomInput.style.display = (prefill.metadataMode === 'custom') ? '' : 'none';
+        }
+        _editCallback = typeof editCallback === 'function' ? editCallback : null;
+        _editRow = editCallback ? insertTarget : null; // en modo edición, insertTarget ES la fila
+        // Cambiar texto del botón según modo
+        if (okBtn) okBtn.textContent = _editCallback ? '💾 Guardar cambios' : '📡 Agregar a la lista';
+        overlay.style.display = 'flex';
+        setTimeout(() => urlInput.focus(), 80);
+    }
+
+    // Exponer para que main.js / menús lo llamen
+    window.openAddStreamUrlModal = openModal;
+
+    closeBtn.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+
+    // Detectar formato/nombre vía ffprobe
+    detectBtn.addEventListener('click', async () => {
+        const url = urlInput.value.trim();
+        if (!url) return;
+        detectBtn.disabled = true;
+        detectResult.textContent = '🔍 Detectando…';
+        try {
+            const info = await ipcRenderer.invoke('stream-probe', { url });
+            if (info.error) {
+                detectResult.textContent = `⚠ ${info.error}`;
+            } else {
+                const parts = [];
+                if (info.format) parts.push(info.format.split(',')[0]);
+                if (info.codec) parts.push(info.codec.toUpperCase());
+                if (info.bitrate) parts.push(`${info.bitrate} kbps`);
+                if (info.sampleRate) parts.push(`${info.sampleRate} Hz`);
+                detectResult.textContent = parts.length ? `✓ ${parts.join(' · ')}` : '✓ Stream detectado';
+                if (info.icyName && !nameInput.value.trim()) nameInput.value = info.icyName;
+            }
+        } catch (err) {
+            detectResult.textContent = `⚠ Error: ${err.message || err}`;
+        } finally {
+            detectBtn.disabled = false;
+        }
+    });
+
+    // Agregar / Guardar
+    okBtn.addEventListener('click', () => {
+        const url = urlInput.value.trim();
+        if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+            detectResult.textContent = '⚠ Ingresá una URL válida (http:// o https://).';
+            urlInput.focus();
+            return;
+        }
+        const displayName = nameInput.value.trim() || url;
+        const stopPolicy = policyTimer.checked ? 'timer' : 'manual';
+        const stopSeconds = policyTimer.checked
+            ? (parseInt(hoursField.value, 10) || 0) * 3600
+              + (parseInt(minutesField.value, 10) || 0) * 60
+              + (parseInt(secsField.value, 10) || 0)
+            : 0;
+        const connectTimeoutSec = Math.max(2, parseInt(timeoutField?.value, 10) || 5);
+        const maxRetries = Math.max(0, parseInt(retriesField?.value, 10) || 3);
+        const metadataMode   = metaModeSelect?.value || 'icy';
+        const customMetadata = (metadataMode === 'custom') ? (metaCustomInput?.value.trim() || displayName) : '';
+
+        if (_editCallback) {
+            // Modo edición: devolver valores al caller
+            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, metadataMode, customMetadata });
+            closeModal();
+            return;
+        }
+
+        // Modo inserción: crear fila nueva
+        const tbody = playlistBody;
+        const newRow = createPlaylistRow(url, displayName, 0, 'stream_url', _insertTarget, 'bottom', tbody);
+        if (newRow) {
+            newRow.dataset.stopPolicy       = stopPolicy;
+            newRow.dataset.stopSeconds      = String(stopSeconds);
+            newRow.dataset.connectTimeoutSec = String(connectTimeoutSec);
+            newRow.dataset.maxRetries       = String(maxRetries);
+            newRow.dataset.metadataMode     = metadataMode;
+            newRow.dataset.customMetadata   = customMetadata;
+            if (stopPolicy === 'timer' && stopSeconds > 0) {
+                const hh = Math.floor(stopSeconds / 3600).toString().padStart(2, '0');
+                const mm = Math.floor((stopSeconds % 3600) / 60).toString().padStart(2, '0');
+                const ss = (stopSeconds % 60).toString().padStart(2, '0');
+                if (newRow.children[2]) newRow.children[2].innerText = `${hh}:${mm}:${ss}`;
+            } else {
+                if (newRow.children[2]) newRow.children[2].innerText = '∞';
+            }
+        }
+
+        calcularHorasPlaylist();
+        updateNextTrackVisuals();
+        saveSessionSnapshot();
+        closeModal();
+    });
+
+    // Abrir modal desde menú IPC (Lista → Agregar URL de emisora).
+    // Si hay una fila seleccionada o se hizo clic derecho, insertar después de ella.
+    ipcRenderer.on('menu-add-stream-url', () => {
+        const target = rightClickedRow
+            || document.querySelector('.playlist-table tr.selected-row')
+            || null;
+        openModal(target);
+    });
+})();
 
 // Cartwall Resizer Logic
 function syncCartwallResizerVisibility() {

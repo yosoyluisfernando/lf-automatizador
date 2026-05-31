@@ -2157,6 +2157,7 @@ function createApplicationMenu() {
                     ]
                 },
                 { label: '📝 Añadir Nota', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
+                { label: '📡 Agregar URL de emisora... (Beta)', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stream-url'); } },
                 { type: 'separator' },
                 { label: '🎯 Marcar como Siguiente', accelerator: sc('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
                 { label: '⏳ Marcar / Desmarcar como Temporal', accelerator: sc('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
@@ -2521,3 +2522,4 @@ require('./backend/ipc/ui')(sharedState);
 require('./backend/ipc/windows')(sharedState);
 require('./backend/ipc/cartwall')(sharedState);
 require('./backend/ipc/library')(sharedState);
+require('./backend/ipc/stream')(sharedState);

@@ -11,7 +11,9 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             padding: 15px;
+            padding-bottom: 95px;
             overflow-x: hidden;
+            overflow-y: auto;
             user-select: none;
             -webkit-user-select: none;
         }
@@ -52,16 +54,8 @@
             outline: none;
         }
 
-        .tab-btn:hover {
-            background-color: rgba(255, 255, 255, 0.05);
-            color: white;
-        }
-
-        .tab-btn.active {
-            color: white;
-            border-bottom: 2px solid #00a8ff;
-            background-color: #222225;
-        }
+        .tab-btn:hover { background-color: rgba(255, 255, 255, 0.05); color: white; }
+        .tab-btn.active { color: white; border-bottom: 2px solid #00a8ff; background-color: #222225; }
 
         .enc-pane { display: none; }
         .enc-pane.active { display: block; }
@@ -83,18 +77,8 @@
             text-transform: uppercase;
         }
 
-        .row {
-            display: flex;
-            align-items: center;
-            margin-bottom: 10px;
-            gap: 10px;
-        }
-
-        .row label {
-            width: 140px;
-            font-size: 12px;
-            color: #bbb;
-        }
+        .row { display: flex; align-items: center; margin-bottom: 10px; gap: 10px; }
+        .row label { width: 140px; font-size: 12px; color: #bbb; }
 
         .enc-input {
             flex: 1;
@@ -107,10 +91,7 @@
             outline: none;
             transition: 0.2s;
         }
-
-        .enc-input:focus {
-            border-color: #00a8ff;
-        }
+        .enc-input:focus { border-color: #00a8ff; }
 
         .dark-select {
             appearance: none;
@@ -132,6 +113,7 @@
             border-top: 1px solid #333;
             display: flex;
             justify-content: flex-end;
+            gap: 10px;
             z-index: 10;
         }
 
@@ -148,23 +130,9 @@
             letter-spacing: 0.5px;
             text-transform: uppercase;
         }
-
-        .enc-btn:hover {
-            background: #00a8ff;
-            border-color: #00a8ff;
-            box-shadow: 0 0 10px rgba(0, 168, 255, 0.45);
-        }
-
-        .enc-btn.stop {
-            background: #c0392b;
-            border-color: #e74c3c;
-        }
-
-        .enc-btn.stop:hover {
-            background: #e74c3c;
-            border-color: #ff5858;
-            box-shadow: 0 0 10px rgba(231, 76, 60, 0.45);
-        }
+        .enc-btn:hover { background: #00a8ff; border-color: #00a8ff; box-shadow: 0 0 10px rgba(0, 168, 255, 0.45); }
+        .enc-btn.stop { background: #c0392b; border-color: #e74c3c; }
+        .enc-btn.stop:hover { background: #e74c3c; border-color: #ff5858; box-shadow: 0 0 10px rgba(231, 76, 60, 0.45); }
 
         .status-badge {
             padding: 4px 10px;
@@ -174,60 +142,31 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+        .status-off { background: #2d2f34; color: #8f96a3; border: 1px solid #3a3d43; }
+        .status-on { background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid #27ae60; animation: blink 2s infinite; }
+        .status-connecting { background: rgba(241, 196, 15, 0.12); color: #f1c40f; border: 1px solid #b8910f; }
 
-        .status-off {
-            background: #2d2f34;
-            color: #8f96a3;
-            border: 1px solid #3a3d43;
-        }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
 
-        .status-on {
-            background: rgba(46, 204, 113, 0.15);
-            color: #2ecc71;
-            border: 1px solid #27ae60;
-            animation: blink 2s infinite;
-        }
-
-        @keyframes blink {
-            0% { opacity: 1; }
-            50% { opacity: 0.6; }
-            100% { opacity: 1; }
-        }
-
-        .enc-stats {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 15px;
-        }
-
-        .stat-card {
+        .enc-input-meter-container {
+            margin-top: 5px;
+            padding: 12px;
             background: #222225;
             border: 1px solid #333;
-            padding: 10px 12px;
             border-radius: 4px;
         }
-
-        .stat-label {
-            font-size: 10px;
-            color: #8f96a3;
-            text-transform: uppercase;
-            margin-bottom: 5px;
-            display: block;
-            letter-spacing: 0.5px;
-        }
-
-        .stat-value {
-            font-size: 16px;
-            font-weight: bold;
-            color: #00a8ff;
-            font-family: 'Consolas', monospace;
-        }
+        .enc-input-meter-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .enc-input-meter-title { font-size: 10px; color: #8f96a3; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; }
+        .enc-input-meter-values { font-size: 11px; color: #aaa; font-family: 'Consolas', monospace; white-space: pre; }
+        .enc-input-meter-bar { height: 12px; background: #111; border-radius: 6px; overflow: hidden; position: relative; border: 1px solid #333; }
+        .vu-gradient { position: absolute; left: 0; right: 0; top: 0; bottom: 0; background: linear-gradient(to right, #27ae60 0%, #27ae60 79.5%, #f39c12 79.5%, #f39c12 89.7%, #e74c3c 89.7%, #e74c3c 100%); }
+        .vu-cover { position: absolute; right: 0; top: 0; bottom: 0; width: 100%; background: #111; transition: width 0.02s linear; }
+        .enc-input-meter-container.warn { border-color: #b8910f; }
 
         .enc-log-box {
             background: #111;
             border: 1px solid #333;
-            height: 120px;
+            height: 150px;
             overflow-y: auto;
             padding: 10px;
             font-family: 'Consolas', monospace;
@@ -236,90 +175,88 @@
             margin-top: 10px;
             border-radius: 4px;
         }
+        .enc-log-box .time { color: #555; margin-right: 4px; }
 
-        .enc-input-meter-container {
-            margin-top: 15px;
-            padding: 12px;
-            background: #222225;
+        /* ── Tarjetas de servidor ─────────────────────────────────────────── */
+        .enc-server-card {
             border: 1px solid #333;
-            border-radius: 4px;
-        }
-
-        .enc-input-meter-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-
-        .enc-input-meter-title {
-            font-size: 10px;
-            color: #8f96a3;
-            text-transform: uppercase;
-            font-weight: bold;
-            letter-spacing: 0.5px;
-        }
-
-        .enc-input-meter-values {
-            font-size: 11px;
-            color: #aaa;
-            font-family: 'Consolas', monospace;
-        }
-
-        .enc-input-meter-bar {
-            height: 12px;
-            background: #111;
-            border-radius: 6px;
+            border-radius: 5px;
+            background: #202024;
+            margin-bottom: 12px;
             overflow: hidden;
-            position: relative;
-            border: 1px solid #333;
         }
-
-        .vu-gradient {
-            position: absolute;
-            left: 0;
-            right: 0;
-            top: 0;
-            bottom: 0;
-            background: linear-gradient(to right, #27ae60 0%, #27ae60 79.5%, #f39c12 79.5%, #f39c12 89.7%, #e74c3c 89.7%, #e74c3c 100%);
+        .enc-server-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 12px;
+            background: #26262b;
+            border-bottom: 1px solid #333;
         }
-
-        .vu-cover {
-            position: absolute;
-            right: 0;
-            top: 0;
-            bottom: 0;
-            width: 100%;
-            background: #111;
-            transition: width 0.02s linear;
-        }
-
-        /* Scrollbars */
-        ::-webkit-scrollbar {
-            width: 10px;
-            height: 10px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1a1a1c;
-            border-left: 1px solid #333;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #444;
+        .enc-server-title { font-weight: bold; font-size: 12px; color: #dfe6ee; flex: 1; }
+        .enc-srv-actions { display: flex; align-items: center; gap: 6px; }
+        .enc-mini-btn {
+            background: #2c2f34;
+            border: 1px solid #3a3d43;
+            color: #cfd6df;
             border-radius: 4px;
-            border: 2px solid #1a1a1c;
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
         }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #00a8ff;
+        .enc-mini-btn:hover { background: #353a40; color: #fff; }
+        .enc-mini-btn.on { border-color: #27ae60; color: #2ecc71; }
+        .enc-mini-btn.off { border-color: #e74c3c; color: #ff7063; }
+        .enc-mini-btn.danger:hover { background: #5a2620; border-color: #e74c3c; color: #ff7063; }
+        .enc-server-body { padding: 12px; }
+        .enc-server-body .row label { width: 120px; }
+        .enc-srv-readout { font-family: 'Consolas', monospace; font-size: 11px; color: #00a8ff; min-width: 80px; text-align: right; }
+
+        .enc-add-btn {
+            width: 100%;
+            background: #1f2a22;
+            border: 1px dashed #2f6b3d;
+            color: #57c97a;
+            border-radius: 5px;
+            padding: 10px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
         }
+        .enc-add-btn:hover { background: #243329; color: #74e296; }
+        #enc-servers + .enc-add-btn { margin-bottom: 24px; }
+
+        /* ── Lista de estado por servidor (pestaña Estado) ────────────────── */
+        .enc-status-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border: 1px solid #2a2a2e;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            background: #1d1d21;
+        }
+        .enc-status-row .srv-name { flex: 1; font-size: 12px; color: #cfd6df; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .enc-status-row .srv-kbps { font-family: 'Consolas', monospace; font-size: 11px; color: #00a8ff; min-width: 78px; text-align: right; white-space: pre; }
+        .enc-status-row .srv-uptime { font-family: 'Consolas', monospace; font-size: 11px; color: #8f96a3; min-width: 64px; text-align: right; white-space: pre; }
+
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: #1a1a1c; border-left: 1px solid #333; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; border: 2px solid #1a1a1c; }
+        ::-webkit-scrollbar-thumb:hover { background: #00a8ff; }
     </style>
 </head>
 <body>
     <div class="enc-header">
         <div style="display: flex; align-items: center; gap: 10px;">
             <span id="enc-status-badge" class="status-badge status-off">Desconectado</span>
-            <span id="enc-timer" style="font-family: 'Consolas', monospace; font-size: 16px; color: #ffffff; font-weight: bold;">00:00:00</span>
+            <span id="enc-summary" style="font-size: 12px; color: #8f96a3;">Sin transmisiones activas</span>
         </div>
-        <div id="enc-version" style="font-size: 11px; color: #555; font-weight: bold;">LF Automatizador v0.9.11</div>
+        <div id="enc-version" style="font-size: 11px; color: #555; font-weight: bold;">LF Automatizador</div>
     </div>
 
     <div class="enc-tabs">
@@ -328,20 +265,9 @@
     </div>
 
     <div id="tab-status" class="enc-pane active">
-        <div class="enc-stats">
-            <div class="stat-card">
-                <span class="stat-label">Estado actual</span>
-                <span id="enc-status" class="stat-value" style="font-size: 14px; color: #ffffff; font-weight: bold;">LISTO</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Velocidad / Buffer</span>
-                <span id="enc-bitrate-real" class="stat-value" style="font-size: 14px; color: #ffffff; font-weight: bold;">-- kbps</span>
-            </div>
-        </div>
-
         <div class="enc-input-meter-container" id="enc-input-meter">
             <div class="enc-input-meter-header">
-                <span class="enc-input-meter-title">Entrada al encoder</span>
+                <span class="enc-input-meter-title">Entrada al encoder (compartida)</span>
                 <span class="enc-input-meter-values" id="enc-input-meter-values">Pico: -- dB | RMS: -- dB</span>
             </div>
             <div class="enc-input-meter-bar">
@@ -350,55 +276,16 @@
             </div>
         </div>
 
+        <p style="margin: 15px 0 6px 0; font-size: 11px; color: #888; font-weight: bold;">Transmisiones:</p>
+        <div id="enc-server-status-list"></div>
+
         <p style="margin: 15px 0 5px 0; font-size: 11px; color: #888; font-weight: bold;">Registro de Emisi&oacute;n (Log):</p>
         <div class="enc-log-box" id="enc-log"></div>
     </div>
 
     <div id="tab-config" class="enc-pane">
-        <fieldset class="fieldset-dark" style="margin-bottom: 15px;">
-            <legend>Servidor de Streaming (Icecast / Shoutcast)</legend>
-            <div class="row">
-                <label>Tipo Servidor:</label>
-                <select id="enc-type" class="enc-input dark-select">
-                    <option value="icecast">Icecast 2 (Zeno.fm, método HTTP PUT)</option>
-                    <option value="shoutcast">Shoutcast clásico (Listen2MyRadio, método SOURCE legacy)</option>
-                    <option value="shoutcast2">Shoutcast 2.x moderno (método HTTP PUT)</option>
-                </select>
-            </div>
-            <div class="row">
-                <label>Motor de Audio:</label>
-                <select id="sel-encoder-provider" class="enc-input">
-                    <option value="auto">Autom&aacute;tico / Motor Rust</option>
-                    <option value="rust">Motor Rust</option>
-                </select>
-            </div>
-            <div class="row">
-                <label>Punto de escucha:</label>
-                <select id="enc-tap-point" class="enc-input dark-select">
-                    <option value="postFx">Post-FX / procesado</option>
-                    <option value="preFx">Pre-FX / limpio</option>
-                </select>
-            </div>
-            <div class="row">
-                <label>IP / Host:</label>
-                <input type="text" id="enc-ip" class="enc-input" placeholder="ej. cast.zenomedia.com">
-            </div>
-            <div class="row">
-                <label>Puerto:</label>
-                <input type="text" id="enc-port" class="enc-input" placeholder="ej. 80">
-            </div>
-            <div class="row">
-                <label>Contrase&ntilde;a:</label>
-                <input type="password" id="enc-pass" class="enc-input" placeholder="Mountpass (Zeno) o Password">
-            </div>
-            <div class="row" id="row-mount">
-                <label>Punto de Montaje:</label>
-                <input type="text" id="enc-mount" class="enc-input" placeholder="ej. /stream">
-            </div>
-        </fieldset>
-
         <fieldset class="fieldset-dark">
-            <legend>Audio y Calidad</legend>
+            <legend>Entrada de Audio (compartida por todos los servidores)</legend>
             <div class="row">
                 <label>Origen de Audio:</label>
                 <select id="enc-source" class="enc-input dark-select">
@@ -411,27 +298,22 @@
                 <select id="enc-mic" class="enc-input dark-select"></select>
             </div>
             <div class="row">
-                <label>Formato (Codec):</label>
-                <select id="enc-codec" class="enc-input dark-select">
-                    <option value="mp3" selected>MP3 (Universal/Cl&aacute;sico)</option>
-                    <option value="aac">AAC-LC (Icecast / ZenoRadio)</option>
-                    <option value="aac_he">AAC+ / HE-AAC (requiere libfdk_aac; si no, cae a AAC-LC)</option>
-                </select>
-            </div>
-            <div class="row">
-                <label>Calidad (Bitrate):</label>
-                <select id="enc-bitrate" class="enc-input dark-select">
-                    <option value="64">64 kbps (Bajo consumo)</option>
-                    <option value="128" selected>128 kbps (Recomendado/Est&aacute;ndar)</option>
-                    <option value="192">192 kbps (Alta Calidad)</option>
-                    <option value="320">320 kbps (Estudio/HD)</option>
+                <label>Punto de escucha:</label>
+                <select id="enc-tap-point" class="enc-input dark-select">
+                    <option value="postFx">Post-FX / procesado</option>
+                    <option value="preFx">Pre-FX / limpio</option>
                 </select>
             </div>
         </fieldset>
+
+        <p style="margin: 0 0 8px 2px; font-size: 11px; color: #00a8ff; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px;">Servidores de transmisi&oacute;n</p>
+        <div id="enc-servers"></div>
+        <button id="btn-add-server" class="enc-add-btn">&#10133; Agregar servidor</button>
     </div>
 
-    <div class="footer-bar" style="margin-top: 50px;">
-        <button id="btn-connect" class="enc-btn">&#128225; CONECTAR SERVIDOR</button>
+    <div class="footer-bar">
+        <button id="btn-disconnect-all" class="enc-btn stop">&#9209; DESCONECTAR TODO</button>
+        <button id="btn-connect-all" class="enc-btn">&#128225; CONECTAR TODO</button>
     </div>
 
     <script src="encoder.js"></script>

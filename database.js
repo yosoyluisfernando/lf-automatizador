@@ -695,4 +695,24 @@ migrateKeyboardShortcuts();
 // Exportar función de checkpoint para uso externo (ej. cierre de app)
 db.walCheckpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) {} };
 
+function migratePisadorUndefinedBugs() {
+    const migrated = db.prepare("SELECT value FROM app_settings WHERE key = 'pisador_undefined_migrated'").get();
+    if (migrated) return;
+
+    db.transaction(() => {
+        const r1 = db.prepare("UPDATE tracks SET p1_file = NULL WHERE p1_file = 'undefined'").run();
+        const r2 = db.prepare("UPDATE tracks SET p2_file = NULL WHERE p2_file = 'undefined'").run();
+        const r3 = db.prepare("UPDATE tracks SET p3_file = NULL WHERE p3_file = 'undefined'").run();
+        
+        const totalChanges = r1.changes + r2.changes + r3.changes;
+        if (totalChanges > 0) {
+            console.log(`[BD] Se limpiaron ${totalChanges} pisadores con valor 'undefined' corrupto.`);
+        }
+    })();
+
+    const now = new Date().toISOString();
+    db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('pisador_undefined_migrated', '1', ?)").run(now);
+}
+migratePisadorUndefinedBugs();
+
 module.exports = db;
