@@ -11,7 +11,11 @@ const QUICK_SCOPES = new Set(['row', 'path']);
 
 function normalizePisadorSource(source) {
     if (!source) return null;
-    if (typeof source === 'string') return { v: 1, kind: 'file', path: source };
+    if (typeof source === 'string') {
+        const sourcePath = source.trim();
+        return sourcePath ? { v: 1, kind: 'file', path: sourcePath } : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, 'v') && source.v !== 1) return null;
     const kind = SOURCE_KINDS.has(source.kind) ? source.kind : '';
     if (!kind) return null;
     if (kind === 'builtin') {
@@ -81,8 +85,11 @@ function validateDynamicAnchor(condition, markers = {}) {
 
 function normalizeQuickRule(rule) {
     const source = normalizePisadorSource(rule?.source);
-    const startSeconds = Number(rule?.startSeconds);
-    if (!source || !Number.isFinite(startSeconds) || startSeconds < 0) return null;
+    const rawStartSeconds = rule?.startSeconds;
+    const numeric = typeof rawStartSeconds === 'number'
+        || (typeof rawStartSeconds === 'string' && rawStartSeconds.trim());
+    const startSeconds = Number(rawStartSeconds);
+    if (!source || !numeric || !Number.isFinite(startSeconds) || startSeconds < 0) return null;
     return {
         v: 1,
         source,
@@ -93,7 +100,8 @@ function normalizeQuickRule(rule) {
 }
 
 function normalizeRulePathKey(value, platform = process.platform) {
-    const resolved = path.resolve(String(value || '').trim());
+    const resolver = platform === 'win32' ? path.win32 : path.posix;
+    const resolved = resolver.resolve(String(value || '').trim());
     return platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 

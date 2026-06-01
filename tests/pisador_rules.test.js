@@ -33,6 +33,19 @@ test('source normalization rejects unknown kinds and builtin names', () => {
     assert.strictEqual(rules.normalizePisadorSource({ kind: 'builtin', name: 'wind' }), null);
 });
 
+test('legacy source strings are trimmed and blank strings are rejected', () => {
+    assert.deepStrictEqual(rules.normalizePisadorSource('  C:\\Radio\\id.mp3  '), {
+        v: 1, kind: 'file', path: 'C:\\Radio\\id.mp3'
+    });
+    assert.strictEqual(rules.normalizePisadorSource('   '), null);
+});
+
+test('source normalization rejects unsupported explicit versions', () => {
+    const versionTwo = { v: 2, kind: 'folder', path: '/radio/ids' };
+    assert.strictEqual(rules.normalizePisadorSource(versionTwo), null);
+    assert.strictEqual(rules.parsePisadorSource(JSON.stringify(versionTwo)), null);
+});
+
 test('pisador options normalize and serialize approved overflow policies', () => {
     assert.deepStrictEqual(rules.normalizePisadorOptions(null), { v: 1, overflowPolicy: 'skip' });
     assert.deepStrictEqual(
@@ -104,17 +117,32 @@ test('quick rules apply defaults and reject invalid sources or start times', () 
         advancedPolicy: 'respect',
         scope: 'row'
     });
+    assert.deepStrictEqual(rules.normalizeQuickRule({
+        source: { kind: 'builtin', name: 'time' },
+        startSeconds: '0'
+    }), {
+        v: 1,
+        source: { v: 1, kind: 'builtin', name: 'time' },
+        startSeconds: 0,
+        advancedPolicy: 'respect',
+        scope: 'row'
+    });
     assert.strictEqual(rules.normalizeQuickRule({ source: { kind: 'builtin', name: 'wind' }, startSeconds: 1 }), null);
     assert.strictEqual(rules.normalizeQuickRule({ source: '/radio/id.mp3', startSeconds: -1 }), null);
+    for (const startSeconds of [null, undefined, '', '   ', true, false]) {
+        assert.strictEqual(rules.normalizeQuickRule({ source: '/radio/id.mp3', startSeconds }), null);
+    }
 });
 
-test('path keys use path.resolve and are case-insensitive only on Windows', () => {
+test('path keys use platform-specific resolution and are case-insensitive only on Windows', () => {
     const win = rules.normalizeRulePathKey('C:\\Radio\\IDS', 'win32');
     const winLower = rules.normalizeRulePathKey('c:\\radio\\ids', 'win32');
+    assert.strictEqual(win, path.win32.resolve('C:\\Radio\\IDS').toLowerCase());
     assert.strictEqual(win, winLower);
     assert.strictEqual(
         rules.normalizeRulePathKey('/Radio/IDS', 'linux') === rules.normalizeRulePathKey('/radio/ids', 'linux'),
         false
     );
-    assert.strictEqual(rules.normalizeRulePathKey('.', 'linux'), path.resolve('.'));
+    assert.strictEqual(rules.normalizeRulePathKey('/Radio/IDS', 'linux'), path.posix.resolve('/Radio/IDS'));
+    assert.strictEqual(rules.normalizeRulePathKey('Folder\\Child', 'darwin'), path.posix.resolve('Folder\\Child'));
 });
