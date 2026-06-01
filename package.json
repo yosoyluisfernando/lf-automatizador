@@ -1,7 +1,7 @@
 {
   "name": "lf-automatizador",
   "productName": "LF Automatizador",
-  "version": "0.9.12-beta.1",
+  "version": "0.9.12-beta.2",
   "description": "Software de Automatizacion de Radio",
   "main": "main.js",
   "scripts": {

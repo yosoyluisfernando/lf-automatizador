@@ -67,6 +67,13 @@ test('packaging verifies ffmpeg-static hashes and publishes installer checksums'
     assert.match(verifySource, /linux-x64/);
 });
 
+test('release tag validation runs through a portable Node script', () => {
+    assert.match(workflowSource, /node build\/verify-release-tag\.js/);
+    const { verifyReleaseTag } = require('../build/verify-release-tag');
+    assert.doesNotThrow(() => verifyReleaseTag('v0.9.12-beta.2', '0.9.12-beta.2'));
+    assert.throws(() => verifyReleaseTag('v0.9.12-beta.1', '0.9.12-beta.2'), /no coincide/);
+});
+
 test('package version is valid SemVer so electron-builder preserves the release number', () => {
     assert.match(packageJson.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     assert.ok(packageJson.build.files.includes('LICENSE'));

@@ -97,7 +97,7 @@ jobs:
 
       - name: Verify Release Tag Matches Package Version
         if: startsWith(github.ref, 'refs/tags/')
-        run: node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error(`Tag ${process.env.GITHUB_REF_NAME} no coincide con ${expected}`)"
+        run: node build/verify-release-tag.js
 
       - name: Run Node Regression Tests
         run: npm test
