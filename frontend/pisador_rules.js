@@ -32,7 +32,7 @@ function parsePisadorSource(value) {
     try {
         return normalizePisadorSource(JSON.parse(raw));
     } catch (err) {
-        return null;
+        return normalizePisadorSource(raw);
     }
 }
 
@@ -51,6 +51,8 @@ function normalizePisadorOptions(value) {
             parsed = {};
         }
     }
+    if (parsed && typeof parsed === 'object'
+        && Object.prototype.hasOwnProperty.call(parsed, 'v') && parsed.v !== 1) return null;
     const overflowPolicy = OVERFLOW_POLICIES.has(parsed?.overflowPolicy)
         ? parsed.overflowPolicy
         : 'skip';
@@ -58,7 +60,8 @@ function normalizePisadorOptions(value) {
 }
 
 function serializePisadorOptions(value) {
-    return JSON.stringify(normalizePisadorOptions(value));
+    const normalized = normalizePisadorOptions(value);
+    return normalized ? JSON.stringify(normalized) : null;
 }
 
 function conditionToStorage(condition, manualTime = null) {
@@ -84,6 +87,8 @@ function validateDynamicAnchor(condition, markers = {}) {
 }
 
 function normalizeQuickRule(rule) {
+    if (rule && typeof rule === 'object'
+        && Object.prototype.hasOwnProperty.call(rule, 'v') && rule.v !== 1) return null;
     const source = normalizePisadorSource(rule?.source);
     const rawStartSeconds = rule?.startSeconds;
     const numeric = typeof rawStartSeconds === 'number'

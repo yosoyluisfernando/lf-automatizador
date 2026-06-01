@@ -19,6 +19,15 @@ test('legacy file paths remain file sources and serialize as raw paths', () => {
     assert.strictEqual(rules.serializePisadorSource({ kind: 'file', path: filePath }), filePath);
 });
 
+test('legacy file paths starting with an opening brace round-trip as raw paths', () => {
+    const filePath = '{id}.mp3';
+    const serialized = rules.serializePisadorSource({ kind: 'file', path: filePath });
+    assert.strictEqual(serialized, filePath);
+    assert.deepStrictEqual(rules.parsePisadorSource(serialized), {
+        v: 1, kind: 'file', path: filePath
+    });
+});
+
 test('folder and builtin sources round-trip as portable JSON', () => {
     const folder = { v: 1, kind: 'folder', path: '/home/radio/pisadores' };
     assert.deepStrictEqual(rules.parsePisadorSource(rules.serializePisadorSource(folder)), folder);
@@ -59,6 +68,17 @@ test('pisador options normalize and serialize approved overflow policies', () =>
     assert.deepStrictEqual(
         rules.normalizePisadorOptions({ overflowPolicy: 'unexpected' }),
         { v: 1, overflowPolicy: 'skip' }
+    );
+});
+
+test('pisador options reject unsupported explicit versions without breaking defaults', () => {
+    const versionTwo = { v: 2, overflowPolicy: 'allow-overlap' };
+    assert.strictEqual(rules.normalizePisadorOptions(versionTwo), null);
+    assert.strictEqual(rules.normalizePisadorOptions(JSON.stringify(versionTwo)), null);
+    assert.strictEqual(rules.serializePisadorOptions(versionTwo), null);
+    assert.strictEqual(
+        rules.serializePisadorOptions(null),
+        JSON.stringify({ v: 1, overflowPolicy: 'skip' })
     );
 });
 
@@ -132,6 +152,14 @@ test('quick rules apply defaults and reject invalid sources or start times', () 
     for (const startSeconds of [null, undefined, '', '   ', true, false]) {
         assert.strictEqual(rules.normalizeQuickRule({ source: '/radio/id.mp3', startSeconds }), null);
     }
+});
+
+test('quick rules reject unsupported explicit versions', () => {
+    assert.strictEqual(rules.normalizeQuickRule({
+        v: 2,
+        source: '/radio/id.mp3',
+        startSeconds: 0
+    }), null);
 });
 
 test('path keys use platform-specific resolution and are case-insensitive only on Windows', () => {
