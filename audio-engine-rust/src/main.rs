@@ -2903,7 +2903,7 @@ fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, 
 /// pisarse. El fin se detecta por la vía normal: `emit_status` marca 'ended'
 /// cuando `player.empty()` tras el último archivo. Se duplica a propósito parte
 /// del setup de `load_audio_player` para dejar ese camino crítico (música) intacto.
-fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_paths: &[String], gain: f32, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
+fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_paths: &[String], gain: f32, paused: bool, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
     if file_paths.is_empty() {
         return Err("Secuencia de audio vacia.".to_string());
     }
@@ -2929,6 +2929,9 @@ fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_pat
         }
     };
     player.set_volume(gain.clamp(0.0, 2.0));
+    if paused {
+        player.pause();
+    }
 
     let meter = Arc::new(PlayerMeter::default());
     // Duración total (cacheada) ANTES de encolar.
@@ -2950,7 +2953,7 @@ fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_pat
     }
     runtime.meter = Arc::clone(&meter);
     runtime.state.path = file_paths.join("|");
-    runtime.state.status = "playing".to_string();
+    runtime.state.status = if paused { "loaded".to_string() } else { "playing".to_string() };
     runtime.state.position_ms = 0;
     runtime.state.duration_ms = total_ms;
     runtime.state.gain = gain.clamp(0.0, 2.0);
@@ -4670,7 +4673,23 @@ fn main() {
                 let resolved_output_id = resolve_output_for_bus(&state, &bus_id, &output_id);
                 if paths.is_empty() {
                     emit_error("cartwallSequence: 'paths' vacio.", &request_id);
-                } else if let Err(err) = load_audio_player_sequence(&mut state, &player_id, &paths, gain, &resolved_output_id, &bus_id, &cache_dir) {
+                } else if let Err(err) = load_audio_player_sequence(&mut state, &player_id, &paths, gain, false, &resolved_output_id, &bus_id, &cache_dir) {
+                    emit_error(&err, &request_id);
+                }
+            }
+            // Precarga pausada de una secuencia gapless. Los pisadores usan
+            // autoplay=false para abrir y decodificar antes del disparo exacto.
+            "loadSequence" => {
+                let paths = json_get_string_array(&line, "paths").unwrap_or_default();
+                let gain = json_get_f32(&line, "gain").unwrap_or(1.0);
+                let bus_id = json_get_string(&line, "bus").unwrap_or_else(|| "jingle".to_string());
+                let output_id = json_get_string(&line, "outputId").unwrap_or_else(|| "default".to_string());
+                let cache_dir = json_get_string(&line, "cacheDir").unwrap_or_default();
+                let autoplay = json_get_bool(&line, "autoplay").unwrap_or(false);
+                let resolved_output_id = resolve_output_for_bus(&state, &bus_id, &output_id);
+                if paths.is_empty() {
+                    emit_error("loadSequence: 'paths' vacio.", &request_id);
+                } else if let Err(err) = load_audio_player_sequence(&mut state, &player_id, &paths, gain, !autoplay, &resolved_output_id, &bus_id, &cache_dir) {
                     emit_error(&err, &request_id);
                 }
             }
