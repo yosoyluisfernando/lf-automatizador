@@ -20,6 +20,7 @@ const {
     parseQuickRule,
     serializeQuickRule,
     normalizeQuickRule,
+    normalizeQuickRuleForRowType,
     normalizeRulePathKey
 } = require('./pisador_rules');
 const { prepareOverlaySession } = require('./pisador_runtime');
@@ -139,7 +140,7 @@ function setPersistentAutomaticPisadorRule(route, rule) {
 
 function applyDefaultAutomaticPisadorRule(row) {
     if (!row?.dataset?.ruta || row.dataset.automaticPisadorRule) return;
-    if (!['normal', 'random'].includes(row.dataset.type || 'normal')) return;
+    if (row.dataset.type !== 'random') return;
     const rule = getPersistentAutomaticPisadorRule(row.dataset.ruta);
     if (rule) row.dataset.automaticPisadorRule = serializeQuickRule(rule);
 }
@@ -5866,13 +5867,15 @@ function syncAutomaticPisadorModalSource() {
 
 function openAutomaticPisadorModal(row) {
     if (!row || !['normal', 'random'].includes(row.dataset.type || 'normal')) return;
-    const rule = parseQuickRule(row.dataset.automaticPisadorRule);
+    const rowType = row.dataset.type || 'normal';
+    const rule = normalizeQuickRuleForRowType(parseQuickRule(row.dataset.automaticPisadorRule), rowType);
     const source = rule?.source || { kind: 'file', path: '' };
     document.getElementById('auto-pisador-source-kind').value = source.kind === 'builtin' ? source.name : source.kind;
     document.getElementById('auto-pisador-source-path').value = source.path || '';
     document.getElementById('auto-pisador-start').value = rule?.startSeconds ?? 0;
     document.getElementById('auto-pisador-advanced-policy').value = rule?.advancedPolicy || 'respect';
     document.getElementById('auto-pisador-scope').value = rule?.scope || 'row';
+    document.getElementById('auto-pisador-scope-row').style.display = rowType === 'random' ? 'flex' : 'none';
     syncAutomaticPisadorModalSource();
     document.getElementById('auto-pisador-modal').style.display = 'flex';
 }
@@ -5881,17 +5884,17 @@ function closeAutomaticPisadorModal() {
     document.getElementById('auto-pisador-modal').style.display = 'none';
 }
 
-function getAutomaticPisadorModalRule() {
+function getAutomaticPisadorModalRule(rowType = 'normal') {
     const kind = document.getElementById('auto-pisador-source-kind').value;
     const source = ['file', 'folder'].includes(kind)
         ? { kind, path: document.getElementById('auto-pisador-source-path').value }
         : { kind: 'builtin', name: kind };
-    return normalizeQuickRule({
+    return normalizeQuickRuleForRowType({
         source,
         startSeconds: document.getElementById('auto-pisador-start').value,
         advancedPolicy: document.getElementById('auto-pisador-advanced-policy').value,
         scope: document.getElementById('auto-pisador-scope').value
-    });
+    }, rowType);
 }
 
 document.getElementById('pm-auto-pisador').addEventListener('click', () => {
@@ -5908,7 +5911,7 @@ document.getElementById('auto-pisador-browse').addEventListener('click', async (
 document.getElementById('auto-pisador-save').addEventListener('click', () => {
     if (!rightClickedRow) return;
     const previous = parseQuickRule(rightClickedRow.dataset.automaticPisadorRule);
-    const rule = getAutomaticPisadorModalRule();
+    const rule = getAutomaticPisadorModalRule(rightClickedRow.dataset.type || 'normal');
     if (!rule) {
         window.alert('Selecciona un origen valido y un tiempo de inicio mayor o igual que cero.');
         return;

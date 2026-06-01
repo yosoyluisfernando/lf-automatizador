@@ -578,11 +578,13 @@
                 <option value="respect">Respetar pisadores del Editor Avanzado</option>
                 <option value="ignore">Ignorar pisadores del Editor Avanzado</option>
             </select>
-            <label style="font-size:12px; color:#aaa;">Aplicar regla</label>
-            <select id="auto-pisador-scope" class="dark-select">
-                <option value="row">Solo esta fila de playlist</option>
-                <option value="path">Cada vez que se vuelva a anadir esta ruta</option>
-            </select>
+            <div id="auto-pisador-scope-row" style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12px; color:#aaa;">Aplicar regla</label>
+                <select id="auto-pisador-scope" class="dark-select">
+                    <option value="row">Solo esta fila de playlist</option>
+                    <option value="path">Cada vez que se vuelva a anadir esta carpeta aleatoria</option>
+                </select>
+            </div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
                 <button id="auto-pisador-clear" class="settings-btn" style="margin-right:auto;">Quitar regla</button>
                 <button id="auto-pisador-cancel" class="settings-btn" style="background:#444;">Cancelar</button>

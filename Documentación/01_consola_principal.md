@@ -342,7 +342,7 @@ La lista de canciones, efectos y comandos que forman el programa.
 | `🎧 Editor de Pistas Avanzado` | Abre el Editor de Audio |
 | `🔀 Editar Transición Musical` | Abre el Editor de Transiciones para configurar el crossfade con la pista anterior |
 | `🎙️ Editar Cruce con Pisador` | Abre el Editor de Jingles para configurar un jingle que suena encima de la pista |
-| `Pisadores automáticos...` | Configura un pisador sencillo que inicia a los segundos indicados. Puede respetar o ignorar los pisadores del Editor Avanzado y aplicarse solo a esa fila o cada vez que se agregue la misma ruta. Disponible para pistas normales y carpetas aleatorias. |
+| `Pisadores automáticos...` | Configura un pisador sencillo que inicia a los segundos indicados. Puede respetar o ignorar los pisadores del Editor Avanzado. En una pista normal se aplica solo a esa fila. En una carpeta aleatoria el operador decide si se limita a la fila o se reutiliza cada vez que agregue la misma carpeta. |
 | `Editar nombre simple...` | Permite cambiar el nombre que se muestra en la playlist |
 | `Establecer tipo de archivo ▶` | Submenú para cambiar el tipo (Comercial, Jingle, Station ID, etc.) |
 | `⏱️ Marcar / Desmarcar Temporal` | Marca la pista como temporal |

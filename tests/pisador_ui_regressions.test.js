@@ -35,8 +35,10 @@ test('advanced editor selects folders through the portable folder dialog', () =>
 test('playlist exposes quick automatic pisador modal and serializes row metadata', () => {
     assert.match(indexHtml, /id="pm-auto-pisador"/);
     assert.match(indexHtml, /id="auto-pisador-modal"/);
+    assert.match(indexHtml, /id="auto-pisador-scope-row"/);
     assert.match(renderJs, /automaticPisadorRule/);
     assert.match(renderJs, /automatic_sweeper_rules\.json/);
+    assert.match(renderJs, /normalizeQuickRuleForRowType/);
 });
 
 test('renderer prepares, plays and clears overlay sessions instead of rerolling folders at trigger time', () => {

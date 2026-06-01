@@ -104,6 +104,12 @@ function normalizeQuickRule(rule) {
     };
 }
 
+function normalizeQuickRuleForRowType(rule, rowType = 'normal') {
+    const normalized = normalizeQuickRule(rule);
+    if (!normalized) return null;
+    return rowType === 'random' ? normalized : { ...normalized, scope: 'row' };
+}
+
 function parseQuickRule(value) {
     if (!value) return null;
     try {
@@ -135,6 +141,7 @@ module.exports = {
     storageToCondition,
     validateDynamicAnchor,
     normalizeQuickRule,
+    normalizeQuickRuleForRowType,
     parseQuickRule,
     serializeQuickRule,
     normalizeRulePathKey

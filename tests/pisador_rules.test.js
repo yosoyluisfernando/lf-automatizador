@@ -126,6 +126,16 @@ test('quick rules normalize folder source, scope, priority and start time', () =
     });
 });
 
+test('persistent quick-rule scope is reserved for random playlist folders', () => {
+    const rule = {
+        source: { kind: 'folder', path: '/radio/ids' },
+        startSeconds: 3,
+        scope: 'path'
+    };
+    assert.strictEqual(rules.normalizeQuickRuleForRowType(rule, 'random').scope, 'path');
+    assert.strictEqual(rules.normalizeQuickRuleForRowType(rule, 'normal').scope, 'row');
+});
+
 test('quick rules apply defaults and reject invalid sources or start times', () => {
     assert.deepStrictEqual(rules.normalizeQuickRule({
         source: { kind: 'builtin', name: 'humidity' },
