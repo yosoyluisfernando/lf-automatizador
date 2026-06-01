@@ -1,7 +1,5 @@
 const { ipcRenderer } = require('electron');
-const fs = require('fs');
-const path = require('path');
-const { getConfigDir } = require('../backend/utils/app_paths');
+const { redactSensitiveText } = require('../backend/utils/log_security');
 
 // Versión real (desde package.json) en la cabecera.
 try {
@@ -14,13 +12,11 @@ try {
     else applyEncoderVersion();
 } catch (err) { /* fallback: texto estático del HTML */ }
 
-const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
-const encoderPrefsPath = path.join(configDir, 'encoder_prefs.json');
-
 // ── Configuración: entrada compartida + lista de servidores ──────────────────
 let globalCfg = { source: 'master', mic: '', tapPoint: 'postFx' };
 let servers = [];     // ver makeServer()
 let nextServerId = 1;
+let prefsLoadWarning = '';
 
 function makeServer(data = {}) {
     return {
@@ -29,6 +25,7 @@ function makeServer(data = {}) {
         type: data.type || data.serverType || 'icecast',
         ip: data.ip || '',
         port: data.port || '',
+        adminPort: data.adminPort || '',
         user: data.user || 'source',
         pass: data.pass || data.password || '',
         mount: data.mount || '',
@@ -56,22 +53,21 @@ function sanitizeServerType(t) {
 
 // Carga + migración de prefs. El formato viejo era un único servidor plano.
 function loadPrefs() {
-    let raw = {};
-    if (fs.existsSync(encoderPrefsPath)) {
-        try { raw = JSON.parse(fs.readFileSync(encoderPrefsPath, 'utf-8')); } catch (e) { raw = {}; }
-    }
+    const result = ipcRenderer.sendSync('encoder-prefs-load-sync') || {};
+    const raw = result.prefs || {};
+    prefsLoadWarning = result.warning || '';
     globalCfg.source = raw.source === 'mic' ? 'mic' : 'master';
     globalCfg.mic = raw.mic || raw.micId || '';
     globalCfg.tapPoint = raw.tapPoint === 'preFx' ? 'preFx' : 'postFx';
 
-    if (Array.isArray(raw.servers) && raw.servers.length) {
+    if (Array.isArray(raw.servers)) {
         servers = raw.servers.map(s => makeServer({ ...s, type: sanitizeServerType(s.type || s.serverType) }));
     } else if (raw.ip || raw.port || raw.type) {
         // Migración: prefs antiguas de un solo servidor.
         servers = [makeServer({
             id: '0',
             type: sanitizeServerType(raw.type || raw.serverType),
-            ip: raw.ip, port: raw.port, user: raw.user, pass: raw.pass || raw.password,
+            ip: raw.ip, port: raw.port, adminPort: raw.adminPort, user: raw.user, pass: raw.pass || raw.password,
             mount: raw.mount, codec: raw.codec, bitrate: raw.bitrate
         })];
     } else {
@@ -82,19 +78,17 @@ function loadPrefs() {
 }
 
 function savePrefs() {
-    try {
-        const data = {
-            source: globalCfg.source,
-            mic: globalCfg.mic,
-            tapPoint: globalCfg.tapPoint,
-            servers: servers.map(s => ({
-                id: s.id, name: s.name, type: s.type, ip: s.ip, port: s.port,
-                user: s.user, pass: s.pass, mount: s.mount, codec: s.codec, bitrate: s.bitrate,
-                legacy: s.legacy === true, genre: s.genre || ''
-            }))
-        };
-        fs.writeFileSync(encoderPrefsPath, JSON.stringify(data, null, 2));
-    } catch (e) {}
+    const data = {
+        source: globalCfg.source,
+        mic: globalCfg.mic,
+        tapPoint: globalCfg.tapPoint,
+        servers: servers.map(s => ({
+            id: s.id, name: s.name, type: s.type, ip: s.ip, port: s.port, adminPort: s.adminPort,
+            user: s.user, pass: s.pass, mount: s.mount, codec: s.codec, bitrate: s.bitrate,
+            legacy: s.legacy === true, genre: s.genre || ''
+        }))
+    };
+    ipcRenderer.send('encoder-prefs-save', data);
 }
 
 loadPrefs();
@@ -140,6 +134,9 @@ function serverLabel(s) {
     return s.name ? s.name : `${typeName} · ${host}`;
 }
 function getServer(id) { return servers.find(s => s.id === String(id)); }
+function hasBusyServers(exceptId = null) {
+    return servers.some(s => s.id !== String(exceptId) && s.status !== 'disconnected');
+}
 
 function encLog(msg, type = 'info', serverId = null) {
     const d = new Date().toLocaleTimeString('es-PE', { hour12: false });
@@ -154,7 +151,7 @@ function encLog(msg, type = 'info', serverId = null) {
     time.textContent = `[${d}]`;
     row.appendChild(time);
     const prefix = serverId != null ? `[Srv ${serverId}] ` : '';
-    row.appendChild(document.createTextNode(` ${prefix}${msg}`));
+    row.appendChild(document.createTextNode(` ${prefix}${redactSensitiveText(msg)}`));
     logBox.appendChild(row);
     while (logBox.children.length > 500) logBox.removeChild(logBox.firstChild);
     logBox.scrollTop = logBox.scrollHeight;
@@ -267,22 +264,23 @@ function buildServerCard(s) {
                 <select class="enc-input dark-select fld-type">
                     <option value="icecast">Icecast 2 (Zeno.fm, HTTP PUT)</option>
                     <option value="shoutcast">SHOUTcast v1/clásico (L2MR — ICY legacy)</option>
-                    <option value="shoutcast2">SHOUTcast 2.x moderno (HTTP PUT)</option>
+                    <option value="shoutcast2">SHOUTcast 2.x nativo (Ultravox 2.1)</option>
                 </select>
             </div>
             <div class="row"><label>IP / Host:</label><input type="text" class="enc-input fld-ip" placeholder="ej. cast.zenomedia.com"></div>
-            <div class="row"><label>Puerto:</label><input type="text" class="enc-input fld-port" placeholder="ej. 80"></div>
-            <div class="row row-user" style="${isIce ? '' : 'display:none;'}"><label>Usuario:</label><input type="text" class="enc-input fld-user" placeholder="source"></div>
+            <div class="row"><label>Puerto de fuente:</label><input type="text" class="enc-input fld-port" placeholder="ej. 8000" title="Usa el puerto exacto entregado por tu proveedor. En ICY legacy suele ser el puerto base DNAS + 1."></div>
+            <div class="row row-admin-port" style="${isIce ? 'display:none;' : ''}"><label>Puerto administrativo:</label><input type="text" class="enc-input fld-admin-port" placeholder="opcional, ej. 8000" title="Opcional. Usado solo para actualizar metadatos. En SHOUTcast clasico puede diferir del puerto de fuente."></div>
+            <div class="row row-user" style="${isIce || isSc2 ? '' : 'display:none;'}"><label>Usuario / UID:</label><input type="text" class="enc-input fld-user" placeholder="source"></div>
             <div class="row"><label>Contraseña:</label><input type="password" class="enc-input fld-pass" placeholder="Mountpass o Password"></div>
             <div class="row row-mount" style="${isIce || isSc2 ? '' : 'display:none;'}"><label class="lbl-mount">${mountLabel}</label><input type="text" class="enc-input fld-mount" placeholder="${mountPh}"></div>
-            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>Protocolo ICY legacy:</label><input type="checkbox" class="fld-legacy" title="Actívalo para L2MR, RadioFe y otros 'Shoutcast 2' que solo aceptan ICY v1 (contraseña directa). Sin esto se usa HTTP PUT."></div>
+            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>Compatibilidad ICY v1:</label><input type="checkbox" class="fld-legacy" title="Activalo solo si el proveedor DNAS2 exige fuente ICY v1. El SID se enviara como sufijo password:#SID. Sin esto se usa Ultravox 2.1 nativo."></div>
             <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Nombre Estación:</label><input type="text" class="enc-input fld-icyname" placeholder="ej. Mi Radio" title="Nombre que verán los oyentes (requerido por SHOUTcast)"></div>
             <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Género:</label><input type="text" class="enc-input fld-genre" placeholder="ej. Variado" title="Género musical (requerido por SHOUTcast DNAS 2.x)"></div>
             <div class="row"><label>Formato (Codec):</label>
                 <select class="enc-input dark-select fld-codec">
                     <option value="mp3">MP3 (Universal/Clásico)</option>
                     <option value="aac">AAC-LC (Icecast / ZenoRadio)</option>
-                    <option value="aac_he">AAC+ / HE-AAC (si hay libfdk_aac)</option>
+                    <option value="aac_he">AAC+ / HE-AAC (FFmpeg externo autorizado)</option>
                 </select>
             </div>
             <div class="row"><label>Calidad (Bitrate):</label>
@@ -300,6 +298,7 @@ function buildServerCard(s) {
     card.querySelector('.fld-type').value = s.type;
     card.querySelector('.fld-ip').value = s.ip;
     card.querySelector('.fld-port').value = s.port;
+    card.querySelector('.fld-admin-port').value = s.adminPort;
     card.querySelector('.fld-user').value = s.user || 'source';
     card.querySelector('.fld-pass').value = s.pass;
     card.querySelector('.fld-mount').value = s.mount;
@@ -318,6 +317,7 @@ function wireServerCard(card, s) {
     const rowUser = card.querySelector('.row-user');
     const rowMount = card.querySelector('.row-mount');
     const rowLegacy = card.querySelector('.row-legacy');
+    const rowAdminPort = card.querySelector('.row-admin-port');
     const rowsIcy = card.querySelectorAll('.row-icy');
     const lblMount = card.querySelector('.lbl-mount');
     const mountInput = card.querySelector('.fld-mount');
@@ -326,13 +326,14 @@ function wireServerCard(card, s) {
         const t = typeSel.value;
         const isIce = t === 'icecast';
         rowsIcy.forEach(r => { r.style.display = isIce ? 'none' : 'flex'; });
+        rowAdminPort.style.display = isIce ? 'none' : 'flex';
         if (isIce) {
             rowMount.style.display = 'flex'; lblMount.textContent = 'Punto de Montaje:'; mountInput.placeholder = 'ej. /stream';
             rowUser.style.display = 'flex';
             rowLegacy.style.display = 'none';
         } else if (t === 'shoutcast2') {
             rowMount.style.display = 'flex'; lblMount.textContent = 'Stream ID (SID):'; mountInput.placeholder = 'ej. 1';
-            rowUser.style.display = 'none';
+            rowUser.style.display = 'flex';
             rowLegacy.style.display = 'flex';
         } else {
             rowMount.style.display = 'none'; rowUser.style.display = 'none';
@@ -343,6 +344,7 @@ function wireServerCard(card, s) {
     typeSel.addEventListener('change', () => { s.type = sanitizeServerType(typeSel.value); applyTypeVisibility(); refreshTitles(); savePrefs(); });
     card.querySelector('.fld-ip').addEventListener('input', (e) => { s.ip = e.target.value.trim(); refreshTitles(); savePrefs(); });
     card.querySelector('.fld-port').addEventListener('input', (e) => { s.port = e.target.value.trim(); refreshTitles(); savePrefs(); });
+    card.querySelector('.fld-admin-port').addEventListener('input', (e) => { s.adminPort = e.target.value.trim(); savePrefs(); });
     card.querySelector('.fld-user').addEventListener('input', (e) => { s.user = e.target.value.trim() || 'source'; savePrefs(); });
     card.querySelector('.fld-pass').addEventListener('input', (e) => { s.pass = e.target.value; savePrefs(); });
     mountInput.addEventListener('input', (e) => { s.mount = e.target.value; savePrefs(); });
@@ -460,7 +462,7 @@ function buildServerConfig(s) {
     return {
         serverId: s.id,
         serverType: s.type, type: s.type,
-        ip: s.ip, port: s.port,
+        ip: s.ip, port: s.port, adminPort: s.adminPort,
         user: s.user || 'source',
         password: s.pass, pass: s.pass,
         mount: s.mount,
@@ -477,9 +479,13 @@ function buildServerConfig(s) {
 
 function validateServer(s) {
     const portNum = Number(s.port);
+    const adminPortNum = Number(s.adminPort);
+    if (s.adminPort && (!Number.isInteger(adminPortNum) || adminPortNum < 1 || adminPortNum > 65535)) return 'Puerto administrativo invalido.';
     if (!s.ip || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return 'IP/host o puerto inválido.';
     if (!s.pass) return 'Falta la contraseña del servidor.';
     if (s.type === 'icecast' && !s.mount) return 'Falta el punto de montaje para Icecast.';
+    if (s.type === 'shoutcast2' && !/^[1-9]\d*$/.test(String(s.mount || '').trim())) return 'El Stream ID (SID) debe ser un entero positivo.';
+    if (!['mp3', 'aac', 'aac_he'].includes(s.codec)) return 'Selecciona un codec valido.';
     if (globalCfg.source === 'mic' && !globalCfg.mic) return 'Selecciona una entrada de audio externa.';
     return null;
 }
@@ -487,6 +493,10 @@ function validateServer(s) {
 function connectServer(id, opts = {}) {
     const s = getServer(id);
     if (!s) return;
+    if (globalCfg.source === 'mic' && hasBusyServers(s.id)) {
+        encLog('La entrada externa solo admite un servidor a la vez. Desconecta el servidor actual antes de iniciar otro.', 'error', s.id);
+        return;
+    }
     const err = validateServer(s);
     if (err) { encLog(err, 'error', s.id); document.getElementById('tab-btn-config').click(); return; }
     clearServerReconnect(s);
@@ -636,6 +646,11 @@ sourceSel.value = globalCfg.source;
 tapPointSel.value = globalCfg.tapPoint;
 
 sourceSel.addEventListener('change', async () => {
+    if (servers.some(s => s.status !== 'disconnected')) {
+        sourceSel.value = globalCfg.source;
+        encLog('Desconecta las transmisiones antes de cambiar la fuente de audio.', 'warn');
+        return;
+    }
     globalCfg.source = sourceSel.value === 'mic' ? 'mic' : 'master';
     micRow.style.display = globalCfg.source === 'mic' ? 'flex' : 'none';
     if (globalCfg.source === 'mic') await loadMicrophones();
@@ -644,7 +659,15 @@ sourceSel.addEventListener('change', async () => {
 micRow.style.display = globalCfg.source === 'mic' ? 'flex' : 'none';
 if (globalCfg.source === 'mic') loadMicrophones();
 
-micSel.addEventListener('change', () => { globalCfg.mic = micSel.value; savePrefs(); });
+micSel.addEventListener('change', () => {
+    if (servers.some(s => s.status !== 'disconnected')) {
+        micSel.value = globalCfg.mic;
+        encLog('Desconecta la transmision antes de cambiar la entrada externa.', 'warn');
+        return;
+    }
+    globalCfg.mic = micSel.value;
+    savePrefs();
+});
 
 // Tap point: persistir + hot-swap al motor Rust (sin reiniciar el encoder).
 ipcRenderer.send('encoder-tap-point-changed', { tapPoint: globalCfg.tapPoint });
@@ -668,12 +691,21 @@ ipcRenderer.on('encoder-servers-snapshot', (e, list) => {
 });
 ipcRenderer.on('encoder-throughput', (e, report) => updateServerThroughput(report || {}));
 ipcRenderer.on('encoder-error', (e, payload) => {
-    if (payload && typeof payload === 'object') encLog(`Error: ${payload.message}`, 'error', payload.serverId);
-    else encLog(`Error: ${payload}`, 'error');
+    if (payload && typeof payload === 'object') {
+        const s = getServer(payload.serverId);
+        if (s && payload.retryable === false) {
+            s.autoReconnect = false;
+            clearServerReconnect(s);
+        }
+        encLog(`Error${payload.category ? ` (${payload.category})` : ''}: ${payload.message}`, 'error', payload.serverId);
+    } else encLog(`Error: ${payload}`, 'error');
 });
 ipcRenderer.on('encoder-warn', (e, payload) => {
     if (payload && typeof payload === 'object') encLog(`Aviso: ${payload.message}`, 'warn', payload.serverId);
     else encLog(`Aviso: ${payload}`, 'warn');
+});
+ipcRenderer.on('encoder-prefs-warning', (e, message) => {
+    if (message) encLog(`Aviso de credenciales: ${message}`, 'warn');
 });
 ipcRenderer.on('encoder-input-meter', (e, report) => updateInputMeter(report));
 ipcRenderer.on('encoder-capture-health', (e, report) => {
@@ -688,3 +720,4 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
 renderServers();
 resetInputMeter();
 encLog('Encoder listo.', 'info');
+if (prefsLoadWarning) encLog(`Aviso de credenciales: ${prefsLoadWarning}`, 'warn');

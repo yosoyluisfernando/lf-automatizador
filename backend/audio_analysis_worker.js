@@ -4,12 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const db = require('../database');
+const { resolveFfmpegRuntime } = require('./utils/ffmpeg_resolver');
 
-let ffmpegPath = 'ffmpeg';
-try { 
-    ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
-    ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-} catch (err) {}
+const ffmpegPath = resolveFfmpegRuntime().baseline.path;
 
 function resolveRustAudioEnginePath() {
     const rootDir = path.resolve(__dirname, '..');

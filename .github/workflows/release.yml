@@ -9,11 +9,15 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     
     strategy:
       fail-fast: false
@@ -28,10 +32,10 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -57,21 +61,12 @@ jobs:
           sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Cache Rust Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: audio-engine-rust
-
-      - name: Compile Rust Engine (Windows)
-        if: matrix.platform == 'win'
-        shell: bash
-        run: |
-          cd audio-engine-rust
-          cargo build --release
-          mkdir -p ../bin
-          cp target/release/lf-audio-engine.exe ../bin/
 
       - name: Download VC++ 2015-2022 Redistributable (Windows)
         if: matrix.platform == 'win'
@@ -88,30 +83,77 @@ jobs:
             Write-Error "El archivo descargado es demasiado pequeno ($size bytes). Se esperaban ~25 MB."
             exit 1
           }
-
-      - name: Compile Rust Engine (Linux)
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          cd audio-engine-rust
-          cargo build --release
-          mkdir -p ../bin
-          cp target/release/lf-audio-engine ../bin/
-          chmod +x ../bin/lf-audio-engine
+          $signature = Get-AuthenticodeSignature $dest
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft Corporation") {
+            Write-Error "Firma Authenticode invalida para vc_redist.x64.exe: $($signature.Status) $($signature.SignerCertificate.Subject)"
+            exit 1
+          }
 
       - name: Install NPM Dependencies
         run: npm ci
+
+      - name: Verify ffmpeg-static SHA-256
+        run: npm run verify:ffmpeg-static
+
+      - name: Verify Release Tag Matches Package Version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error(`Tag ${process.env.GITHUB_REF_NAME} no coincide con ${expected}`)"
+
+      - name: Run Node Regression Tests
+        run: npm test
+
+      - name: Run Rust Checks
+        working-directory: audio-engine-rust
+        run: |
+          cargo test
+          cargo check
 
       - name: Rebuild Native Node Modules
         run: npx electron-rebuild -f -w better-sqlite3
 
       - name: Build Electron App (${{ matrix.platform }})
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ matrix.platform == 'win' && startsWith(github.ref, 'refs/tags/') && secrets.WINDOWS_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'win' && startsWith(github.ref, 'refs/tags/') && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
         run: npm run ${{ matrix.npm_script }}
+
+      - name: Generate Artifact SHA-256
+        run: node build/generate-artifact-checksums.js ${{ matrix.platform }}
+
+      - name: Attest Artifact Checksums
+        uses: actions/attest@281a49d4cbb0a72c9575a50d18f6deb515a11deb # v4
+        with:
+          subject-path: dist/SHA256SUMS-${{ matrix.platform }}.txt
+
+      - name: Require Signed Windows Installer For Tags
+        if: matrix.platform == 'win' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem dist -Filter *.exe -File
+          if (-not $installers) {
+            Write-Error "No se encontro instalador Windows para verificar."
+            exit 1
+          }
+          $expectedThumbprint = "${{ vars.LF_WINDOWS_SIGNER_THUMBPRINT }}".Replace(" ", "").ToUpperInvariant()
+          if (-not $expectedThumbprint) {
+            Write-Error "Falta configurar vars.LF_WINDOWS_SIGNER_THUMBPRINT."
+            exit 1
+          }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne "Valid") {
+              Write-Error "El instalador no tiene firma Authenticode valida: $($installer.Name) $($signature.Status)"
+              exit 1
+            }
+            $actualThumbprint = ([string]$signature.SignerCertificate.Thumbprint).Replace(" ", "").ToUpperInvariant()
+            if ($actualThumbprint -ne $expectedThumbprint) {
+              Write-Error "El instalador no fue firmado por el certificado oficial: $($installer.Name)"
+              exit 1
+            }
+          }
         
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lf-automatizador-${{ matrix.platform }}-${{ runner.arch }}
           if-no-files-found: error
@@ -119,21 +161,69 @@ jobs:
             dist/*.exe
             dist/*.deb
             dist/*.AppImage
+            dist/SHA256SUMS-*.txt
+
+      - name: Upload FFmpeg Corresponding Sources
+        if: matrix.platform == 'win' && hashFiles('build/compliance/ffmpeg-source-bundle-*.zip') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lf-automatizador-ffmpeg-sources
+          path: build/compliance/ffmpeg-source-bundle-*.zip
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download Installer Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           merge-multiple: true
 
+      - name: Require Corresponding FFmpeg Source Bundle
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bundles=(release-assets/ffmpeg-source-bundle-*.zip)
+          if [ ${#bundles[@]} -ne 1 ]; then
+            echo "Se requiere exactamente un build/compliance/ffmpeg-source-bundle-*.zip con las fuentes correspondientes del FFmpeg distribuido."
+            exit 1
+          fi
+          bundle="${bundles[0]}"
+          if [ "$(stat -c%s "$bundle")" -lt 1000000 ]; then
+            echo "El bundle de fuentes FFmpeg es demasiado pequeno."
+            exit 1
+          fi
+          unzip -t "$bundle"
+          unzip -Z1 "$bundle" | grep -qx 'ffmpeg-source-manifest.json'
+          export FFMPEG_SOURCE_MANIFEST="$(unzip -p "$bundle" ffmpeg-source-manifest.json)"
+          node -e '
+            const manifest = JSON.parse(process.env.FFMPEG_SOURCE_MANIFEST);
+            const expected = {
+              "win32-x64": "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00",
+              "linux-x64": "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99"
+            };
+            if (manifest.ffmpegStaticRelease !== "b6.1.1") throw new Error("Release ffmpeg-static incorrecto.");
+            if (manifest.includesExternalLibrarySources !== true) throw new Error("Faltan fuentes de bibliotecas externas.");
+            for (const [platform, sha256] of Object.entries(expected)) {
+              if (manifest.binarySha256?.[platform] !== sha256) throw new Error(`SHA-256 incorrecto para ${platform}.`);
+            }
+          '
+          sha256sum "$bundle" > release-assets/SHA256SUMS-sources.txt
+
+      - name: Attest FFmpeg Source Bundle Checksum
+        uses: actions/attest@281a49d4cbb0a72c9575a50d18f6deb515a11deb # v4
+        with:
+          subject-path: release-assets/SHA256SUMS-sources.txt
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: LF Automatizador ${{ github.ref_name }}
           body: Instaladores generados automáticamente por GitHub Actions.
@@ -143,3 +233,5 @@ jobs:
             release-assets/*.exe
             release-assets/*.deb
             release-assets/*.AppImage
+            release-assets/SHA256SUMS-*.txt
+            release-assets/ffmpeg-source-bundle-*.zip

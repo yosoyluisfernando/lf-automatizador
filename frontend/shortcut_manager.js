@@ -15,6 +15,14 @@ function buildComboString(e) {
     return parts.join('+') || null;
 }
 
+function isEditableShortcutTarget(target) {
+    const element = target || document.activeElement;
+    if (!element) return false;
+    if (element.isContentEditable) return true;
+    const tag = element.tagName;
+    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag);
+}
+
 /**
  * ShortcutManager — despacha acciones a partir de pulsaciones de tecla.
  *
@@ -28,6 +36,7 @@ class ShortcutManager {
         this._keyToAction = {};   // { 'Ctrl+P': 'app.open_settings', ... }
         this._handlers    = {};   // { 'playlist.play': fn, ... }
         this._enabled     = true;
+        this._guard       = null;
         this._boundKeydown = this._onKeydown.bind(this);
         window.addEventListener('keydown', this._boundKeydown, true);
     }
@@ -61,6 +70,10 @@ class ShortcutManager {
         this._enabled = !!enabled;
     }
 
+    setGuard(fn) {
+        this._guard = typeof fn === 'function' ? fn : null;
+    }
+
     /**
      * Registra un fallback que se llama cuando la tecla NO está en el mapa general.
      * fn(combo, event) → true si fue manejada (se llama preventDefault), false si no.
@@ -81,10 +94,8 @@ class ShortcutManager {
         // Escape, Enter y Tab nunca son interceptados
         if (ALWAYS_RESERVED.has(e.key)) return;
 
-        // Teclas sin modificador no se interceptan si hay un campo de texto enfocado
-        const tag = document.activeElement?.tagName;
-        const hasModifier = e.ctrlKey || e.altKey || e.metaKey;
-        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !hasModifier) return;
+        if (isEditableShortcutTarget(e.target)) return;
+        if (this._guard && !this._guard(e)) return;
 
         const combo = buildComboString(e);
         if (!combo) return;
@@ -104,4 +115,4 @@ class ShortcutManager {
     }
 }
 
-module.exports = { ShortcutManager, buildComboString };
+module.exports = { ShortcutManager, buildComboString, isEditableShortcutTarget };

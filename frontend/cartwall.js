@@ -1,6 +1,6 @@
 const { ipcRenderer, webUtils } = require('electron');
 const path = require('path');
-const { buildComboString } = require('./shortcut_manager');
+const { buildComboString, isEditableShortcutTarget } = require('./shortcut_manager');
 
 let cartwallState = null;
 let cwActiveTabIndex = 0;
@@ -776,8 +776,7 @@ loadState();
 window.addEventListener('keydown', (e) => {
     if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
     if (['Escape', 'Enter', 'Tab'].includes(e.key)) return;
-    const tag = document.activeElement?.tagName;
-    if (['INPUT', 'TEXTAREA'].includes(tag) && !e.ctrlKey && !e.altKey) return;
+    if (!document.hasFocus() || isEditableShortcutTarget(e.target)) return;
 
     const combo = buildComboString(e);
     if (!combo) return;

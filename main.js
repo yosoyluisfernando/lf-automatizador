@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
@@ -10,6 +10,9 @@ const { version: APP_VERSION } = require('./package.json');
 const db = require('./database');
 const { RustAudioEngineProbe } = require('./backend/audio_engine_process');
 const { cleanCsvList, mergeCsvList, cleanMetaString, tokenSet, jaccard, waitRateLimit } = require('./backend/utils/helpers.js');
+const { redactSensitiveText, rotateLogIfNeeded, scrubLogFile } = require('./backend/utils/log_security');
+const { resolveFfmpegRuntime } = require('./backend/utils/ffmpeg_resolver');
+const { verifyMicrosoftAuthenticode } = require('./backend/utils/windows_authenticode');
 const {
   _injectDeps: artists_injectDeps,
   PROTECTED_ARTIST_GROUP_NAMES,
@@ -138,11 +141,13 @@ try { db.prepare("ALTER TABLE tracks ADD COLUMN peak_db TEXT").run(); } catch(e)
 try { db.prepare("ALTER TABLE tracks ADD COLUMN file_size INTEGER").run(); } catch(e) {}
 try { db.prepare("ALTER TABLE tracks ADD COLUMN file_mtime_ms INTEGER").run(); } catch(e) {}
 
-let ffmpegPath = 'ffmpeg';
-try { 
-    ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
-    ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-} catch (e) {}
+const ffmpegRuntime = resolveFfmpegRuntime();
+const ffmpegPath = ffmpegRuntime.baseline.path;
+const ffmpegFdkPath = ffmpegRuntime.fdk?.path || '';
+const ffmpegCapabilities = {
+    baseline: ffmpegRuntime.baseline.capabilities,
+    fdk: ffmpegRuntime.fdk?.capabilities || null,
+};
 const rustAudioEngine = new RustAudioEngineProbe({
     rootDir: __dirname,
     cp,
@@ -170,6 +175,45 @@ const rustAudioEngine = new RustAudioEngineProbe({
         } catch (err) {}
     }
 });
+let appSuspensionBlockerId = null;
+
+function broadcastAudioPowerEvent(payload = {}) {
+    const message = { at: Date.now(), ...payload };
+    writeLog(`[ENERGIA] ${message.phase || 'evento'}${message.reason ? `: ${message.reason}` : ''}`);
+    try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('audio-engine-power-event', message);
+        }
+    } catch (err) {}
+}
+
+function installAudioPowerGuards() {
+    try {
+        if (appSuspensionBlockerId === null || !powerSaveBlocker.isStarted(appSuspensionBlockerId)) {
+            appSuspensionBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+            writeLog('[ENERGIA] Suspension automatica bloqueada; la pantalla puede apagarse normalmente.');
+        }
+    } catch (err) {
+        writeLog(`[ENERGIA] No se pudo bloquear suspension automatica: ${err?.message || err}`);
+    }
+    powerMonitor.on('suspend', () => {
+        broadcastAudioPowerEvent({ phase: 'suspend', reason: 'Windows suspendio la sesion.' });
+    });
+    powerMonitor.on('resume', async () => {
+        broadcastAudioPowerEvent({ phase: 'resume', reason: 'Windows reanudo la sesion; verificando RustAudio.' });
+        // Un heartbeat vivo no garantiza que WASAPI siga drenando audio. Tras
+        // una suspension real reconstruimos siempre el proceso, sus sinks y el
+        // tap PCM del encoder antes de permitir que la playlist avance.
+        const recovery = await rustAudioEngine.recover('Windows reanudo la sesion; reconstruyendo WASAPI.');
+        broadcastAudioPowerEvent({
+            phase: recovery?.success ? 'ready' : 'failed',
+            reason: recovery?.success ? 'RustAudio listo tras reanudar.' : (recovery?.error || 'RustAudio no se recupero tras reanudar.'),
+            recovery,
+        });
+    });
+    powerMonitor.on('lock-screen', () => broadcastAudioPowerEvent({ phase: 'lock-screen' }));
+    powerMonitor.on('unlock-screen', () => broadcastAudioPowerEvent({ phase: 'unlock-screen' }));
+}
 
 let libraryWorker = null;
 const libraryWorkerPending = new Map();
@@ -617,10 +661,13 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const configDir = getConfigDir(path.join(__dirname, 'config'), __dirname);
 
 const uiPrefsPath = path.join(configDir, 'ui_prefs.json');
-let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false };
+let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating' };
 try { if (fs.existsSync(uiPrefsPath)) uiPrefs = { ...uiPrefs, ...JSON.parse(fs.readFileSync(uiPrefsPath, 'utf-8')) }; } catch(e) {}
 function saveUiPrefs() { try { fs.writeFileSync(uiPrefsPath, JSON.stringify(uiPrefs, null, 2)); } catch(e) {} }
-if (uiPrefs.cartwall) { uiPrefs.cartwall = false; saveUiPrefs(); }
+if (uiPrefs.cartwall) uiPrefs.cartwallLastMode = 'docked';
+const generalSettingsPath = path.join(configDir, 'general_settings.json');
+let keyboardShortcutScope = loadJsonConfig(generalSettingsPath, {}).keyboardShortcutScope || 'contextual';
+const shortcutEditableByWebContents = new Map();
 
 const cwConfigPath = path.join(configDir, 'cartwall_profiles.json');
 const fileTypesPath = path.join(configDir, 'file_types.json');
@@ -847,13 +894,28 @@ function scheduleVuBroadcast(immediate = false) {
     }
 }
 
+const scrubbedLogPaths = new Set();
+function scrubPersistentLogOnce(filePath) {
+    if (scrubbedLogPaths.has(filePath)) return;
+    scrubLogFile(filePath);
+    scrubbedLogPaths.add(filePath);
+}
+
 function writeLog(msg) {
     const timeStr = new Date().toLocaleString('es-PE', { hour12: false });
-    const finalMsg = `[${timeStr}] ${msg}\n`;
+    const finalMsg = `[${timeStr}] ${redactSensitiveText(msg)}\n`;
+    const primaryLogPath = path.join(configDir, 'ERROR_ANALYZER_LOG.txt');
     try {
-        fs.appendFileSync(path.join(configDir, 'ERROR_ANALYZER_LOG.txt'), finalMsg);
+        scrubPersistentLogOnce(primaryLogPath);
+        rotateLogIfNeeded(primaryLogPath);
+        fs.appendFileSync(primaryLogPath, finalMsg);
     } catch (err) {
-        try { fs.appendFileSync(path.join(os.tmpdir(), 'LF-Automatizador-ERROR_ANALYZER_LOG.txt'), finalMsg); } catch (fallbackErr) {}
+        try {
+            const fallbackLogPath = path.join(os.tmpdir(), 'LF-Automatizador-ERROR_ANALYZER_LOG.txt');
+            scrubPersistentLogOnce(fallbackLogPath);
+            rotateLogIfNeeded(fallbackLogPath);
+            fs.appendFileSync(fallbackLogPath, finalMsg);
+        } catch (fallbackErr) {}
     }
 }
 
@@ -2059,9 +2121,55 @@ ipcMain.on('editor-start-meta', async (e, data) => {
     }
 });
 
+function buildElectronShortcutCombo(input = {}) {
+    if (!input.key || ['Control', 'Alt', 'Shift', 'Meta'].includes(input.key)) return null;
+    const parts = [];
+    if (input.control) parts.push('Ctrl');
+    if (input.alt) parts.push('Alt');
+    if (input.shift) parts.push('Shift');
+    const key = input.key.length === 1 ? input.key.toUpperCase() : input.key;
+    parts.push(key);
+    return parts.join('+');
+}
+
 function installNavigationGuards() {
+    ipcMain.on('shortcut-editable-focus', (event, editable) => {
+        shortcutEditableByWebContents.set(event.sender.id, editable === true);
+    });
+    ipcMain.on('shortcut-scope-updated', (_event, scope) => {
+        keyboardShortcutScope = ['contextual', 'main-window', 'application'].includes(scope) ? scope : 'contextual';
+    });
     app.on('web-contents-created', (event, contents) => {
         contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+        contents.on('dom-ready', () => {
+            contents.executeJavaScript(`
+                (() => {
+                    if (window.__lfShortcutFocusTracking) return;
+                    window.__lfShortcutFocusTracking = true;
+                    const { ipcRenderer } = require('electron');
+                    const report = () => {
+                        const el = document.activeElement;
+                        ipcRenderer.send('shortcut-editable-focus', !!el && (
+                            el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+                        ));
+                    };
+                    document.addEventListener('focusin', report, true);
+                    document.addEventListener('focusout', () => setTimeout(report, 0), true);
+                    report();
+                })();
+            `).catch(() => {});
+        });
+        contents.on('before-input-event', (inputEvent, input) => {
+            if (keyboardShortcutScope !== 'application' || contents === mainWindow?.webContents) return;
+            if (input.type !== 'keyDown' || shortcutEditableByWebContents.get(contents.id) === true) return;
+            const combo = buildElectronShortcutCombo(input);
+            if (!combo) return;
+            _ensureMenuShortcuts();
+            const actionId = Object.keys(_menuShortcuts || {}).find(id => _menuShortcuts[id] === combo);
+            if (!actionId || !mainWindow || mainWindow.isDestroyed()) return;
+            inputEvent.preventDefault();
+            mainWindow.webContents.send('dispatch-configured-shortcut', actionId);
+        });
         contents.on('will-navigate', (navEvent, targetUrl) => {
             try {
                 const parsed = new URL(targetUrl);
@@ -2070,6 +2178,7 @@ function installNavigationGuards() {
                 navEvent.preventDefault();
             }
         });
+        contents.on('destroyed', () => shortcutEditableByWebContents.delete(contents.id));
     });
 }
 
@@ -2094,6 +2203,9 @@ function sc(actionId) {
     if (!raw) return null;
     return raw.replace(/^Ctrl\+/i, 'CmdOrCtrl+');
 }
+function menuShortcut(actionId) {
+    return { accelerator: sc(actionId), registerAccelerator: false };
+}
 
 function createWindow() { mainWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),   width: 1280, height: 720, title: `LF Automatizador v${APP_VERSION}`, autoHideMenuBar: false, webPreferences: { nodeIntegration: true, contextIsolation: false, backgroundThrottling: false } }); mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); mainWindow.maximize(); mainWindow.loadFile('frontend/index.html'); mainWindow.on('close', (e) => { if (!forceQuit) { e.preventDefault(); mainWindow.webContents.send('request-close-check'); } }); mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); }); }
 function syncCartwallMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-cartwall') : null; if (item) item.checked = checked; }
@@ -2102,10 +2214,10 @@ function createApplicationMenu() {
         {
             label: 'Archivo',
             submenu: [
-                { label: '📂 Abrir Playlist...', accelerator: sc('insert.open_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
-                { label: '💾 Guardar Playlist...', accelerator: sc('insert.save_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
+                { label: '📂 Abrir Playlist...', ...menuShortcut('insert.open_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
+                { label: '💾 Guardar Playlist...', ...menuShortcut('insert.save_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
                 { type: 'separator' },
-                { label: '📄 Limpiar Playlist', accelerator: sc('insert.clear_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
+                { label: '📄 Limpiar Playlist', ...menuShortcut('insert.clear_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
                 { type: 'separator' },
                 { label: 'Salir', click: () => { if (mainWindow) { mainWindow.webContents.send('request-close-check'); } else { app.quit(); } } }
             ]
@@ -2127,7 +2239,7 @@ function createApplicationMenu() {
                 { label: 'Humedad', type: 'checkbox', checked: uiPrefs.hum, click: (item) => { uiPrefs.hum = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-humidity', item.checked); } },
                 { label: 'Mostrar/Ocultar panel izquierdo', type: 'checkbox', checked: uiPrefs.leftPanel, click: (item) => { uiPrefs.leftPanel = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-left-panel', item.checked); } },
                 { label: 'Mostrar/Ocultar extensiones de canciones', type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
-                { id: 'view-toggle-cartwall', label: 'Mostrar/Ocultar botonera de efectos acoplada', type: 'checkbox', checked: uiPrefs.cartwall, click: (item) => { uiPrefs.cartwall = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
+                { id: 'view-toggle-cartwall', label: 'Mostrar/Ocultar botonera de efectos', type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
                 { type: 'separator' },
                 { label: 'Mostrar/Ocultar Mensaje del sistema (no recomendado)', type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
                 { type: 'separator' },
@@ -2142,7 +2254,7 @@ function createApplicationMenu() {
                 { label: '📁 Añadir carpeta normal...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-folder', res.filePaths[0]); } },
                 { label: '🔀 Añadir carpeta aleatoria...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-random', res.filePaths[0]); } },
                 { label: '📅 Ejecutar evento...', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-event-command'); } },
-                { label: '⌚ Añadir locución de hora', accelerator: sc('insert.time_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
+                { label: '⌚ Añadir locución de hora', ...menuShortcut('insert.time_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
                 { label: '🌡️ Añadir locución de temperatura', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-temperature'); } },
                 { label: '💧 Añadir locución de humedad', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-humidity'); } },
                 { type: 'separator' },
@@ -2159,14 +2271,14 @@ function createApplicationMenu() {
                 { label: '📝 Añadir Nota', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
                 { label: '📡 Agregar URL de emisora... (Beta)', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stream-url'); } },
                 { type: 'separator' },
-                { label: '🎯 Marcar como Siguiente', accelerator: sc('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
-                { label: '⏳ Marcar / Desmarcar como Temporal', accelerator: sc('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
+                { label: '🎯 Marcar como Siguiente', ...menuShortcut('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
+                { label: '⏳ Marcar / Desmarcar como Temporal', ...menuShortcut('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
                 { label: '🔀 Mezclar lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-shuffle'); } },
                 { type: 'separator' },
                 { label: '🧹 Limpiar pistas reproducidas', click: () => { if (mainWindow) mainWindow.webContents.send('menu-clear-played'); } },
                 { label: '🔗 Comprobar enlaces rotos', click: () => { if (mainWindow) mainWindow.webContents.send('menu-check-links'); } },
                 { type: 'separator' },
-                { label: '❌ Eliminar seleccionadas', accelerator: sc('playlist.delete_selected'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
+                { label: '❌ Eliminar seleccionadas', ...menuShortcut('playlist.delete_selected'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
                 { label: '🗑️ Vaciar toda la lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } }
             ]
         },
@@ -2182,16 +2294,16 @@ function createApplicationMenu() {
         {
             label: 'Herramientas',
             submenu: [
-                { label: '⚙️ Configuración General', accelerator: sc('app.open_settings'), click: () => { ipcMain.emit('open-settings'); } },
-                { label: '📚 Biblioteca de Música', accelerator: sc('app.open_library'), click: () => { ipcMain.emit('open-library'); } },
+                { label: '⚙️ Configuración General', ...menuShortcut('app.open_settings'), click: () => { ipcMain.emit('open-settings'); } },
+                { label: '📚 Biblioteca de Música', ...menuShortcut('app.open_library'), click: () => { ipcMain.emit('open-library'); } },
                 { label: '🧩 Generador de playlist', click: () => { if (mainWindow) mainWindow.webContents.send('menu-open-rotation'); } },
                 { type: 'separator' },
                 { label: '📅 Gestor de Eventos', click: () => { ipcMain.emit('open-event-editor', null); } },
                 { label: '🏷️ Gestor de Grupos de Eventos', click: () => { ipcMain.emit('open-event-groups'); } },
                 { type: 'separator' },
-                { label: '📇 Catálogo de Artistas', accelerator: sc('app.open_catalog'), click: () => openArtistCatalogWindow() },
-                { label: '🎨 Editor de Géneros Musicales', accelerator: sc('app.open_genre_editor'), click: () => openGenreEditorWindow() },
-                { label: '💼 Gestor de Comerciales', accelerator: sc('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
+                { label: '📇 Catálogo de Artistas', ...menuShortcut('app.open_catalog'), click: () => openArtistCatalogWindow() },
+                { label: '🎨 Editor de Géneros Musicales', ...menuShortcut('app.open_genre_editor'), click: () => openGenreEditorWindow() },
+                { label: '💼 Gestor de Comerciales', ...menuShortcut('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
                 { type: 'separator' },
                 {
                     label: '🚀 Inicializar curaduría desde carpeta raíz',
@@ -2250,6 +2362,7 @@ function createApplicationMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 app.whenReady().then(() => {
+    installAudioPowerGuards();
     installNavigationGuards();
     createApplicationMenu();
     // Pre-spawn del motor Rust ANTES de abrir la ventana.
@@ -2275,7 +2388,7 @@ app.whenReady().then(() => {
         );
         ps.unref();
     }
-}); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
+}); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) powerSaveBlocker.stop(appSuspensionBlockerId); } catch (e) {} try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
 ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
     const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow;
@@ -2308,19 +2421,38 @@ ipcMain.handle('wizard:installVcRedist', async () => {
         path.join(__dirname, 'build', 'vcredist', 'vc_redist.x64.exe')
     ].filter(Boolean);
 
-    let exePath = candidates.find(p => {
+    const bundledPath = candidates.find(p => {
         try { return fs.existsSync(p); } catch (e) { return false; }
     });
+    let stagingDir;
+    let exePath;
+    const cleanupStaging = () => {
+        if (!stagingDir) return;
+        try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (err) {}
+    };
+    try {
+        stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-vcredist-'));
+        exePath = path.join(stagingDir, 'vc_redist.x64.exe');
+        if (bundledPath) fs.copyFileSync(bundledPath, exePath);
+    } catch (err) {
+        cleanupStaging();
+        return { ok: false, error: 'No se pudo preparar vc_redist.x64.exe: ' + (err?.message || String(err)) };
+    }
 
-    if (!exePath) {
+    if (!bundledPath) {
         // Descargar a temp como fallback (Microsoft URL redirige)
-        const tmpPath = path.join(os.tmpdir(), 'lf_vc_redist.x64.exe');
         try {
-            await downloadHttpsWithRedirects('https://aka.ms/vs/17/release/vc_redist.x64.exe', tmpPath);
-            exePath = tmpPath;
+            await downloadHttpsWithRedirects('https://aka.ms/vs/17/release/vc_redist.x64.exe', exePath);
         } catch (err) {
+            cleanupStaging();
             return { ok: false, error: 'No se pudo descargar vc_redist.x64.exe: ' + (err?.message || String(err)) };
         }
+    }
+
+    const signature = verifyMicrosoftAuthenticode(exePath);
+    if (!signature.ok) {
+        cleanupStaging();
+        return { ok: false, error: 'Se rechazo vc_redist.x64.exe porque su firma digital no es valida: ' + signature.error };
     }
 
     return new Promise((resolve) => {
@@ -2331,6 +2463,7 @@ ipcMain.handle('wizard:installVcRedist', async () => {
                 windowsHide: true
             });
             child.on('exit', (code) => {
+                cleanupStaging();
                 // 0 = ok, 1638 = ya hay version mas reciente, 3010 = ok pero requiere reinicio
                 const success = code === 0 || code === 1638 || code === 3010;
                 resolve({
@@ -2341,9 +2474,11 @@ ipcMain.handle('wizard:installVcRedist', async () => {
                 });
             });
             child.on('error', (err) => {
+                cleanupStaging();
                 resolve({ ok: false, error: err?.message || String(err) });
             });
         } catch (err) {
+            cleanupStaging();
             resolve({ ok: false, error: err?.message || String(err) });
         }
     });
@@ -2385,6 +2520,7 @@ function downloadHttpsWithRedirects(url, destPath, maxRedirects = 5) {
 // ============================================================================
 const sharedState = {
     get ipcMain() { return ipcMain; },
+    get safeStorage() { return safeStorage; },
     get fs() { return fs; },
     get dialog() { return dialog; },
     get path() { return path; },
@@ -2455,6 +2591,8 @@ const sharedState = {
     get isAppQuitting() { return isAppQuitting; },
     get configDir() { return configDir; },
     get ffmpegPath() { return ffmpegPath; },
+    get ffmpegFdkPath() { return ffmpegFdkPath; },
+    get ffmpegCapabilities() { return ffmpegCapabilities; },
     get rustAudioEngine() { return rustAudioEngine; },
     get screen() { return screen; },
     get openCommercialManagerWindow() { return openCommercialManagerWindow; },

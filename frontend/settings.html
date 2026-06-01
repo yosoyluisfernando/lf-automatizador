@@ -394,6 +394,16 @@
                 <fieldset class="fieldset-dark">
                     <legend>Atajos de Teclado</legend>
 
+                    <div class="setting-row" style="margin-bottom: 8px;">
+                        <label style="width: 200px;">Alcance de los atajos:</label>
+                        <select id="sel-keyboard-shortcut-scope" class="dark-select" style="flex: 1;">
+                            <option value="contextual">Contextual seguro (recomendado)</option>
+                            <option value="main-window">Ventana principal</option>
+                            <option value="application">Aplicacion completa (avanzado)</option>
+                        </select>
+                    </div>
+                    <p id="keyboard-shortcut-scope-hint" style="font-size:12px;color:#888;margin:0 0 14px;line-height:1.5;"></p>
+
                     <div class="shortcuts-toolbar">
                         <span id="shortcuts-status" class="shortcuts-status-msg"></span>
                         <button id="btn-shortcuts-reset" class="settings-btn" style="font-size:11px;padding:4px 10px;margin-left:auto;">Restaurar predeterminados</button>

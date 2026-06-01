@@ -15,7 +15,7 @@ const { normalizeAudioPrefs } = require('./audio_prefs');
 const { AudioEngineClient, RustAudioEngineAdapter } = require('./audio_engine_client');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
-const { ShortcutManager } = require('./shortcut_manager');
+const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manager');
 const { DEFAULT_SHORTCUTS } = require('./command_registry');
 const shortcutManager = new ShortcutManager();
 
@@ -315,9 +315,9 @@ function clearPlayerPlaybackMeta(player) {
     playerPlaybackMeta.delete(player);
 }
 
-let uiPrefs = loadConfig(uiPrefsPath, { controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, playlistColumnWidths: [92, 520, 96, 82, 82] });
+let uiPrefs = loadConfig(uiPrefsPath, { controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82] });
 let fxPrefs = loadConfig(fxPrefsPath, { preamp: 0, pan: 0, mono: false, eq_bands: [0, 0, 0, 0, 0, 0, 0, 0], eq_on: false, comp_on: false, lim_on: false, order: ['eq', 'comp', 'limiter'], custom_presets: {}, active_preset: 'def_Plano (Reset)' });
-let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
+let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', keyboardShortcutScope: 'contextual', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
 generalPrefs.modeRepeatTrack = false;
 saveConfig(generalPrefsPath, generalPrefs);
 let clockwheelPrefs = loadConfig(clockwheelPrefsPath, { pattern: '', targetMinutes: 60, sepArtist: 4, sepTitle: 8, sepFolder: 2, clearList: false });
@@ -1965,7 +1965,7 @@ function deferExpectedRustTrackFinish() {
 function watchRustPlaylistOwnerHealth(status = null) {
     // Durante locuciones horarias de playlist el player HTML está activo pero Rust gestiona
     // el audio via 'time-locucion'; no aplicar stall-recovery a player-a/b en ese período.
-    if (!isRustPlaylistOwnerEnabled() || !status || !currentPlayingRow || isPlaylistTimeActive) return;
+    if (!isRustPlaylistOwnerEnabled() || !status || !currentPlayingRow || isPlaylistTimeActive || Date.now() < rustInfrastructureHoldUntil) return;
     const playerId = getPlaylistPlayerId(activePlayer);
     if (!playerId) return;
     const rustPlayer = findRustStatusPlayer(status, playerId);
@@ -3118,11 +3118,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const cartwallButton = document.createElement('button');
         cartwallButton.id = 'btn-open-cartwall';
         cartwallButton.className = 'toolbar-btn';
-        cartwallButton.title = 'Abrir botonera de efectos flotante';
+        cartwallButton.title = 'Mostrar/Ocultar botonera de efectos';
         cartwallButton.innerHTML = '<span class="toolbar-btn-icon">🎛️</span><span class="toolbar-btn-label">CW</span>';
         cartwallButton.classList.add('toolbar-btn-icon-only');
         cartwallButton.innerHTML = '<span class="toolbar-btn-icon">🎛️</span>';
-        cartwallButton.addEventListener('click', () => { openCartwallFloating(); });
+        cartwallButton.addEventListener('click', () => { toggleCartwallVisibility(); });
         toolbarGroup.appendChild(cartwallButton);
     }
 
@@ -3401,6 +3401,9 @@ let rustTimeLocutionContext = null;
 // emisión jamás se congele: si seguimos en la misma fila pasada esa ventana,
 // forzamos el avance. Política del proyecto: "la reproducción nunca se detiene".
 let rustTimeLocutionWatchdog = null;
+let rustInfrastructureRecoveryPromise = null;
+let rustInfrastructureHoldUntil = 0;
+let rustInfrastructureRecoveryFailures = 0;
 
 function clearRustTimeLocutionWatchdog() {
     if (rustTimeLocutionWatchdog) {
@@ -3415,6 +3418,10 @@ function armRustTimeLocutionWatchdog(row, durationSeconds) {
     const delayMs = Math.max(2500, dur * 1000 + 1500);
     rustTimeLocutionWatchdog = setTimeout(() => {
         rustTimeLocutionWatchdog = null;
+        if (Date.now() < rustInfrastructureHoldUntil) {
+            armRustTimeLocutionWatchdog(row, dur);
+            return;
+        }
         // Si ya cambiamos de fila, el avance ocurrió con normalidad → nada que
         // hacer. Solo actuamos si SEGUIMOS clavados en la fila de la locución.
         if (currentPlayingRow !== row || !document.body.contains(row)) return;
@@ -8737,6 +8744,67 @@ function schedulePlayNextAfterFailure(isAutoMix = false, delayMs = 400) {
     }, delay);
 }
 
+function isRustInfrastructureFailure(error) {
+    const text = String(error?.message || error || '').toLowerCase();
+    return text.includes('timeout esperando respuesta rustaudio')
+        || text.includes('proceso rustaudio cerrado')
+        || text.includes('proceso rustaudio detenido')
+        || text.includes('rustaudio no configurado')
+        || text.includes('ipc rustaudio no disponible');
+}
+
+function recoverRustAudioAfterInfrastructureFailure(row, error, options = {}) {
+    if (!row || !document.body.contains(row)) return Promise.resolve({ success: false, skipped: true });
+    if (rustInfrastructureRecoveryPromise) return rustInfrastructureRecoveryPromise;
+    clearRustTimeLocutionWatchdog();
+    rustInfrastructureHoldUntil = Date.now() + 20000;
+    const detail = String(error?.message || error || 'RustAudio no responde.');
+    const recoveryAttempt = (Number(row.dataset.rustRecoveryAttempts) || 0) + 1;
+    row.dataset.rustRecoveryAttempts = String(recoveryAttempt);
+    if (recoveryAttempt > 2) {
+        rustInfrastructureHoldUntil = Number.MAX_SAFE_INTEGER;
+        haltPlaybackOnFatalError('RustAudio no responde tras dos intentos de recuperacion. Se detuvo el avance automatico para no consumir la playlist.');
+        return Promise.resolve({ success: false, error: 'Limite de recuperacion RustAudio alcanzado.' });
+    }
+    const resumeAt = getPlayerClockTime(activePlayer);
+    if ((row.dataset.type || 'normal') === 'normal' && resumeAt > 0.25) {
+        row.dataset.resumeStart = resumeAt.toFixed(3);
+    }
+    recordIncident(`[AIRE] Incidencia global RustAudio: ${detail} Recuperando motor sin saltar pistas.`, {
+        category: 'air',
+        level: 'error',
+        autoAction: true,
+        throttleKey: 'rust-infrastructure-recovery'
+    });
+    rustInfrastructureRecoveryPromise = (async () => {
+        let recovery = options.skipRestart === true ? { success: true, recovered: false } : null;
+        for (let attempt = 0; attempt < 2 && !recovery?.success; attempt++) {
+            recovery = await ipcRenderer.invoke('audio-engine-rust-recover', detail);
+        }
+        if (!recovery?.success) throw new Error(recovery?.error || 'RustAudio no pudo recuperarse.');
+        rustAudioProbeStatus.lastDevices = null;
+        lastRustRouteSyncSignature = '';
+        lastRustFxSyncSignature = '';
+        await syncRustRouteContract({ force: true });
+        syncRustFxContract({ force: true });
+        await new Promise(resolve => setTimeout(resolve, 650));
+        if (!document.body.contains(row) || currentPlayingRow !== row) return recovery;
+        rustInfrastructureHoldUntil = Date.now() + 3500;
+        pendingRetryRow = null;
+        playRow(row, false);
+        return recovery;
+    })().catch(err => {
+        rustInfrastructureRecoveryFailures++;
+        logSystem(`[ERROR] RustAudio no se pudo recuperar: ${err?.message || err}`);
+        rustInfrastructureHoldUntil = Number.MAX_SAFE_INTEGER;
+        haltPlaybackOnFatalError('RustAudio no responde tras dos intentos de recuperacion. Se detuvo el avance automatico para no consumir la playlist.');
+        return { success: false, error: err?.message || String(err) };
+    }).finally(() => {
+        rustInfrastructureRecoveryPromise = null;
+    });
+    return rustInfrastructureRecoveryPromise;
+}
+
 function handleTimeUpdate(player) {
     if (player !== activePlayer || !currentPlayingRow) return;
     publishRustTransport();
@@ -10250,6 +10318,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             });
             if (currentSessionId !== playRowSessionId) return;
             if (!result?.ok) {
+                if (isRustInfrastructureFailure(result?.error)) {
+                    recoverRustAudioAfterInfrastructureFailure(tr, result.error);
+                    return;
+                }
                 logSystem(`[SKIP] Rust no pudo lanzar la locucion de clima: ${result?.error || 'sin detalle'}. Saltando...`);
                 setTimeout(() => playNext(false), 500);
                 return;
@@ -10291,6 +10363,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 });
             }
             markRustPlaylistOwnerOk({ activate: true });
+            delete tr.dataset.rustRecoveryAttempts;
             isTrackReady = true;
             refreshAirIncidentStatus();
             publishRustTransport({ force: true, syncPosition: false });
@@ -10409,6 +10482,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             if (!result?.ok) {
                 rustTimeLocutionContext = null;
                 isPlaylistTimeActive = false;
+                if (isRustInfrastructureFailure(result?.error)) {
+                    recoverRustAudioAfterInfrastructureFailure(tr, result.error);
+                    return;
+                }
                 logSystem(`[SKIP] Rust no pudo lanzar la locucion de hora: ${result?.error || 'sin detalle'}. Saltando...`);
                 setTimeout(() => playNext(false), 500);
                 return;
@@ -10459,6 +10536,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 });
             }
             markRustPlaylistOwnerOk({ activate: true });
+            delete tr.dataset.rustRecoveryAttempts;
             isTrackReady = true;
             refreshAirIncidentStatus();
             publishRustTransport({ force: true, syncPosition: false });
@@ -10740,6 +10818,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
 
                 startRustVirtualPlayback(nextPlayer, rutaFisica, currentStartTimeOffset);
                 markRustPlaylistOwnerOk({ activate: true });
+                delete tr.dataset.rustRecoveryAttempts;
                 isTrackReady = true;
                 refreshAirIncidentStatus();
                 publishRustTransport({ force: true, syncPosition: false });
@@ -10799,6 +10878,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 // pista. Si haltáramos aquí, handleEnded y playNext quedarían
                 // bloqueados por playbackFatalHalt y la cancion actual sonaria
                 // hasta su fin natural sin avanzar (silencio hasta click manual).
+                if (isRustInfrastructureFailure(err)) {
+                    recoverRustAudioAfterInfrastructureFailure(tr, err);
+                    return;
+                }
                 logSystem(`[ERROR] Rust no pudo reproducir: ${nombreMostrar}. ${err?.message || ''}`.trim());
                 schedulePlayNextAfterFailure(isAutoMix);
                 return;
@@ -11325,17 +11408,12 @@ window.addEventListener('keydown', (e) => {
         }
     }
 
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (isEditableShortcutTarget(e.target)) return;
     if (e.key === 'Alt') { e.preventDefault(); return; }
     if (e.key.toLowerCase() === 'escape') {
         e.preventDefault(); document.querySelectorAll('.playlist-table tr').forEach(el => el.classList.remove('selected-row'));
         document.querySelectorAll('.event-item').forEach(el => el.classList.remove('selected')); selectedEventId = null; updateSelectedEventControls(); hideAllMenus(); return;
     }
-    if (e.ctrlKey && e.key.toLowerCase() === 'h') { e.preventDefault(); addTimeLocutionToPlaylist(); return; }
-    if (e.ctrlKey && e.key.toLowerCase() === 'n') { e.preventDefault(); handleClearPlaylist(); return; }
-    if (e.ctrlKey && e.key.toLowerCase() === 'o') { e.preventDefault(); handleOpenPlaylist(); return; }
-    if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); handleSavePlaylist(); return; }
-    if (e.ctrlKey && e.key.toLowerCase() === 'p') { e.preventDefault(); ipcRenderer.send('open-settings'); return; }
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
         e.preventDefault();
         const targetBody = tbodys[currentViewTab] || playlistBody;
@@ -11431,6 +11509,7 @@ let liveMediaRecorder = null;
 let liveMicCaptureStream = null;
 let liveEncoderSourceState = null;
 let rustPcmEncoderSyncRunning = false;
+let liveEncoderCaptureGeneration = 0;
 
 setTimeout(() => {
     applyRustPlaylistOwnerMute();
@@ -11438,6 +11517,7 @@ setTimeout(() => {
 }, 1500);
 
 function stopRendererEncoderCapture({ logStop = false } = {}) {
+    liveEncoderCaptureGeneration++;
     const hadCapture = !!(liveMediaRecorder || liveMicCaptureStream);
     const recorderStream = liveMediaRecorder?.stream || null;
     if (liveMediaRecorder && liveMediaRecorder.state !== 'inactive') {
@@ -11491,11 +11571,14 @@ function stopRustPcmEncoderSync() {
 }
 
 ipcRenderer.on('start-audio-capture', async (e, config) => {
+    let captureGeneration = 0;
     try {
         config = config || {};
         setEncoderIncidentStatus('connecting');
         stopRustPcmEncoderSync();
         stopRendererEncoderCapture();
+        captureGeneration = ++liveEncoderCaptureGeneration;
+        const backendCaptureGeneration = config.captureGeneration;
         const requestedSource = config.source || 'master';
         if (requestedSource === 'master') {
             liveEncoderSourceState = {
@@ -11526,11 +11609,21 @@ ipcRenderer.on('start-audio-capture', async (e, config) => {
                 autoGainControl: false
             }
         });
+        if (captureGeneration !== liveEncoderCaptureGeneration) {
+            captureStream.getTracks().forEach(track => track.stop());
+            return;
+        }
         liveMicCaptureStream = captureStream;
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
         liveMediaRecorder = new MediaRecorder(captureStream, { mimeType });
-        liveMediaRecorder.ondataavailable = async (event) => { if (event.data.size > 0) ipcRenderer.send('audio-chunk', Buffer.from(await event.data.arrayBuffer())); };
+        liveMediaRecorder.ondataavailable = async (event) => {
+            if (event.data.size <= 0 || captureGeneration !== liveEncoderCaptureGeneration) return;
+            const chunk = Buffer.from(await event.data.arrayBuffer());
+            if (captureGeneration !== liveEncoderCaptureGeneration) return;
+            ipcRenderer.send('audio-chunk', { generation: backendCaptureGeneration, chunk });
+        };
         liveMediaRecorder.onerror = (event) => {
+            if (captureGeneration !== liveEncoderCaptureGeneration) return;
             const msg = event?.error?.message || 'Error desconocido de MediaRecorder';
             logSystem(`[ERROR] Captura encoder: ${msg}`);
             ipcRenderer.send('stop-encoder');
@@ -11548,11 +11641,15 @@ ipcRenderer.on('start-audio-capture', async (e, config) => {
             sampleRate: 0,
             transport: 'ffmpeg'
         };
-        ipcRenderer.send('init-ffmpeg', config);
         liveMediaRecorder.start(250);
         if (!isPlaybackActuallyOnAir()) setIdleBroadcastMetadata();
         logSystem("[ENCODER] Iniciando transmision desde microfono...");
-    } catch (err) { setEncoderIncidentStatus('error'); logSystem(`[ERROR] Fallo al iniciar captura: ${err.message}`); ipcRenderer.send('stop-encoder'); }
+    } catch (err) {
+        if (captureGeneration && captureGeneration !== liveEncoderCaptureGeneration) return;
+        setEncoderIncidentStatus('error');
+        logSystem(`[ERROR] Fallo al iniciar captura: ${err.message}`);
+        ipcRenderer.send('stop-encoder');
+    }
 });
 
 ipcRenderer.on('start-rust-pcm-encoder-sync', (e, config) => {
@@ -11788,35 +11885,71 @@ function isDockedCartwallVisible() {
     return !!panel && panel.style.display !== 'none';
 }
 
+function rememberCartwallMode(mode) {
+    uiPrefs.cartwall = mode === 'docked';
+    if (['docked', 'floating'].includes(mode)) uiPrefs.cartwallLastMode = mode;
+    saveConfig(uiPrefsPath, uiPrefs);
+}
+
+async function showCartwallDocked() {
+    await initCartwall({ forceRender: true });
+    isCartwallUndocked = false;
+    const panel = getCartwallPanel();
+    if (panel) panel.style.display = 'flex';
+    syncCartwallResizerVisibility();
+    rememberCartwallMode('docked');
+    setCartwallUiState({ mode: 'docked' });
+}
+
+function hideCartwallDocked() {
+    const panel = getCartwallPanel();
+    if (panel) panel.style.display = 'none';
+    syncCartwallResizerVisibility();
+    rememberCartwallMode('hidden');
+    setCartwallUiState({ mode: 'hidden' });
+}
+
 async function openCartwallFloating() {
     await initCartwall();
     const panel = getCartwallPanel();
     if (panel) panel.style.display = 'none';
     isCartwallUndocked = true;
     syncCartwallResizerVisibility();
+    rememberCartwallMode('floating');
     setCartwallUiState({ mode: 'floating' });
     ipcRenderer.send('open-cartwall-window');
 }
 
-ipcRenderer.on('menu-toggle-cartwall', async (e, show) => {
-    if (isCartwallUndocked) return;
-    const panel = getCartwallPanel();
-    if (!panel) return;
-    if (show) {
-        await initCartwall({ forceRender: true });
-        panel.style.display = 'flex';
-        syncCartwallResizerVisibility();
-        setCartwallUiState({ mode: 'docked' });
+async function showCartwallPreferred() {
+    if ((uiPrefs.cartwallLastMode || 'floating') === 'docked') return showCartwallDocked();
+    return openCartwallFloating();
+}
+
+function toggleCartwallVisibility() {
+    if (isCartwallUndocked) {
+        ipcRenderer.send('cartwall-hide');
         return;
     }
-    panel.style.display = 'none';
-    syncCartwallResizerVisibility();
-    setCartwallUiState({ mode: 'hidden' });
+    if (isDockedCartwallVisible()) {
+        hideCartwallDocked();
+        return;
+    }
+    showCartwallPreferred();
+}
+
+ipcRenderer.on('menu-toggle-cartwall', async (e, show) => {
+    if (show) {
+        await showCartwallPreferred();
+        return;
+    }
+    if (isCartwallUndocked) ipcRenderer.send('cartwall-hide');
+    else hideCartwallDocked();
 });
 
 document.getElementById('btn-undock-cartwall').addEventListener('click', () => {
     openCartwallFloating();
 });
+document.getElementById('btn-hide-cartwall').addEventListener('click', hideCartwallDocked);
 
 if (cwProfileButton) {
     cwProfileButton.addEventListener('click', (e) => {
@@ -11835,6 +11968,7 @@ ipcRenderer.on('cartwall-docked', async () => {
     const panel = getCartwallPanel();
     if (panel) panel.style.display = 'flex';
     syncCartwallResizerVisibility();
+    rememberCartwallMode('docked');
     setCartwallUiState({ mode: 'docked' });
 });
 
@@ -13232,6 +13366,32 @@ ipcRenderer.on('encoder-tap-point-changed', (e, payload = {}) => {
 //
 // Filosofía "humilde control remoto": Electron sólo escucha y dibuja. No
 // pregunta, no calcula tiempos, no decide cuándo refrescar.
+ipcRenderer.on('audio-engine-power-event', (e, payload = {}) => {
+    const phase = payload?.phase || '';
+    if (phase === 'suspend' || phase === 'resume') {
+        rustInfrastructureHoldUntil = Date.now() + 30000;
+        clearRustTimeLocutionWatchdog();
+        recordIncident(`[SISTEMA] ${phase === 'suspend' ? 'Windows suspendio la sesion' : 'Windows reanudo la sesion'}. Protegiendo playlist mientras RustAudio se estabiliza.`, {
+            category: 'system',
+            level: 'warn',
+            autoAction: true,
+            throttleKey: `power-${phase}`
+        });
+        return;
+    }
+    if (phase === 'ready') {
+        rustInfrastructureHoldUntil = Date.now() + 3500;
+        if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
+            recoverRustAudioAfterInfrastructureFailure(currentPlayingRow, 'RustAudio listo tras reanudar Windows.', { skipRestart: true });
+        }
+        return;
+    }
+    if (phase === 'failed') {
+        rustInfrastructureHoldUntil = Number.MAX_SAFE_INTEGER;
+        haltPlaybackOnFatalError(`RustAudio no se recupero tras reanudar Windows: ${payload?.reason || 'sin detalle'}`);
+    }
+});
+
 ipcRenderer.on('audio-engine-rust-event', (e, message) => {
     if (!message || typeof message !== 'object') return;
 
@@ -13645,6 +13805,18 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
 })();
 
 // ── Atajos de teclado personalizables ────────────────────────────────────────
+function hasVisibleShortcutBlockingOverlay() {
+    return Array.from(document.querySelectorAll('.modal-overlay')).some(el => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+}
+
+shortcutManager.setGuard(() => {
+    if (!document.hasFocus()) return false;
+    return generalPrefs.keyboardShortcutScope !== 'contextual' || !hasVisibleShortcutBlockingOverlay();
+});
+
 function updateContextMenuShortcuts(shortcutsMap) {
     document.querySelectorAll('.cm-sc[data-action-id]').forEach(el => {
         el.textContent = shortcutsMap[el.dataset.actionId] || '';
@@ -13728,6 +13900,7 @@ function _buildShortcutMap(saved) {
     // Fallback: atajos de botones del cartwall en modo acoplado
     shortcutManager.setCartwallFallback((combo) => {
         if (isCartwallUndocked) return false;
+        if (!isDockedCartwallVisible()) return false;
         const profile = getActiveCwProfile();
         if (!profile?.paletas) return false;
         for (let ti = 0; ti < profile.paletas.length; ti++) {
@@ -13747,5 +13920,9 @@ ipcRenderer.on('shortcuts-updated', (e, payload) => {
     const _updMap = _buildShortcutMap(payload.shortcuts);
     shortcutManager.loadKeyMap(_updMap);
     updateContextMenuShortcuts(_updMap);
+});
+
+ipcRenderer.on('dispatch-configured-shortcut', (e, actionId) => {
+    shortcutManager.dispatch(actionId);
 });
 

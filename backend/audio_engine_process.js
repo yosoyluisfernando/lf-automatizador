@@ -67,6 +67,9 @@ class RustAudioEngineProbe {
         this.lastStatus = null;
         this.lastDevices = null;
         this.lastError = '';
+        this.lastMessageAt = 0;
+        this.lastStatusAt = 0;
+        this.recoveryPromise = null;
         this.lastRoutineStatusLogAt = 0;
         this.lastRoutineCommandLogAt = 0;
         this.startedAt = null;
@@ -79,6 +82,12 @@ class RustAudioEngineProbe {
         // al callback registrado. Eso reemplaza al viejo RustPcmBridgeEncoderSource
         // (que estaba referenciado pero nunca implementado).
         this.pcmConsumer = null;
+        this.pcmSession = null;
+        this.pcmFirstChunkWaiter = null;
+        this.pcmWatchdog = null;
+        this.processGeneration = 0;
+        this.nextPcmSessionId = 1;
+        this.lastEncoderTapDroppedSamples = 0;
         try { fs.mkdirSync(path.dirname(this.reportPath), { recursive: true }); } catch (err) {}
     }
 
@@ -166,13 +175,15 @@ class RustAudioEngineProbe {
                 stdio: ['pipe', 'pipe', 'pipe']
             });
             this.startedAt = Date.now();
+            const processGeneration = ++this.processGeneration;
             this.lastError = '';
             this.stopping = false;
             this.logEvent('start', { exePath: this.exePath });
 
             this.readline = readline.createInterface({ input: this.process.stdout });
-            this.readline.on('line', line => this.handleLine(line));
+            this.readline.on('line', line => this.handleLine(line, processGeneration));
             this.process.stderr.on('data', chunk => {
+                if (processGeneration !== this.processGeneration) return;
                 const stderrText = String(chunk || '').trim();
                 if (!stderrText) return;
                 if (isBenignRustStderr(stderrText)) {
@@ -184,16 +195,19 @@ class RustAudioEngineProbe {
                 this.logEvent('stderr', { error: this.lastError });
             });
             this.process.on('error', err => {
+                if (processGeneration !== this.processGeneration) return;
                 this.lastError = err.message || String(err);
                 this.logEvent('process-error', { error: this.lastError });
                 this.rejectPending(this.lastError);
             });
             this.process.on('close', code => {
+                if (processGeneration !== this.processGeneration) return;
                 this.lastError = (code === 0 || this.stopping) ? '' : `Proceso RustAudio cerrado con codigo ${code}`;
                 this.logEvent('close', { code, error: this.lastError });
                 this.rejectPending(this.lastError || 'Proceso RustAudio cerrado.');
                 this.process = null;
                 this.readline = null;
+                this.invalidatePcmSession();
             });
             return { success: true, started: true };
         } catch (err) {
@@ -225,7 +239,7 @@ class RustAudioEngineProbe {
         this.logEvent('stop');
         this.process = null;
         this.readline = null;
-        this.pcmConsumer = null;
+        this.invalidatePcmSession();
         this.rejectPending('Proceso RustAudio detenido.');
         return { success: true, stopped: true };
     }
@@ -243,23 +257,112 @@ class RustAudioEngineProbe {
     // isPcmTapMode(): retorna true si hay consumer activo (compatibilidad
     // con el código existente en windows.js que pregunta esto para decidir
     // el path de inicialización del encoder).
-    attachPcmConsumer(callback) {
-        if (typeof callback !== 'function') return;
+    async attachPcmConsumer(callback, options = {}) {
+        if (typeof callback !== 'function') return { success: false, error: 'Consumer PCM invalido.' };
+        this.invalidatePcmSession();
+        const sessionId = `pcm-${this.processGeneration}-${this.nextPcmSessionId++}`;
+        const session = {
+            id: sessionId,
+            generation: this.processGeneration,
+            ready: false,
+            lastChunkAt: 0,
+            stalled: false,
+        };
         this.pcmConsumer = callback;
-        this.command({ cmd: 'encoderTap', enable: true }).catch(() => {});
+        this.pcmSession = session;
+        this.lastEncoderTapDroppedSamples = 0;
+        const ack = await this.command({ cmd: 'encoderTap', enable: true });
+        if (!ack?.success || this.pcmSession !== session) {
+            if (this.pcmSession === session) {
+                this.invalidatePcmSession();
+                this.disablePcmTapBestEffort();
+            }
+            return { success: false, error: ack?.error || 'RustAudio no confirmo el tap PCM.' };
+        }
+        const tap = ack.message?.encoder?.tap;
+        if (!tap?.active || !tap?.ready) {
+            if (this.pcmSession === session) {
+                this.invalidatePcmSession();
+                this.disablePcmTapBestEffort();
+            }
+            return { success: false, error: 'RustAudio confirmo el comando, pero el tap PCM no esta listo.' };
+        }
+        const firstChunkTimeoutMs = Math.max(1, Number(options.firstChunkTimeoutMs) || 1000);
+        return new Promise(resolve => {
+            const timeout = setTimeout(() => {
+                if (this.pcmFirstChunkWaiter?.session === session) this.pcmFirstChunkWaiter = null;
+                if (this.pcmSession === session) {
+                    this.invalidatePcmSession();
+                    this.disablePcmTapBestEffort();
+                }
+                resolve({ success: false, error: 'Timeout esperando el primer bloque PCM del tap RustAudio.' });
+            }, firstChunkTimeoutMs);
+            this.pcmFirstChunkWaiter = {
+                session,
+                timeout,
+                reject: error => {
+                    clearTimeout(timeout);
+                    this.pcmFirstChunkWaiter = null;
+                    resolve({ success: false, error });
+                },
+                resolve: () => {
+                    clearTimeout(timeout);
+                    this.pcmFirstChunkWaiter = null;
+                    session.ready = true;
+                    this.armPcmWatchdog(session);
+                    resolve({ success: true, sessionId });
+                },
+            };
+        });
     }
 
     detachPcmConsumer() {
-        if (!this.pcmConsumer) return;
-        this.pcmConsumer = null;
-        this.command({ cmd: 'encoderTap', enable: false }).catch(() => {});
+        if (!this.pcmConsumer && !this.pcmSession) return;
+        this.invalidatePcmSession();
+        this.disablePcmTapBestEffort();
     }
 
     isPcmTapMode() {
-        return this.pcmConsumer !== null;
+        return this.isPcmConsumerAttached();
     }
 
-    handleLine(line) {
+    isPcmConsumerAttached(sessionId = '') {
+        return !!(
+            this.pcmConsumer
+            && this.pcmSession?.ready
+            && this.pcmSession.generation === this.processGeneration
+            && (!sessionId || this.pcmSession.id === sessionId)
+        );
+    }
+
+    invalidatePcmSession(reason = 'Sesion PCM cancelada.') {
+        const waiter = this.pcmFirstChunkWaiter;
+        if (waiter) waiter.reject(reason);
+        if (this.pcmWatchdog) clearInterval(this.pcmWatchdog);
+        this.pcmWatchdog = null;
+        this.pcmConsumer = null;
+        this.pcmSession = null;
+    }
+
+    disablePcmTapBestEffort() {
+        this.command({ cmd: 'encoderTap', enable: false }).catch(() => {});
+    }
+
+    armPcmWatchdog(session) {
+        if (this.pcmWatchdog) clearInterval(this.pcmWatchdog);
+        this.pcmWatchdog = setInterval(() => {
+            if (this.pcmSession !== session || !session.ready || !session.lastChunkAt) return;
+            if (Date.now() - session.lastChunkAt < 5000 || session.stalled) return;
+            session.stalled = true;
+            this.writeLog('RustAudio encoder tap: no llegan bloques PCM desde hace mas de 5 s.');
+            this.logEvent('encoder-tap-stalled', { sessionId: session.id, lastChunkAt: session.lastChunkAt });
+        }, 1000);
+        this.pcmWatchdog.unref?.();
+    }
+
+    handleLine(line, processGeneration = this.processGeneration) {
+        if (processGeneration !== this.processGeneration) return;
+        this.lastMessageAt = Date.now();
         let message = null;
         try {
             message = JSON.parse(line);
@@ -276,7 +379,14 @@ class RustAudioEngineProbe {
             if (this.pcmConsumer && typeof message.pcm === 'string') {
                 try {
                     const buf = Buffer.from(message.pcm, 'base64');
+                    if (this.pcmSession) {
+                        this.pcmSession.lastChunkAt = Date.now();
+                        this.pcmSession.stalled = false;
+                    }
                     this.pcmConsumer(buf);
+                    if (this.pcmFirstChunkWaiter?.session === this.pcmSession) {
+                        this.pcmFirstChunkWaiter.resolve();
+                    }
                 } catch (err) {
                     this.lastError = `pcmChunk decode: ${err.message || err}`;
                 }
@@ -285,6 +395,17 @@ class RustAudioEngineProbe {
         }
         const pending = message.type === 'ready' ? null : this.takePendingForMessage(message);
         if (message.type === 'status' || message.type === 'ready') {
+            if (message.type === 'status') this.lastStatusAt = Date.now();
+            const droppedSamples = Number(message.encoder?.tap?.droppedSamples);
+            if (Number.isFinite(droppedSamples)) {
+                const previousDroppedSamples = Number(this.lastEncoderTapDroppedSamples) || 0;
+                if (droppedSamples > previousDroppedSamples) {
+                    const delta = droppedSamples - previousDroppedSamples;
+                    this.writeLog(`RustAudio encoder tap perdio ${delta} muestras PCM (total sesion=${droppedSamples}).`);
+                    this.logEvent('encoder-tap-drops', { droppedSamples, delta });
+                }
+                this.lastEncoderTapDroppedSamples = droppedSamples;
+            }
             this.lastStatus = message;
             this.lastError = '';
         } else if (message.type === 'devices') {
@@ -398,7 +519,20 @@ class RustAudioEngineProbe {
             const timeout = setTimeout(() => {
                 this.pending = this.pending.filter(item => item.resolve !== resolve);
                 this.pendingByRequestId.delete(requestId);
-                resolve({ success: false, error: 'Timeout esperando respuesta RustAudio.' });
+                const now = Date.now();
+                const diagnostics = {
+                    command: commandWithRequestId.cmd || '',
+                    player: commandWithRequestId.player || '',
+                    requestId,
+                    pid: this.process?.pid || null,
+                    pendingCount: this.pending.length,
+                    lastMessageAgeMs: this.lastMessageAt ? now - this.lastMessageAt : null,
+                    lastStatusAgeMs: this.lastStatusAt ? now - this.lastStatusAt : null,
+                };
+                this.lastError = 'Timeout esperando respuesta RustAudio.';
+                this.writeLog(`[RustAudio] Timeout global: cmd=${diagnostics.command || 'desconocido'}, player=${diagnostics.player || 'n/a'}, pendientes=${diagnostics.pendingCount}, ultimoStatusMs=${diagnostics.lastStatusAgeMs ?? 'n/a'}.`);
+                this.logEvent('command-timeout', diagnostics);
+                resolve({ success: false, error: this.lastError, engineUnresponsive: true, diagnostics });
             }, effectiveTimeout);
             const pending = { resolve, timeout, command: commandWithRequestId, requestId };
             this.pending.push(pending);
@@ -414,6 +548,53 @@ class RustAudioEngineProbe {
                 resolve({ success: false, error: err.message || String(err) });
             }
         });
+    }
+
+    waitForFreshStatus(since = Date.now(), timeoutMs = 1500) {
+        const deadline = Date.now() + Math.max(1, Number(timeoutMs) || 1500);
+        return new Promise(resolve => {
+            const check = () => {
+                if (this.lastStatusAt > since) return resolve(true);
+                if (Date.now() >= deadline) return resolve(false);
+                setTimeout(check, 25);
+            };
+            check();
+        });
+    }
+
+    recover(reason = 'Recuperacion solicitada.') {
+        if (this.recoveryPromise) return this.recoveryPromise;
+        this.recoveryPromise = (async () => {
+            const pcmConsumer = this.isPcmConsumerAttached() ? this.pcmConsumer : null;
+            this.writeLog(`[RustAudio] Reiniciando motor: ${reason}`);
+            this.logEvent('recovery-start', { reason });
+            this.stop();
+            await new Promise(resolve => setTimeout(resolve, 150));
+            const started = this.start();
+            if (!started.success) {
+                this.logEvent('recovery-failed', { reason, error: started.error });
+                return started;
+            }
+            const result = await this.command({ cmd: 'status', recovery: true }, 5000);
+            if (!result?.success) {
+                this.logEvent('recovery-failed', { reason, error: result?.error || '' });
+                return result;
+            }
+            let pcmRestored = false;
+            if (pcmConsumer) {
+                const attached = await this.attachPcmConsumer(pcmConsumer, { firstChunkTimeoutMs: 2500 });
+                if (!attached?.success) {
+                    this.logEvent('recovery-failed', { reason, error: attached?.error || 'No se restauro tap PCM.' });
+                    return { success: false, error: attached?.error || 'RustAudio no restauro el tap PCM del encoder.' };
+                }
+                pcmRestored = true;
+            }
+            this.logEvent('recovery-ready', { reason, pcmRestored });
+            return { success: true, recovered: true, pcmRestored, status: result.status || result.message };
+        })().finally(() => {
+            this.recoveryPromise = null;
+        });
+        return this.recoveryPromise;
     }
 
     readReportTail(maxLines = 30) {
@@ -447,6 +628,8 @@ class RustAudioEngineProbe {
             lastStatus: this.lastStatus,
             lastDevices: this.lastDevices,
             lastError: this.lastError,
+            lastMessageAt: this.lastMessageAt,
+            lastStatusAt: this.lastStatusAt,
             ...extra
         };
         try {

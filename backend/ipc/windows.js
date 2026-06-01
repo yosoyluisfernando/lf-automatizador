@@ -3,8 +3,13 @@
 // y `runRustPcmBridgeFfmpegSmokeTest` eran código muerto que nunca se llegó
 // a implementar — eliminados de los imports.
 
+const { classifyEncoderError, validateEncoderConfig } = require('../encoder/config');
+const { UltravoxSource } = require('../encoder/ultravox');
+const { loadEncoderPrefs, saveEncoderPrefs } = require('../encoder/prefs');
+const { redactSensitiveText } = require('../utils/log_security');
+
 module.exports = function(context) {
-    const { ipcMain, dialog, screen, openCommercialManagerWindow, BrowserWindow, writeLog, path, configDir, fs, cp, ffmpegPath } = context;
+    const { ipcMain, dialog, screen, openCommercialManagerWindow, BrowserWindow, writeLog, path, configDir, fs, cp, ffmpegPath, ffmpegFdkPath, ffmpegCapabilities, safeStorage } = context;
 
     // Detectar soporte de libfdk_aac en el FFmpeg empaquetado (fire-and-forget al
     // inicio del módulo). El resultado se cachea en _fdkAacAvailable y se usa en
@@ -13,25 +18,81 @@ module.exports = function(context) {
     // libfdk_aac es non-free y no se incluye. Si el operador sustituye el binario
     // por uno compilado con --enable-libfdk_aac, el probe lo detecta y habilita
     // HE-AAC real automáticamente.
-    let _fdkAacAvailable = null;
-    (function probeFdkAac() {
-        try {
-            const probe = cp.spawn(ffmpegPath, ['-encoders'], { windowsHide: true });
-            let out = '';
-            if (probe.stdout) probe.stdout.on('data', d => { out += d.toString(); });
-            if (probe.stderr) probe.stderr.on('data', d => { out += d.toString(); });
-            probe.on('close', () => { _fdkAacAvailable = out.includes('libfdk_aac'); });
-            probe.on('error', () => { _fdkAacAvailable = false; });
-        } catch (_) { _fdkAacAvailable = false; }
-    }());
+    const _fdkAacAvailable = !!(ffmpegFdkPath && ffmpegCapabilities?.fdk?.libfdkAac === true);
 
     // ── Registro multi-servidor del encoder ──────────────────────────────────
     // Cada servidor de streaming tiene su propio proceso FFmpeg, alimentado por
     // UNA sola fuente PCM compartida (el tap del motor Rust). El registro mapea
     // serverId -> runtime del servidor.
     if (!context.encoderServers) context.encoderServers = new Map();
+    if (!context.pendingEncoderConnects) context.pendingEncoderConnects = new Map();
+    if (!context.encoderConnectVersions) context.encoderConnectVersions = new Map();
 
     function getEncoderServer(id) { return context.encoderServers.get(String(id)); }
+    function beginEncoderConnect(id, config) {
+        const sid = String(id);
+        const version = (context.encoderConnectVersions.get(sid) || 0) + 1;
+        context.encoderConnectVersions.set(sid, version);
+        context.pendingEncoderConnects.set(sid, {
+            version,
+            source: config.source === 'mic' ? 'mic' : 'master'
+        });
+        return version;
+    }
+    function cancelEncoderConnect(id) {
+        const sid = String(id);
+        if (!context.encoderConnectVersions) context.encoderConnectVersions = new Map();
+        if (!context.pendingEncoderConnects) context.pendingEncoderConnects = new Map();
+        context.encoderConnectVersions.set(sid, (context.encoderConnectVersions.get(sid) || 0) + 1);
+        context.pendingEncoderConnects.delete(sid);
+    }
+    function finishEncoderConnect(id, attempt) {
+        const sid = String(id);
+        if (context.pendingEncoderConnects.get(sid)?.version === attempt) {
+            context.pendingEncoderConnects.delete(sid);
+        }
+    }
+    function isEncoderConnectCurrent(id, attempt) {
+        return context.encoderConnectVersions.get(String(id)) === attempt;
+    }
+    function reserveEncoderInput(id, config) {
+        const sid = String(id);
+        const source = config.source === 'mic' ? 'mic' : 'master';
+        if (context.encoderInputSource && context.encoderInputSource !== source) {
+            return {
+                success: false,
+                error: `La entrada ${context.encoderInputSource} ya esta activa. Desconecta las transmisiones antes de cambiar a ${source}.`
+            };
+        }
+        if (source === 'mic') {
+            const hasProcess = Array.from(context.encoderServers.values()).some(server => !!server.proc);
+            const hasOtherPending = Array.from(context.pendingEncoderConnects.keys()).some(otherId => otherId !== sid);
+            if (hasProcess || hasOtherPending) {
+                return {
+                    success: false,
+                    error: 'La entrada externa solo admite un servidor a la vez. Desconecta el servidor actual antes de iniciar otro.'
+                };
+            }
+        }
+        context.encoderInputSource = source;
+        return { success: true };
+    }
+    function emitEncoderError(id, message, details = {}) {
+        const cleanMessage = redactSensitiveText(message || 'Error de encoder desconocido.');
+        const classified = details.category
+            ? { category: details.category, retryable: details.retryable === true }
+            : classifyEncoderError(cleanMessage);
+        const payload = {
+            serverId: String(id),
+            message: cleanMessage,
+            category: classified.category,
+            retryable: classified.retryable
+        };
+        if (context.encoderWindow && !context.encoderWindow.isDestroyed()) {
+            context.encoderWindow.webContents.send('encoder-error', payload);
+        }
+        return payload;
+    }
     function countLiveServers() {
         let n = 0;
         for (const s of context.encoderServers.values()) if (s.proc) n++;
@@ -195,42 +256,74 @@ module.exports = function(context) {
     // Detiene la fuente PCM compartida y la captura SOLO si ya no queda ningún
     // servidor con proceso vivo. Llamar tras matar un servidor.
     function maybeStopEncoderInput(options = {}) {
-        if (countLiveServers() > 0) return;
+        if (countLiveServers() > 0 || context.pendingEncoderConnects.size > 0) return;
         logEncoderWriteStats('stop');
         stopRustPcmEncoderSource();
         notifyRustEncoder('stop', context.encoderSourceContract || context.activeEncoderConfig || {});
         if (!options.suppressStopCapture && context.mainWindow && !context.mainWindow.isDestroyed()) {
             context.mainWindow.webContents.send('stop-audio-capture');
         }
+        context.rendererEncoderCaptureActive = false;
+        context.rendererEncoderCaptureGeneration = (context.rendererEncoderCaptureGeneration || 0) + 1;
+        context.encoderInputSource = '';
     }
 
     // Mata el proceso FFmpeg de UN servidor (sin afectar a los demás).
     function killEncoderServer(id, reason = '', options = {}) {
+        cancelEncoderConnect(id);
         const server = getEncoderServer(id);
-        if (!server) return;
+        if (!server) {
+            if (!options.suppressStatus) setServerStatus(id, 'disconnected');
+            if (reason && !options.suppressError) emitEncoderError(id, reason, options.details || {});
+            maybeStopEncoderInput(options);
+            return;
+        }
         const proc = server.proc;
         const scSocket = server.scSocket;
+        const ultravox = server.ultravox;
         server.proc = null;
         server.scSocket = null;
-        if (scSocket) { try { scSocket.destroy(); } catch (err) {} }
+        server.ultravox = null;
+        if (ultravox) {
+            try { ultravox.terminate(); } catch (err) {}
+        }
+        if (scSocket) {
+            scSocket._lfIntentionalClose = true;
+            try { scSocket.destroy(); } catch (err) {}
+        }
         if (proc) {
             try { if (proc.stdin && !proc.stdin.destroyed) proc.stdin.destroy(); } catch (err) {}
             try { proc.kill('SIGKILL'); } catch (err) { try { proc.kill(); } catch (innerErr) {} }
         }
         if (!options.suppressStatus) setServerStatus(id, 'disconnected');
-        if (reason && !options.suppressError && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
-            context.encoderWindow.webContents.send('encoder-error', { serverId: String(id), message: reason });
-        }
+        if (reason && !options.suppressError) emitEncoderError(id, reason, options.details || {});
         maybeStopEncoderInput(options);
     }
 
     // Mata TODOS los servidores (desconectar todo / parada de emergencia).
     function killAllEncoderServers(reason = '', options = {}) {
-        const ids = Array.from(context.encoderServers.keys());
+        const ids = Array.from(new Set([
+            ...context.encoderServers.keys(),
+            ...(context.pendingEncoderConnects?.keys?.() || [])
+        ]));
         for (const id of ids) {
+            cancelEncoderConnect(id);
             const server = getEncoderServer(id);
             const proc = server && server.proc;
-            if (server) server.proc = null;
+            const scSocket = server && server.scSocket;
+            const ultravox = server && server.ultravox;
+            if (server) {
+                server.proc = null;
+                server.scSocket = null;
+                server.ultravox = null;
+            }
+            if (ultravox) {
+                try { ultravox.terminate(); } catch (err) {}
+            }
+            if (scSocket) {
+                scSocket._lfIntentionalClose = true;
+                try { scSocket.destroy(); } catch (err) {}
+            }
             if (proc) {
                 try { if (proc.stdin && !proc.stdin.destroyed) proc.stdin.destroy(); } catch (err) {}
                 try { proc.kill('SIGKILL'); } catch (err) { try { proc.kill(); } catch (innerErr) {} }
@@ -240,12 +333,23 @@ module.exports = function(context) {
         maybeStopEncoderInput(options);
     }
 
+    function shutdownEncoderOnAppQuit() {
+        killAllEncoderServers('', {
+            suppressStatus: true,
+            suppressError: true,
+            suppressStopCapture: true
+        });
+        context.activeEncoderConfig = null;
+    }
+
+    context.app?.once?.('before-quit', shutdownEncoderOnAppQuit);
+
     // Compat: nombre legacy usado en rutas de error que aún no conocen serverId.
     // Mata todos los servidores (comportamiento equivalente al modo de 1 servidor).
     function killFfmpegProcess(reason = '', options = {}) {
         killAllEncoderServers(reason, options);
         if (reason && !options.suppressError && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
-            context.encoderWindow.webContents.send('encoder-error', reason);
+            context.encoderWindow.webContents.send('encoder-error', redactSensitiveText(reason));
         }
     }
 
@@ -388,9 +492,9 @@ module.exports = function(context) {
     }
 
     function normalizeEncoderConfig(config = {}) {
-        // Tipos válidos: 'icecast' (Icecast 2 PUT), 'shoutcast' (clásico SOURCE
-        // legacy), 'shoutcast2' (DNAS 2.x con PUT moderno). Cualquier otro valor
-        // cae a 'icecast' por seguridad.
+        // Tipos validos: 'icecast' (Icecast 2 PUT), 'shoutcast' (ICY legacy)
+        // y 'shoutcast2' (Ultravox 2.1 salvo compatibilidad ICY explicita).
+        // Cualquier otro valor cae a 'icecast' como defensa adicional.
         const rawType = config.serverType || config.type || 'icecast';
         const serverType = ['icecast', 'shoutcast', 'shoutcast2'].includes(rawType) ? rawType : 'icecast';
         const password = config.password || config.pass || '';
@@ -408,6 +512,7 @@ module.exports = function(context) {
             pass: password,
             ip: String(config.ip || '').trim(),
             port: String(config.port || '').trim(),
+            adminPort: String(config.adminPort || '').trim(),
             mount: String(config.mount || '').trim(),
             source,
             tapPoint: config.tapPoint === 'preFx' ? 'preFx' : 'postFx',
@@ -451,6 +556,7 @@ module.exports = function(context) {
         // Icecast 2: usuario configurable (default 'source') + mount libre.
         let mountStr = normalizeMount(config.mount);
         if (mountStr === '/' || !mountStr) mountStr = '/stream';
+        mountStr = mountStr.split('/').map(segment => encodeURIComponent(segment)).join('/');
         return `icecast://${safeUser}:${safePassword}@${config.ip}:${config.port}${mountStr}`;
     }
 
@@ -467,12 +573,9 @@ module.exports = function(context) {
         // sólo entiende el método SOURCE legacy — sin `-legacy_icecast 1` falla
         // con "End of file" antes de transmitir audio.
         //
-        // Tres modos según el dropdown del encoder:
-        //   - 'icecast'    → PUT moderno (Icecast 2.4+, Zeno.fm)
-        //   - 'shoutcast'  → SOURCE legacy (Shoutcast 1.x / 2.x clásico, L2MR)
-        //   - 'shoutcast2' → PUT moderno por defecto; SOURCE legacy si config.legacy=true
-        //                    (necesario en proveedores como Listen2MyRadio que corren
-        //                    DNAS 2.x pero solo aceptan el método SOURCE, no HTTP PUT)
+        // Este helper solo se usa para Icecast. SHOUTcast clasico sale por ICY
+        // nativo y SHOUTcast2 sale por Ultravox 2.1, salvo compatibilidad ICY
+        // explicita para proveedores DNAS2 que la exijan.
         const needsLegacy = config.serverType === 'shoutcast' || (config.serverType === 'shoutcast2' && config.legacy === true);
         const legacyShoutcast = needsLegacy ? ['-legacy_icecast', '1'] : [];
         // SHOUTcast DNAS 2.x valida los headers icy-* tras el handshake SOURCE.
@@ -487,14 +590,7 @@ module.exports = function(context) {
         ] : [];
         if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
         if (config.codec === 'aac_he') {
-            // Usar libfdk_aac solo si el probe de inicio confirmó que está disponible.
-            // En ffmpeg-static/gyan.dev (GPL) no está incluido por ser non-free, así
-            // que caemos al encoder nativo aac (AAC-LC). El aviso al usuario se emite
-            // en startFfmpegProcess() antes de llamar a esta función.
-            if (_fdkAacAvailable === true) {
-                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
-            }
-            return [...common, '-c:a', 'aac', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
+            return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${config.bitrate}k`, ...legacyShoutcast, ...icyMeta, '-f', 'adts', '-content_type', 'audio/aac'];
         }
         return [...common, '-c:a', 'libmp3lame', '-b:a', `${config.bitrate}k`, '-minrate', `${config.bitrate}k`, '-maxrate', `${config.bitrate}k`, '-bufsize', `${parseInt(config.bitrate, 10) * 2}k`, ...legacyShoutcast, ...icyMeta, '-f', 'mp3', '-content_type', 'audio/mpeg'];
     }
@@ -514,9 +610,7 @@ module.exports = function(context) {
         // AAC: ADTS es un bitstream puro, sin cabecera de contenedor. Ideal para streaming.
         if (config.codec === 'aac') return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
         if (config.codec === 'aac_he') {
-            if (_fdkAacAvailable === true)
-                return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
-            return [...common, '-c:a', 'aac', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
+            return [...common, '-c:a', 'libfdk_aac', '-profile:a', 'aac_he', '-b:a', `${br}k`, '-f', 'adts', 'pipe:1'];
         }
         // MP3: CBR estricto + sin cabeceras ID3 para que el primer byte sea 0xFF (sync frame).
         return [...common,
@@ -526,7 +620,8 @@ module.exports = function(context) {
             '-f', 'mp3', 'pipe:1'];
     }
 
-    // Abre la conexión TCP nativa SHOUTcast. Bifurca según serverType:
+    // Abre la conexion TCP de compatibilidad SHOUTcast ICY. SHOUTcast2 nativo
+    // no pasa por este helper: usa UltravoxSource.
     //
     //   'shoutcast'      → ICY v1 legacy (L2MR, SC1 clásico, cualquier DNAS):
     //   'shoutcast2'       password\r\n → OK2 → icy headers → audio inmediato.
@@ -534,7 +629,7 @@ module.exports = function(context) {
     //                      Los servidores etiquetados "Shoutcast2" (L2MR) también
     //                      usan este protocolo en su puerto de fuente.
     //
-    //   'shoutcast2'     → HTTP SOURCE (DNAS 2.x puro con PUT desactivado):
+    //   'shoutcast2'     -> HTTP SOURCE historico para callers de compatibilidad:
     //     (legacy=false)   SOURCE /SID HTTP/1.0 + Authorization:Basic → ICY 200 OK.
     //                      Usado cuando el servidor NO acepta HTTP PUT pero sí SOURCE HTTP.
     //
@@ -574,12 +669,13 @@ module.exports = function(context) {
 
         socket.setTimeout(10000);
         socket.connect(parseInt(config.port, 10), config.ip, () => {
-            socket.setTimeout(0);
-
             if (useIcyLegacy) {
                 // ── SHOUTcast 1.x ICY legacy ──────────────────────────────────
                 // Paso 1: contraseña en texto plano (sin HTTP, sin Base64).
-                socket.write(`${config.password}\r\n`);
+                const legacyPassword = config.serverType === 'shoutcast2'
+                    ? `${config.password}:#${mountSid}`
+                    : config.password;
+                socket.write(`${legacyPassword}\r\n`);
             } else {
                 // ── DNAS 2.x HTTP SOURCE ──────────────────────────────────────
                 // Authorization:Basic + icy-password para máxima compatibilidad.
@@ -626,6 +722,7 @@ module.exports = function(context) {
                     writeLog(`[Srv ${sid}] SHOUTcast ICY OK2 → headers enviados, transmitiendo`);
                     setServerStatus(sid, 'live');
                     streaming = true;
+                    socket.setTimeout(0);
                     if (context.mainWindow) setTimeout(() => {
                         if (context.mainWindow && !context.mainWindow.isDestroyed())
                             context.mainWindow.webContents.send('force-metadata-update');
@@ -634,8 +731,6 @@ module.exports = function(context) {
                 } else {
                     const resp = responseBuffer.replace(/\r/g, '').trim().slice(0, 200);
                     writeLog(`[Srv ${sid}] SHOUTcast ICY rechazado: ${resp}`);
-                    if (context.encoderWindow && !context.encoderWindow.isDestroyed())
-                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast ICY rechazó: ${resp}` });
                     settle(false, `ICY rechazó: ${resp}`);
                 }
 
@@ -650,6 +745,7 @@ module.exports = function(context) {
                     writeLog(`[Srv ${sid}] SHOUTcast HTTP SOURCE OK → transmitiendo`);
                     setServerStatus(sid, 'live');
                     streaming = true;
+                    socket.setTimeout(0);
                     if (context.mainWindow) setTimeout(() => {
                         if (context.mainWindow && !context.mainWindow.isDestroyed())
                             context.mainWindow.webContents.send('force-metadata-update');
@@ -659,8 +755,6 @@ module.exports = function(context) {
                     const firstLine = responseBuffer.split(/\r?\n/)[0].trim();
                     const fullResp  = responseBuffer.replace(/\r/g, '').trim().slice(0, 400);
                     writeLog(`[Srv ${sid}] SHOUTcast HTTP SOURCE rechazado:\n${fullResp}`);
-                    if (context.encoderWindow && !context.encoderWindow.isDestroyed())
-                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `SHOUTcast rechazó: ${firstLine}` });
                     settle(false, `SHOUTcast rechazó: ${firstLine}`);
                 }
             }
@@ -677,6 +771,7 @@ module.exports = function(context) {
         });
 
         socket.on('close', () => {
+            if (socket._lfIntentionalClose) return;
             if (!settled) {
                 writeLog(`[Srv ${sid}] SHOUTcast socket cerrado antes del handshake`);
                 settle(false, 'Conexión cerrada por el servidor antes del handshake');
@@ -704,6 +799,7 @@ module.exports = function(context) {
         // porque la entrada es compartida; el backpressure se gestiona por
         // servidor para que un destino lento no afecte a los demás.
         if (countLiveServers() === 0) return false;
+        if (source === 'renderer' && context.encoderInputSource !== 'mic') return false;
         let wroteAny = false;
         try {
             const buffer = Buffer.from(chunk);
@@ -716,6 +812,15 @@ module.exports = function(context) {
             for (const server of context.encoderServers.values()) {
                 const proc = server.proc;
                 if (!proc || !proc.stdin || proc.stdin.destroyed) continue;
+                if (source === 'renderer' && server.waitingDrain) {
+                    killEncoderServer(
+                        server.id,
+                        'Encoder mic: el destino no recibe WebM a tiempo; se desconecta para evitar corrupcion del stream.',
+                        { details: { category: 'network', retryable: true } }
+                    );
+                    continue;
+                }
+                if (server.waitingDrain) continue;
                 try {
                     const accepted = proc.stdin.write(buffer);
                     wroteAny = true;
@@ -782,13 +887,12 @@ module.exports = function(context) {
         const config = normalizeEncoderConfig(rawConfig);
         const localTesting = process.env.LOCAL_TESTING === 'true' || config?.localTesting === true;
         const streamUrl = buildStreamUrl(config);
-        // Notificar al operador si AAC+ solicitado pero libfdk_aac no disponible.
-        if (config.codec === 'aac_he' && _fdkAacAvailable !== true && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
-            const fallbackMsg = _fdkAacAvailable === null
-                ? 'Verificando soporte AAC+ en FFmpeg, transmitiendo como AAC-LC por ahora.'
-                : 'AAC+ (libfdk_aac) no esta disponible en este FFmpeg. Transmitiendo como AAC-LC. Para HE-AAC real usa un FFmpeg compilado con --enable-libfdk-aac.';
-            context.encoderWindow.webContents.send('encoder-warn', { serverId: sid, message: fallbackMsg });
+        if (config.codec === 'aac_he' && !_fdkAacAvailable) {
+            const message = 'AAC+ / HE-AAC requiere LF_FFMPEG_FDK_PATH con un FFmpeg externo autorizado que incluya libfdk_aac.';
+            emitEncoderError(sid, message, { category: 'codec', retryable: false });
+            return { success: false, error: message };
         }
+        const selectedFfmpegPath = config.codec === 'aac_he' ? ffmpegFdkPath : ffmpegPath;
         const codecArgs = buildCodecArgs(config);
         try {
             // Reset de estadísticas de entrada solo cuando arranca el PRIMER servidor
@@ -798,7 +902,15 @@ module.exports = function(context) {
             // Si este servidor ya tenía proceso (reconexión), lo matamos primero.
             const existing = getEncoderServer(sid);
             if (existing) {
-                if (existing.scSocket) { try { existing.scSocket.destroy(); } catch (e) {} existing.scSocket = null; }
+                if (existing.ultravox) {
+                    try { existing.ultravox.terminate(); } catch (e) {}
+                    existing.ultravox = null;
+                }
+                if (existing.scSocket) {
+                    existing.scSocket._lfIntentionalClose = true;
+                    try { existing.scSocket.destroy(); } catch (e) {}
+                    existing.scSocket = null;
+                }
                 if (existing.proc) {
                     try { if (existing.proc.stdin && !existing.proc.stdin.destroyed) existing.proc.stdin.destroy(); } catch (e) {}
                     try { existing.proc.kill('SIGKILL'); } catch (e) { try { existing.proc.kill(); } catch (e2) {} }
@@ -807,23 +919,25 @@ module.exports = function(context) {
             }
 
             const inputArgs = buildEncoderInputArgs(config);
-            const useNativeShoutcast = !localTesting && (config.serverType === 'shoutcast' || (config.serverType === 'shoutcast2' && config.legacy === true));
+            const nativeUltravox = !localTesting && config.serverType === 'shoutcast2' && config.legacy !== true;
+            const useNativeShoutcast = !localTesting && (config.serverType === 'shoutcast' || config.serverType === 'shoutcast2');
             const ffmpegArgs = localTesting
                 ? ['-hide_banner', '-nostdin', ...inputArgs, '-f', 'null', '-']
                 : useNativeShoutcast
                     ? ['-hide_banner', '-nostdin', ...inputArgs, ...buildShoutcastPipeArgs(config)]
                     : ['-hide_banner', '-nostdin', ...inputArgs, ...codecArgs, streamUrl];
-            const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? (_fdkAacAvailable === true ? 'AAC+ (HE-AAC)' : 'AAC-LC (fallback de AAC+)') : 'AAC-LC';
+            const _codecLabel = config.codec === 'mp3' ? 'MP3' : config.codec === 'aac_he' ? 'AAC+ (HE-AAC)' : 'AAC-LC';
             writeLog(`Encoder FFmpeg [srv ${sid}] iniciado. Codec: ${_codecLabel} ${config.bitrate || 128}kbps, modo: ${useNativeShoutcast ? 'SHOUTcast-nativo' : (config.serverType || 'icecast')}${useNativeShoutcast ? `, icy-name="${config.icyName || 'Radio'}"` : ''}`);
             notifyRustEncoder('start', config);
 
-            const proc = cp.spawn(ffmpegPath, ffmpegArgs, { windowsHide: true, stdio: ['pipe', useNativeShoutcast ? 'pipe' : 'ignore', 'pipe'] });
+            const proc = cp.spawn(selectedFfmpegPath, ffmpegArgs, { windowsHide: true, stdio: ['pipe', useNativeShoutcast ? 'pipe' : 'ignore', 'pipe'] });
             const server = existing || { id: sid };
             server.id = sid;
             server.config = config;
             server.proc = proc;
             server.waitingDrain = false;
             server.scSocket = null;
+            server.ultravox = null;
             context.encoderServers.set(sid, server);
 
             if (useNativeShoutcast) {
@@ -834,34 +948,65 @@ module.exports = function(context) {
                 // de Rust se congela → todo colapsa. Solución: acumular los chunks en
                 // memoria mientras el handshake TCP está en curso. En cuanto el servidor
                 // responde ICY 200, volcamos el buffer al socket y hacemos pipe del resto.
+                const MAX_PRE_HANDSHAKE_AUDIO_BYTES = 2 * 1024 * 1024;
                 const audioBuffer = [];
+                let audioBufferBytes = 0;
                 let stdoutLive = false;
                 proc.stdout.on('data', (chunk) => {
-                    if (!stdoutLive) audioBuffer.push(Buffer.from(chunk));
+                    if (stdoutLive) return;
+                    const bufferedChunk = Buffer.from(chunk);
+                    audioBufferBytes += bufferedChunk.length;
+                    if (audioBufferBytes > MAX_PRE_HANDSHAKE_AUDIO_BYTES) {
+                        onScFail('SHOUTcast: el handshake excedio el limite de audio en espera.');
+                        return;
+                    }
+                    audioBuffer.push(bufferedChunk);
                 });
                 // Silenciar errores de stdout (p.ej. broken-pipe si el socket cierra).
                 proc.stdout.on('error', () => {});
 
                 let scFailCalled = false;
-                const onScReady = (socket) => {
+                const onScReady = (transport) => {
                     // Handshake OK: volcar buffer pre-handshake y hacer pipe del resto.
                     stdoutLive = true;
                     proc.stdout.removeAllListeners('data');
                     for (const ch of audioBuffer) {
-                        if (!socket.destroyed && socket.writable) socket.write(ch);
+                        if (nativeUltravox) transport.writeAudio(ch);
+                        else if (!transport.destroyed && transport.writable) transport.write(ch);
                     }
                     audioBuffer.length = 0;
-                    if (!socket.destroyed) proc.stdout.pipe(socket, { end: false });
+                    audioBufferBytes = 0;
+                    if (nativeUltravox) {
+                        proc.stdout.on('data', chunk => transport.writeAudio(chunk));
+                    } else if (!transport.destroyed) {
+                        proc.stdout.pipe(transport, { end: false });
+                    }
                 };
-                const onScFail = (reason) => {
+                const onScFail = (reason, details = {}) => {
                     if (scFailCalled) return;
                     scFailCalled = true;
                     stdoutLive = true;   // detener acumulación
                     audioBuffer.length = 0;
+                    audioBufferBytes = 0;
                     // killEncoderServer limpia proc + socket + estado + PCM tap si procede
-                    killEncoderServer(sid, reason);
+                    killEncoderServer(sid, reason, { details });
                 };
-                server.scSocket = openShoutcastSocket(config, sid, onScReady, onScFail);
+                if (nativeUltravox) {
+                    const ultravox = new UltravoxSource({
+                        config,
+                        writeLog: message => writeLog(`[Srv ${sid}] ${message}`),
+                        onReady: () => {
+                            setServerStatus(sid, 'live');
+                            onScReady(ultravox);
+                        },
+                        onError: error => onScFail(error.message || String(error), error),
+                    });
+                    server.ultravox = ultravox;
+                    server.scSocket = ultravox.socket;
+                    ultravox.connect();
+                } else {
+                    server.scSocket = openShoutcastSocket(config, sid, onScReady, onScFail);
+                }
             }
             setServerStatus(sid, 'connecting');
 
@@ -907,12 +1052,11 @@ module.exports = function(context) {
                 // servidor. Si fue reemplazado/matado intencionalmente, s.proc !== proc.
                 const wasCurrent = !!(s && s.proc === proc);
                 if (s && s.proc === proc) s.proc = null;
-                notifyRustEncoder('stop', config);
                 writeLog(`Encoder FFmpeg [srv ${sid}] cerrado. Codigo: ${code}. Ultima salida: ${ffmpegLastStderr || 'sin salida'}`);
                 if (wasCurrent) {
                     if (code && code !== 0 && context.encoderWindow && !context.encoderWindow.isDestroyed()) {
-                        const cleanErr = (ffmpegLastStderr || 'Error de conexion desconocido. Revisa la IP, puerto y clave.').replace(/\n/g, ' ').trim();
-                        context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: `FFmpeg termino con codigo ${code}: ${cleanErr}` });
+                        const cleanErr = redactSensitiveText((ffmpegLastStderr || 'Error de conexion desconocido. Revisa la IP, puerto y clave.').replace(/\n/g, ' ').trim());
+                        emitEncoderError(sid, `FFmpeg termino con codigo ${code}: ${cleanErr}`);
                     }
                     setServerStatus(sid, 'disconnected');
                 }
@@ -921,29 +1065,30 @@ module.exports = function(context) {
             return { success: true };
         } catch (err) {
             setServerStatus(sid, 'disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: 'Error critico lanzando FFmpeg.' });
+            emitEncoderError(sid, 'Error critico lanzando FFmpeg.');
             return { success: false, error: err.message || String(err) };
         }
     }
 
-    // Compat legacy: arranca un único servidor con id '0' (usado por init-ffmpeg /
-    // pruebas locales). El multi-servidor real usa connectEncoderServer por cada id.
-    function startFfmpegProcess(rawConfig = {}) {
-        return startServerFfmpeg('0', rawConfig);
-    }
-
     function startRendererEncoderCapture(config) {
         context.activeEncoderConfig = config;
-        if (context.mainWindow) context.mainWindow.webContents.send('start-audio-capture', config);
+        if (!context.rendererEncoderCaptureActive && context.mainWindow) {
+            context.rendererEncoderCaptureActive = true;
+            context.rendererEncoderCaptureGeneration = (context.rendererEncoderCaptureGeneration || 0) + 1;
+            context.mainWindow.webContents.send('start-audio-capture', {
+                ...config,
+                captureGeneration: context.rendererEncoderCaptureGeneration
+            });
+        }
     }
 
     // Asegura que la fuente PCM compartida (tap nativo del motor Rust) esté
     // activa. Idempotente: si ya está enganchada, no hace nada — así varios
     // servidores comparten la misma entrada sin re-enganchar el tap.
-    function ensureEncoderInput(config) {
+    async function ensureEncoderInput(config) {
         const sampleRate = Math.max(8000, Math.min(192000, parseInt(config.sampleRate, 10) || 44100));
         const engine = context.rustAudioEngine;
-        if (!engine || !engine.isRunning?.() || typeof engine.attachPcmConsumer !== 'function') {
+        if (!engine || typeof engine.attachPcmConsumer !== 'function') {
             return { success: false, error: 'Motor Rust no disponible para tap del encoder.' };
         }
         const resolved = {
@@ -971,18 +1116,31 @@ module.exports = function(context) {
             && context.rustPcmEncoderSource.isRunning?.()
             && (typeof engine.isPcmConsumerAttached !== 'function' || engine.isPcmConsumerAttached());
         if (!tapAlreadyActive) {
+            if (context.rustPcmAttachPromise) return context.rustPcmAttachPromise;
             // Asegurar que no quede un consumer previo colgado antes de enganchar.
             try { engine.detachPcmConsumer?.(); } catch (_) {}
-            engine.attachPcmConsumer(chunk => writeEncoderAudioChunk(chunk, 'rust-pcm'));
-            context.rustPcmEncoderSource = {
-                _tap: true,
-                isRunning: () => !!engine.isRunning(),
-                stop: () => { try { engine.detachPcmConsumer(); } catch (err) { } },
-                status: () => ({ tap: true, running: engine.isRunning() })
-            };
-            writeLog(`Encoder en modo Rust PCM tap nativo (${resolved.tapPoint}).`);
-            if (context.mainWindow && !context.mainWindow.isDestroyed()) {
-                context.mainWindow.webContents.send('start-rust-pcm-encoder-sync', resolved);
+            context.rustPcmAttachPromise = (async () => {
+                const attached = await engine.attachPcmConsumer(chunk => writeEncoderAudioChunk(chunk, 'rust-pcm'));
+                if (!attached?.success) return attached || { success: false, error: 'RustAudio no confirmo el tap PCM.' };
+                context.rustPcmEncoderSource = {
+                    _tap: true,
+                    sessionId: attached.sessionId,
+                    isRunning: () => !!engine.isRunning() && engine.isPcmConsumerAttached?.(),
+                    stop: () => { try { engine.detachPcmConsumer(); } catch (err) { } },
+                    status: () => ({ tap: true, running: engine.isRunning(), sessionId: engine.pcmSession?.id || attached.sessionId })
+                };
+                writeLog(`Encoder en modo Rust PCM tap nativo (${resolved.tapPoint}).`);
+                if (context.mainWindow && !context.mainWindow.isDestroyed()) {
+                    context.mainWindow.webContents.send('start-rust-pcm-encoder-sync', resolved);
+                }
+                return { success: true, sessionId: attached.sessionId };
+            })();
+            try {
+                const attached = await context.rustPcmAttachPromise;
+                if (!attached.success) context.rustPcmEncoderSource = null;
+                return attached;
+            } finally {
+                context.rustPcmAttachPromise = null;
             }
         }
         return { success: true };
@@ -990,14 +1148,18 @@ module.exports = function(context) {
 
     // Conecta UN servidor del path master (Rust): arranca su FFmpeg y se asegura
     // de que la fuente PCM compartida esté activa.
-    function connectEncoderServer(id, config) {
-        const started = startServerFfmpeg(id, config);
-        if (!started.success) return started;
-        const input = ensureEncoderInput(config);
+    async function connectEncoderServer(id, config, attempt) {
+        const input = await ensureEncoderInput(config);
+        if (!isEncoderConnectCurrent(id, attempt)) {
+            maybeStopEncoderInput();
+            return { success: false, cancelled: true, error: 'Conexion cancelada.' };
+        }
         if (!input.success) {
-            killEncoderServer(id, input.error);
+            maybeStopEncoderInput();
             return input;
         }
+        const started = startServerFfmpeg(id, config);
+        if (!started.success) maybeStopEncoderInput();
         return started;
     }
 
@@ -1038,30 +1200,30 @@ module.exports = function(context) {
         })}`);
     }
 
-    function startEncoderCapture(config, id = '0') {
+    async function startEncoderCapture(config, id = '0', attempt) {
         const sid = String(id);
         if ((config.source || 'master') === 'master' && (config.captureProvider === 'rustAudioEngine' || config.owner === 'rustAudioEngine' || config.requestedOwner === 'rustAudioEngine')) {
-            const started = connectEncoderServer(sid, config);
-            if (started.success) return;
+            const started = await connectEncoderServer(sid, config, attempt);
+            if (started.success || started.cancelled) return started;
             if (readAudioEngineMode() === 'rustAudio') {
                 writeLog(`Rust PCM encoder [srv ${sid}] no inicio (${started.error || 'sin detalle'}). Modo Rust exclusivo: no se activa WebAudio.`);
                 setServerStatus(sid, 'disconnected');
-                if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: started.error || 'Rust PCM encoder no inicio.' });
-                return;
+            emitEncoderError(sid, started.error || 'Rust PCM encoder no inicio.');
+                return started;
             }
             writeLog(`Rust PCM encoder [srv ${sid}] no inicio (${started.error || 'sin detalle'}). Ruta WebAudio master retirada: no se activa ruta alternativa.`);
             setServerStatus(sid, 'disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: started.error || 'Rust PCM encoder no inicio y la ruta WebAudio master fue retirada.' });
-            return;
+            emitEncoderError(sid, started.error || 'Rust PCM encoder no inicio y la ruta WebAudio master fue retirada.');
+            return started;
         }
         if ((config.source || 'master') === 'master') {
             writeLog('Encoder master bloqueado: el master ya no usa captura WebAudio del renderer.');
             setServerStatus(sid, 'disconnected');
-            if (context.encoderWindow) context.encoderWindow.webContents.send('encoder-error', { serverId: sid, message: 'El encoder master requiere Rust PCM tap; la captura WebAudio fue retirada.' });
-            return;
+            emitEncoderError(sid, 'El encoder master requiere Rust PCM tap; la captura WebAudio fue retirada.');
+            return { success: false, error: 'El encoder master requiere Rust PCM tap; la captura WebAudio fue retirada.' };
         }
-        // Path de micrófono / entrada externa (renderer capture): legacy de servidor
-        // único. El renderer arranca FFmpeg vía init-ffmpeg y manda audio-chunk.
+        // Path de micrófono / entrada externa: una captura renderer compartida y
+        // un proceso FFmpeg independiente por servidor.
         const rendererCapture = config.captureProvider === 'rustAudioEngine'
             ? {
                 ...config,
@@ -1073,7 +1235,14 @@ module.exports = function(context) {
             }
             : config;
         context.encoderSourceContract = { ...(context.encoderSourceContract || {}), ...rendererCapture, active: false };
+        if (!isEncoderConnectCurrent(sid, attempt)) {
+            maybeStopEncoderInput();
+            return { success: false, cancelled: true, error: 'Conexion cancelada.' };
+        }
+        const started = startServerFfmpeg(sid, rendererCapture);
+        if (!started.success) return started;
         startRendererEncoderCapture(rendererCapture);
+        return started;
     }
 
     ipcMain.handle('dialog:openFile', async (event) => { 
@@ -1187,6 +1356,19 @@ module.exports = function(context) {
     
     ipcMain.on('editor-request-track', (e, data) => { if (context.lastEditorSource === 'library' && context.libraryWindow) { context.libraryWindow.webContents.send('editor-handle-request-track', data); } else if (context.mainWindow) { context.mainWindow.webContents.send('editor-handle-request-track', data); } });
     ipcMain.on('open-preview', (e, filePath) => { if (context.previewWindow) { context.previewWindow.focus(); context.previewWindow.webContents.send('load-preview-track', filePath); } else { const { height } = screen.getPrimaryDisplay().workAreaSize; context.previewWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, '..', '..', 'assets', 'icons', 'editor.png')),   width: 480, height: 200, x: 20, y: height - 220, title: 'Escucha previa', autoHideMenuBar: true, resizable: false, alwaysOnTop: true, webPreferences: { nodeIntegration: true, contextIsolation: false } }); context.previewWindow.loadFile('frontend/preview.html'); context.previewWindow.webContents.on('did-finish-load', () => { context.previewWindow.webContents.send('load-preview-track', filePath); }); context.previewWindow.on('closed', () => { context.previewWindow = null; }); } });
+    const encoderPrefsPath = path.join(configDir, 'encoder_prefs.json');
+    ipcMain.on('encoder-prefs-load-sync', event => {
+        const result = loadEncoderPrefs({ filePath: encoderPrefsPath, safeStorage, fileSystem: fs });
+        event.returnValue = result;
+    });
+    ipcMain.on('encoder-prefs-save', (event, prefs = {}) => {
+        const result = saveEncoderPrefs({ filePath: encoderPrefsPath, prefs, safeStorage, fileSystem: fs });
+        if (!result.success) writeLog(`No se pudo guardar la configuracion del encoder: ${result.error}`);
+        if (result.warning || result.error) {
+            event.sender.send('encoder-prefs-warning', result.warning || result.error);
+        }
+    });
+
     ipcMain.on('open-encoder', () => {
         if (context.encoderWindow) {
             context.encoderWindow.show();
@@ -1222,12 +1404,31 @@ module.exports = function(context) {
         context.encoderWindow.on('closed', () => { context.encoderWindow = null; });
     });
     // Conecta un servidor a partir de su config cruda (resuelve contrato + arranca).
-    function connectOneFromConfig(id, rawConfig) {
-        const normalized = normalizeEncoderConfig(rawConfig);
+    async function connectOneFromConfig(id, rawConfig) {
+        const validation = validateEncoderConfig(rawConfig, { fdkAvailable: _fdkAacAvailable === true });
+        if (!validation.ok) {
+            setServerStatus(id, 'disconnected');
+            emitEncoderError(id, validation.message, validation);
+            return validation;
+        }
+        const normalized = normalizeEncoderConfig(validation.config);
         const contract = buildEncoderSourceContract(normalized, false);
         const resolved = { ...normalized, ...contract };
+        const reservation = reserveEncoderInput(id, resolved);
+        if (!reservation.success) {
+            setServerStatus(id, 'disconnected');
+            emitEncoderError(id, reservation.error, { category: 'config', retryable: false });
+            return reservation;
+        }
         context.encoderSourceContract = { ...(context.encoderSourceContract || {}), ...contract, active: false };
-        startEncoderCapture(resolved, id);
+        const attempt = beginEncoderConnect(id, resolved);
+        setServerStatus(id, 'connecting');
+        try {
+            return await startEncoderCapture(resolved, id, attempt);
+        } finally {
+            finishEncoderConnect(id, attempt);
+            maybeStopEncoderInput();
+        }
     }
 
     // start-encoder: acepta un ARRAY de configs (conectar todos / botón maestro) o
@@ -1237,7 +1438,7 @@ module.exports = function(context) {
         const list = Array.isArray(payload) ? payload : [payload];
         list.forEach((cfg, idx) => {
             const id = (cfg && (cfg.serverId !== undefined && cfg.serverId !== null)) ? cfg.serverId : idx;
-            connectOneFromConfig(id, cfg || {});
+            void connectOneFromConfig(id, cfg || {}).catch(err => emitEncoderError(id, err.message || err));
         });
     });
 
@@ -1245,7 +1446,7 @@ module.exports = function(context) {
     // servidor o reconexión automática del frontend).
     ipcMain.on('start-encoder-server', (e, payload = {}) => {
         const id = (payload.serverId !== undefined && payload.serverId !== null) ? payload.serverId : '0';
-        connectOneFromConfig(id, payload);
+        void connectOneFromConfig(id, payload).catch(err => emitEncoderError(id, err.message || err));
     });
 
     // stop-encoder-server: detiene UN servidor individual sin afectar a los demás.
@@ -1271,7 +1472,7 @@ module.exports = function(context) {
             const mountStr = encodeURIComponent(normalizeMount(conf.mount));
             return {
                 url: `http://${conf.ip}:${conf.port}/admin/metadata?mount=${mountStr}&mode=updinfo&song=${encodedMeta}`,
-                headers: { 'Authorization': 'Basic ' + Buffer.from(`admin:${conf.password}`).toString('base64') }
+                headers: { 'Authorization': 'Basic ' + Buffer.from(`${conf.user || 'source'}:${conf.password}`).toString('base64') }
             };
         }
         if (conf.serverType === 'shoutcast' || conf.serverType === 'shoutcast2') {
@@ -1282,7 +1483,7 @@ module.exports = function(context) {
                 ? (String(conf.mount || '').replace(/[^\d]/g, '') || '1')
                 : '1';
             return {
-                url: `http://${conf.ip}:${conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&sid=${sid}&song=${encodedMeta}`,
+                url: `http://${conf.ip}:${conf.adminPort || conf.port}/admin.cgi?pass=${encodeURIComponent(conf.password)}&mode=updinfo&sid=${sid}&song=${encodedMeta}`,
                 headers: {}
             };
         }
@@ -1296,6 +1497,10 @@ module.exports = function(context) {
         for (const server of context.encoderServers.values()) {
             if (!server.proc || !server.config) continue;
             try {
+                if (server.ultravox?.live) {
+                    server.ultravox.updateMetadata(metaText);
+                    continue;
+                }
                 const conf = normalizeEncoderConfig(server.config);
                 const meta = buildMetadataUpdate(conf, encodedMeta);
                 if (meta && meta.url) {
@@ -1307,9 +1512,6 @@ module.exports = function(context) {
         }
     });
     
-    ipcMain.on('init-ffmpeg', (e, config) => {
-        startFfmpegProcess(config);
-    });
     ipcMain.on('encoder-health', (e, report = {}) => {
         const reason = report.reason || 'report';
         if (reason === 'minute' || reason === 'stop' || reason === 'chunk-gap') {
@@ -1334,8 +1536,10 @@ module.exports = function(context) {
         }
     });
 
-    ipcMain.on('audio-chunk', (e, chunk) => {
-        writeEncoderAudioChunk(chunk, 'renderer');
+    ipcMain.on('audio-chunk', (e, payload = {}) => {
+        if (context.encoderInputSource !== 'mic') return;
+        if (payload.generation !== context.rendererEncoderCaptureGeneration) return;
+        writeEncoderAudioChunk(payload.chunk, 'renderer');
     });
     // stop-encoder: detiene TODOS los servidores (botón "Desconectar todo" /
     // parada general). El stop individual usa stop-encoder-server.

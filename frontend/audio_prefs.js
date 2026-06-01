@@ -13,6 +13,7 @@ const AUDIO_PREFS_DEFAULTS = {
     playlistSharedDevice: 'default',
     playlistOutputs: ['default', 'default', 'default', 'default'],
     cartwallOutputMode: 'master',
+    keyboardShortcutScope: 'contextual',
     repeatForgetProtectionEnabled: false,
     repeatForgetProtectionMax: 10,
     repeatDisableOnManualNext: true,
@@ -43,6 +44,9 @@ function normalizeAudioPrefs(prefs = {}) {
     const cartwallMode = ['master', 'monitor', 'cue', 'device'].includes(prefs.cartwallOutputMode)
         ? prefs.cartwallOutputMode
         : AUDIO_PREFS_DEFAULTS.cartwallOutputMode;
+    const keyboardShortcutScope = ['contextual', 'main-window', 'application'].includes(prefs.keyboardShortcutScope)
+        ? prefs.keyboardShortcutScope
+        : AUDIO_PREFS_DEFAULTS.keyboardShortcutScope;
     // Promocion forzada: cualquier valor legado se convierte en 'rustAudio'.
     // El motor Web Audio ya no existe como modo de operacion.
     const audioEngineMode = 'rustAudio';
@@ -69,6 +73,7 @@ function normalizeAudioPrefs(prefs = {}) {
         playlistSharedDevice: sharedPlaylistDevice,
         playlistOutputs: normalizePlaylistOutputs(prefs.playlistOutputs, sharedPlaylistDevice || mainDevice),
         cartwallOutputMode: cartwallMode,
+        keyboardShortcutScope,
         repeatForgetProtectionEnabled: prefs.repeatForgetProtectionEnabled === true,
         repeatForgetProtectionMax: Math.max(1, Math.min(999, parseInt(prefs.repeatForgetProtectionMax, 10) || AUDIO_PREFS_DEFAULTS.repeatForgetProtectionMax)),
         repeatDisableOnManualNext: prefs.repeatDisableOnManualNext !== false,

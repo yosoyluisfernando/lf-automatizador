@@ -697,6 +697,24 @@ document.getElementById('num-duck-fade').value = generalPrefs.duckingFade || 0.3
 // Comportamiento de clic en playlist
 const selDblClick = document.getElementById('sel-dbl-click-action');
 const selCtrlDblClick = document.getElementById('sel-ctrl-dbl-click-action');
+const selKeyboardShortcutScope = document.getElementById('sel-keyboard-shortcut-scope');
+const keyboardShortcutScopeHint = document.getElementById('keyboard-shortcut-scope-hint');
+
+function syncKeyboardShortcutScopeHint() {
+    if (!selKeyboardShortcutScope || !keyboardShortcutScopeHint) return;
+    const hints = {
+        contextual: 'Recomendado: los atajos generales actuan solo en la ventana principal y se pausan mientras hay dialogos abiertos. La botonera responde solo cuando esta visible.',
+        'main-window': 'Los atajos generales actuan en toda la ventana principal, excepto al escribir. La botonera responde solo cuando esta visible.',
+        application: 'Modo avanzado: los atajos generales tambien actuan desde ventanas auxiliares de LF Automatizador, excepto al escribir. La botonera responde solo cuando esta visible.'
+    };
+    keyboardShortcutScopeHint.textContent = hints[selKeyboardShortcutScope.value] || hints.contextual;
+}
+
+if (selKeyboardShortcutScope) {
+    selKeyboardShortcutScope.value = generalPrefs.keyboardShortcutScope || 'contextual';
+    selKeyboardShortcutScope.addEventListener('change', syncKeyboardShortcutScopeHint);
+    syncKeyboardShortcutScopeHint();
+}
 
 function syncClickActionSelects() {
     if (!selDblClick || !selCtrlDblClick) return;
@@ -764,6 +782,7 @@ function saveAll() {
     generalPrefs.duckingFade = parseFloat(document.getElementById('num-duck-fade').value) || 0.3;
     if (selDblClick) generalPrefs.dblClickAction = selDblClick.value;
     if (selCtrlDblClick) generalPrefs.ctrlDblClickAction = selCtrlDblClick.value;
+    if (selKeyboardShortcutScope) generalPrefs.keyboardShortcutScope = selKeyboardShortcutScope.value || 'contextual';
     
     localStorage.setItem('sel-out-cue', generalPrefs.outCue);
 
@@ -793,6 +812,7 @@ function saveAll() {
         audioChanged: hasAudioRoutingPrefsChanged(previousPrefs, generalPrefs),
         audioEngineModeChanged: previousPrefs.audioEngineMode !== generalPrefs.audioEngineMode
     });
+    ipcRenderer.send('shortcut-scope-updated', generalPrefs.keyboardShortcutScope);
 }
 
 // FASE 3 — Snapshot inicial de la UI para que Cancelar pueda revertir.
@@ -803,6 +823,7 @@ const __SETTINGS_SNAPSHOT_IDS = [
     'sel-pl-out-1', 'sel-pl-out-2', 'sel-pl-out-3', 'sel-pl-out-4',
     'sel-playlist-shared', 'sel-playlist-output-mode', 'sel-cartwall-mode',
     'sel-monitor-source-mode', 'sel-monitor-volume-ui-mode',
+    'sel-keyboard-shortcut-scope',
     'sel-audio-engine-mode',
     'chk-monitor-enabled', 'chk-monitor-volume-ui',
     'num-duck-vol', 'num-duck-fade',

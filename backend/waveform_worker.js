@@ -1,11 +1,8 @@
 const { parentPort } = require('worker_threads');
 const cp = require('child_process');
+const { resolveFfmpegRuntime } = require('./utils/ffmpeg_resolver');
 
-let ffmpegPath = 'ffmpeg';
-try { 
-    ffmpegPath = require('ffmpeg-static') || 'ffmpeg';
-    ffmpegPath = ffmpegPath.replace('app.asar', 'app.asar.unpacked');
-} catch (err) {}
+const ffmpegPath = resolveFfmpegRuntime().baseline.path;
 
 function buildPeaksFromPcm(buffer, sampleRate = 8000) {
     const sampleCount = Math.floor(buffer.length / 4);

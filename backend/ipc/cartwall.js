@@ -103,7 +103,7 @@ module.exports = function(context) {
     let cartwallUiState = {
         activeProfileId: null,
         activeTabIndex: 0,
-        mode: 'hidden'
+        mode: context.uiPrefs.cartwall ? 'docked' : 'hidden'
     };
 
     function getPersistedCartwallState() {
@@ -124,7 +124,8 @@ module.exports = function(context) {
             ? partial.activeTabIndex
             : cartwallUiState.activeTabIndex;
         const activeTabIndex = Math.max(0, Math.min(tabCount - 1, Number.isInteger(requestedTab) ? requestedTab : 0));
-        const mode = partial.mode || cartwallUiState.mode || 'hidden';
+        const requestedMode = partial.mode || cartwallUiState.mode || 'hidden';
+        const mode = ['hidden', 'docked', 'floating'].includes(requestedMode) ? requestedMode : 'hidden';
         return { activeProfileId, activeTabIndex, mode };
     }
 
@@ -139,6 +140,13 @@ module.exports = function(context) {
 
     function updateCartwallUiState(partial = {}, skipSender = null) {
         cartwallUiState = normalizeCartwallUiState(partial);
+        if (Object.prototype.hasOwnProperty.call(partial, 'mode')) {
+            const mode = cartwallUiState.mode;
+            context.uiPrefs.cartwall = mode === 'docked';
+            if (['docked', 'floating'].includes(mode)) context.uiPrefs.cartwallLastMode = mode;
+            saveUiPrefs();
+            syncCartwallMenuState(mode !== 'hidden');
+        }
         broadcastCartwallUiState(skipSender);
         return cartwallUiState;
     }
@@ -176,9 +184,6 @@ module.exports = function(context) {
             updateCartwallUiState({ mode: 'floating' });
             return;
         }
-        context.uiPrefs.cartwall = false;
-        saveUiPrefs();
-        syncCartwallMenuState(false);
         context.cartwallDockRequested = false;
         updateCartwallUiState({ mode: 'floating' });
         context.cartwallWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, '..', '..', 'assets', 'icons', 'console.png')), 
@@ -190,9 +195,6 @@ module.exports = function(context) {
             const shouldDock = context.cartwallDockRequested;
             context.cartwallDockRequested = false;
             context.cartwallWindow = null; 
-            context.uiPrefs.cartwall = shouldDock;
-            saveUiPrefs();
-            syncCartwallMenuState(shouldDock);
             updateCartwallUiState({ mode: shouldDock ? 'docked' : 'hidden' });
             if (context.mainWindow && !context.mainWindow.isDestroyed()) {
                 context.mainWindow.webContents.send(shouldDock ? 'cartwall-docked' : 'cartwall-floating-closed');
@@ -204,6 +206,15 @@ module.exports = function(context) {
         if (!context.cartwallWindow) return;
         context.cartwallDockRequested = true;
         context.cartwallWindow.close();
+    });
+
+    ipcMain.on('cartwall-hide', () => {
+        if (context.cartwallWindow && !context.cartwallWindow.isDestroyed()) {
+            context.cartwallDockRequested = false;
+            context.cartwallWindow.close();
+            return;
+        }
+        updateCartwallUiState({ mode: 'hidden' });
     });
 
     ipcMain.on('remote-cw-play', (e, btnInfo) => {

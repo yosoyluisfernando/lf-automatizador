@@ -40,6 +40,11 @@ module.exports = function(context) {
         return context.rustAudioEngine.command(command);
     });
 
+    ipcMain.handle('audio-engine-rust-recover', async (event, reason = '') => {
+        if (!context.rustAudioEngine?.recover) return { success: false, error: 'Recuperacion RustAudio no configurada.' };
+        return context.rustAudioEngine.recover(String(reason || 'Recuperacion solicitada por renderer.'));
+    });
+
     // Devuelve la carpeta de caché de peaks. Creada automáticamente si no existe.
     // Valor por defecto: <raíz del programa>/cache/peaks/
     // TODO futuro: permitir al usuario elegir la carpeta desde Configuración.

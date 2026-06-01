@@ -153,6 +153,8 @@ struct EngineState {
     /// lee desde el main loop y elige según `encoder_tap_mode`.
     encoder_tap_pre_consumer: Option<rtrb::Consumer<Sample>>,
     encoder_tap_post_consumer: Option<rtrb::Consumer<Sample>>,
+    encoder_tap_pre_drops: Arc<AtomicU64>,
+    encoder_tap_post_drops: Arc<AtomicU64>,
     /// FASE D — parámetros DSP compartidos. Se clona el Arc al thread de audio
     /// cuando se construya la cadena DSP (sub-pasos 9-11). El handler `fx`
     /// escribirá acá en sub-pasos 9+.
@@ -199,6 +201,8 @@ impl Default for EngineState {
             monitor_sink_id: String::new(),
             encoder_tap_pre_consumer: None,
             encoder_tap_post_consumer: None,
+            encoder_tap_pre_drops: Arc::new(AtomicU64::new(0)),
+            encoder_tap_post_drops: Arc::new(AtomicU64::new(0)),
             dsp_params: Arc::new(DspParams::default()),
             pending_resume: Vec::new(),
             stream_producers: HashMap::new(),
@@ -1833,14 +1837,30 @@ where
     S: Source<Item = Sample>,
 {
     source: S,
-    taps: Vec<rtrb::Producer<Sample>>,
+    taps: Vec<TeeTap>,
+}
+
+struct TeeTap {
+    producer: rtrb::Producer<Sample>,
+    dropped: Option<Arc<AtomicU64>>,
+    enabled: Option<Arc<DspParams>>,
+}
+
+impl TeeTap {
+    fn new(
+        producer: rtrb::Producer<Sample>,
+        dropped: Option<Arc<AtomicU64>>,
+        enabled: Option<Arc<DspParams>>,
+    ) -> Self {
+        Self { producer, dropped, enabled }
+    }
 }
 
 impl<S> MultiTeeSource<S>
 where
     S: Source<Item = Sample>,
 {
-    fn new(source: S, taps: Vec<rtrb::Producer<Sample>>) -> Self {
+    fn new(source: S, taps: Vec<TeeTap>) -> Self {
         Self { source, taps }
     }
 }
@@ -1855,10 +1875,19 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.source.next()?;
         for tap in self.taps.iter_mut() {
+            if tap.enabled.as_ref().is_some_and(|params| {
+                !params.encoder_tap_active.load(Ordering::Relaxed)
+            }) {
+                continue;
+            }
             // push() retorna Err si el ring está lleno. Silencioso: el audio
             // del PGM no se ve afectado. El consumidor lento simplemente
             // pierde samples (mejor que bloquear el thread de audio).
-            let _ = tap.push(sample);
+            if tap.producer.push(sample).is_err() {
+                if let Some(counter) = tap.dropped.as_ref() {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
         Some(sample)
     }
@@ -2572,8 +2601,15 @@ fn emit_status(state: &EngineState, request_id: &str) {
             item.updated_at
         )
     }).unwrap_or_else(|| "null".to_string());
+    let encoder_tap_active = state.dsp_params.encoder_tap_active.load(Ordering::Relaxed);
+    let encoder_tap_ready = encoder_tap_active
+        && state.encoder_tap_pre_consumer.is_some()
+        && state.encoder_tap_post_consumer.is_some();
+    let encoder_tap_mode = if state.dsp_params.encoder_tap_mode.load(Ordering::Relaxed) == 0 { "preFx" } else { "postFx" };
+    let encoder_tap_dropped = state.encoder_tap_pre_drops.load(Ordering::Relaxed)
+        + state.encoder_tap_post_drops.load(Ordering::Relaxed);
     let encoder = format!(
-        "{{\"active\":{},\"source\":\"{}\",\"owner\":\"{}\",\"requestedOwner\":\"{}\",\"captureProvider\":\"{}\",\"encoderProvider\":\"{}\",\"rustPcmReady\":{},\"pcmBridgeReady\":{},\"pcmBridgeMode\":\"{}\",\"pcmBridgeReason\":\"{}\",\"fallbackReason\":\"{}\",\"captureFormat\":\"{}\",\"sampleRate\":{},\"transport\":\"{}\",\"bitrateKbps\":{},\"speed\":{},\"ffmpegTime\":\"{}\",\"maxGapMs\":{},\"gapWarnings\":{},\"updatedAt\":{}}}",
+        "{{\"active\":{},\"source\":\"{}\",\"owner\":\"{}\",\"requestedOwner\":\"{}\",\"captureProvider\":\"{}\",\"encoderProvider\":\"{}\",\"rustPcmReady\":{},\"pcmBridgeReady\":{},\"pcmBridgeMode\":\"{}\",\"pcmBridgeReason\":\"{}\",\"fallbackReason\":\"{}\",\"captureFormat\":\"{}\",\"sampleRate\":{},\"transport\":\"{}\",\"bitrateKbps\":{},\"speed\":{},\"ffmpegTime\":\"{}\",\"maxGapMs\":{},\"gapWarnings\":{},\"tap\":{{\"active\":{},\"ready\":{},\"mode\":\"{}\",\"droppedSamples\":{}}},\"updatedAt\":{}}}",
         state.encoder.active,
         escape_json(&state.encoder.source_bus),
         escape_json(&state.encoder.owner),
@@ -2593,6 +2629,10 @@ fn emit_status(state: &EngineState, request_id: &str) {
         escape_json(&state.encoder.ffmpeg_time),
         state.encoder.max_gap_ms,
         state.encoder.gap_warnings,
+        encoder_tap_active,
+        encoder_tap_ready,
+        encoder_tap_mode,
+        encoder_tap_dropped,
         state.encoder.updated_at
     );
     println!(
@@ -3361,7 +3401,14 @@ fn ensure_program_mixer(state: &mut EngineState, output_id: &str) -> Result<(), 
     state.encoder_tap_post_consumer = Some(enc_post_cons);
 
     // Primer MultiTee: PRE-FX. Justo después del program_mixer, antes de DSP.
-    let tee_pre = MultiTeeSource::new(program_output, vec![mon_pre_prod, enc_pre_prod]);
+    let tee_pre = MultiTeeSource::new(program_output, vec![
+        TeeTap::new(mon_pre_prod, None, None),
+        TeeTap::new(
+            enc_pre_prod,
+            Some(Arc::clone(&state.encoder_tap_pre_drops)),
+            Some(Arc::clone(&state.dsp_params)),
+        ),
+    ]);
 
     // FASE D · sub-paso 11.4 — Cascada DSP con orden dinámico.
     // Un solo Source (`DynamicDspSource`) absorbe PreAmp+Pan+Mono+EQ+Comp+Limiter
@@ -3374,7 +3421,14 @@ fn ensure_program_mixer(state: &mut EngineState, output_id: &str) -> Result<(), 
     // Segundo MultiTee: POST-FX. Después de toda la cadena DSP, antes del
     // master fader. Aquí los taps escuchan exactamente lo mismo que va a
     // salir al sink (sin master_gain todavía).
-    let tee_post = MultiTeeSource::new(dsp, vec![mon_post_prod, enc_post_prod]);
+    let tee_post = MultiTeeSource::new(dsp, vec![
+        TeeTap::new(mon_post_prod, None, None),
+        TeeTap::new(
+            enc_post_prod,
+            Some(Arc::clone(&state.encoder_tap_post_drops)),
+            Some(Arc::clone(&state.dsp_params)),
+        ),
+    ]);
 
     // FASE D · sub-paso 7.5: master fader único entre la cadena DSP y el sink.
     let faded = FaderSource::new(tee_post, Arc::clone(&state.dsp_params), FaderGainField::Master);
@@ -4437,15 +4491,17 @@ fn main() {
             "encoderTap" => {
                 let enable = json_get_bool(&line, "enable").unwrap_or(false);
                 state.dsp_params.encoder_tap_active.store(enable, Ordering::Relaxed);
-                // Drenamos AMBOS rings (Pre y Post FX) al desactivar para que
-                // la próxima activación arranque limpia.
-                if !enable {
-                    if let Some(c) = state.encoder_tap_pre_consumer.as_mut() {
-                        while c.pop().is_ok() {}
-                    }
-                    if let Some(c) = state.encoder_tap_post_consumer.as_mut() {
-                        while c.pop().is_ok() {}
-                    }
+                // Drenamos AMBOS rings al cambiar de estado para que una nueva
+                // sesión nunca reciba audio acumulado de una sesión anterior.
+                if let Some(c) = state.encoder_tap_pre_consumer.as_mut() {
+                    while c.pop().is_ok() {}
+                }
+                if let Some(c) = state.encoder_tap_post_consumer.as_mut() {
+                    while c.pop().is_ok() {}
+                }
+                if enable {
+                    state.encoder_tap_pre_drops.store(0, Ordering::Relaxed);
+                    state.encoder_tap_post_drops.store(0, Ordering::Relaxed);
                 }
             }
             // ── Bus FX: parámetros DSP del bus de programa ──────────────────
