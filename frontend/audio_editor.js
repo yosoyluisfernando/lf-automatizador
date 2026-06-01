@@ -564,6 +564,11 @@ ipcRenderer.on('load-audio-file', async (e, filePath) => {
     const loadToken = ++editorLoadToken;
     currentFilePath = filePath;
     document.getElementById('lbl-filename').innerText = "Cargando: " + path.basename(filePath);
+    const parsedFile = path.parse(filePath);
+    const fileNameInput = document.getElementById('meta-filename');
+    const fileExtension = document.getElementById('meta-file-extension');
+    if (fileNameInput) fileNameInput.value = parsedFile.name;
+    if (fileExtension) fileExtension.innerText = parsedFile.ext;
     
     try {
         document.getElementById('meta-artist').value = '';
@@ -777,6 +782,21 @@ ipcRenderer.on('analyzer-done', (e, payload) => {
 
 async function saveCuesSilently() {
     if (!currentFilePath) return;
+
+    const requestedBaseName = document.getElementById('meta-filename')?.value.trim() || '';
+    const currentParsedPath = path.parse(currentFilePath);
+    if (requestedBaseName && requestedBaseName !== currentParsedPath.name) {
+        const renameResult = await ipcRenderer.invoke('lib-rename-track-file', {
+            filePath: currentFilePath,
+            baseName: requestedBaseName
+        });
+        if (!renameResult?.success) throw new Error(renameResult?.error || 'No se pudo renombrar el archivo.');
+        currentFilePath = renameResult.filePath;
+        const lblFileName = document.getElementById('lbl-filename');
+        if (lblFileName) lblFileName.innerText = path.basename(currentFilePath);
+        const fileExtension = document.getElementById('meta-file-extension');
+        if (fileExtension) fileExtension.innerText = path.extname(currentFilePath);
+    }
     
     const mc = { filePath: currentFilePath };
     mc.customArtist = document.getElementById('meta-artist').value;

@@ -1,6 +1,6 @@
 module.exports = function(context) {
     const {
-        ipcMain, dialog, fs, path, configDir, db, writeLog, readTagsAsync, genreFileTagToLibraryLabel,
+        ipcMain, dialog, fs, path, shell, configDir, db, writeLog, readTagsAsync, genreFileTagToLibraryLabel,
         BrowserWindow,
         lastVuLevels, buildVuPayload, scheduleVuBroadcast, broadcastVuLevels, auxCueSources,
         resolveLevel, resolveDb, resolveStereoPair, resolveStereoDbPair
@@ -14,6 +14,17 @@ module.exports = function(context) {
     ipcMain.handle('db-maintenance-vacuum', async () => {
         if (!db?.runMaintenanceVacuum) return { success: false, error: 'Mantenimiento VACUUM no disponible.' };
         return db.runMaintenanceVacuum();
+    });
+
+    ipcMain.handle('file:show-in-folder', async (event, filePath) => {
+        try {
+            const resolvedPath = path.resolve(String(filePath || ''));
+            if (!filePath || !fs.existsSync(resolvedPath)) return { success: false, error: 'El archivo no existe.' };
+            shell.showItemInFolder(resolvedPath);
+            return { success: true };
+        } catch (err) {
+            return { success: false, error: err.message || String(err) };
+        }
     });
 
     // Cross-Platform: Auditoría de mayúsculas/minúsculas en rutas de archivos.

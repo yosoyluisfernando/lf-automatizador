@@ -1,3 +1,5 @@
+const { renameFilePreservingExtension } = require('../file_operations');
+
 module.exports = function(context) {
     const {
         app, cp, readLibraryDirInWorker, mapTrackRowToClient, buildWaveformPeaksInWorker,
@@ -134,6 +136,43 @@ ipcMain.handle('lib-get-db-track', (e, filePath) => {
         const r = db.prepare("SELECT * FROM tracks WHERE file_path = ?").get(filePath); if (!r) return null;
         return mapTrackRowToClient(r);
     } catch(err) { return null; }
+});
+
+ipcMain.handle('lib-rename-track-file', (e, payload = {}) => {
+    const oldPath = String(payload.filePath || '').trim();
+    try {
+        const newPath = renameFilePreservingExtension(fs, path, oldPath, payload.baseName);
+        if (newPath !== oldPath && db) {
+            try {
+                const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => row.name));
+                db.transaction(() => {
+                    const updates = [
+                        ['track_artist_links', 'file_path'],
+                        ['track_genre_links', 'file_path'],
+                        ['commercial_assets', 'file_path'],
+                        ['commercial_block_items', 'file_path'],
+                        ['commercial_logs', 'asset_path'],
+                        ['events', 'file_path'],
+                        ['tracks', 'file_path'],
+                    ];
+                    updates.forEach(([table, column]) => {
+                        if (tables.has(table)) db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(newPath, oldPath);
+                    });
+                })();
+            } catch (dbErr) {
+                try { fs.renameSync(newPath, oldPath); } catch (_) {}
+                throw dbErr;
+            }
+        }
+        if (newPath !== oldPath) {
+            if (context.mainWindow) context.mainWindow.webContents.send('track-file-renamed', { oldPath, newPath });
+            if (context.libraryWindow) context.libraryWindow.webContents.send('refresh-manual-cues');
+        }
+        return { success: true, filePath: newPath, renamed: newPath !== oldPath };
+    } catch (err) {
+        writeLog('Error renombrando pista: ' + err.message);
+        return { success: false, error: err.message || String(err), filePath: oldPath };
+    }
 });
 
 ipcMain.handle('audio-build-waveform-peaks', async (e, filePath) => {

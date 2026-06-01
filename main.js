@@ -2606,6 +2606,7 @@ const sharedState = {
     get ffmpegCapabilities() { return ffmpegCapabilities; },
     get rustAudioEngine() { return rustAudioEngine; },
     get screen() { return screen; },
+    get shell() { return shell; },
     get openCommercialManagerWindow() { return openCommercialManagerWindow; },
     get app() { return app; },
     get cp() { return cp; },

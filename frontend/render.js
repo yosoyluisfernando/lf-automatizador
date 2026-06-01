@@ -6029,28 +6029,61 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
     }
 });
 
-document.getElementById('pm-edit-name').addEventListener('click', () => {
-    if (!rightClickedRow) return;
-    let currentName = rightClickedRow.dataset.pureName || rightClickedRow.children[1].innerText;
-    let isTemp = rightClickedRow.dataset.temp === 'true';
-    if (/^(?:\u23f3|⏳)\s/.test(currentName)) currentName = currentName.replace(/^(?:\u23f3|⏳)\s*/, '');
+function getPhysicalTrackPathForRow(row) {
+    if (!row) return '';
+    if ((row.dataset.type || 'normal') !== 'random') return row.dataset.ruta || '';
+    if (row === currentPlayingRow && currentPhysicalTrackPath) return currentPhysicalTrackPath;
+    return row.dataset.resolvedRandomPath || '';
+}
 
-    const newName = prompt("Editar nombre de la pista:", currentName);
-    if (newName && newName.trim() !== "") {
-        let finalName = newName.trim(); if (isTemp) finalName = ICON_TEMP_PREFIX + finalName;
-        rightClickedRow.dataset.pureName = finalName; rightClickedRow.dataset.ext = ''; rightClickedRow.children[1].innerText = finalName;
-        if (currentPlayingRow === rightClickedRow) {
-            let cleanName = finalName.replace(/^(?:\u23f3|⏳)\s*/, '');
-            document.getElementById('txt-cancion').innerText = cleanName;
-            if (isPlaybackActuallyOnAir()) ipcRenderer.send('update-metadata', cleanName);
-            else setIdleBroadcastMetadata();
-        }
-        if (queuedNextRow === rightClickedRow) updateNextTrackVisuals();
-    } hideAllMenus();
+document.getElementById('pm-edit-name').addEventListener('click', () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    hideAllMenus();
+    if (!filePath) {
+        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        return;
+    }
+    ipcRenderer.send('open-audio-editor', filePath);
+});
+
+document.getElementById('pm-show-folder').addEventListener('click', async () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    hideAllMenus();
+    if (!filePath) {
+        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        return;
+    }
+    const result = await ipcRenderer.invoke('file:show-in-folder', filePath);
+    if (!result?.success) alert(result?.error || 'No se pudo mostrar el archivo en su carpeta.');
 });
 
 document.getElementById('pm-set-next').addEventListener('click', () => { const nextRow = resolveNextOperationalRow(rightClickedRow, false); if (nextRow) { setQueuedNextManual(nextRow); } hideAllMenus(); });
-document.getElementById('pm-advanced-edit').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-audio-editor', rightClickedRow.dataset.ruta); hideAllMenus(); });
+document.getElementById('pm-advanced-edit').addEventListener('click', () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    if (filePath) ipcRenderer.send('open-audio-editor', filePath);
+    else alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+    hideAllMenus();
+});
+
+ipcRenderer.on('track-file-renamed', (event, { oldPath, newPath } = {}) => {
+    if (!oldPath || !newPath || oldPath === newPath) return;
+    if (manualCuesDB[oldPath]) {
+        manualCuesDB[newPath] = manualCuesDB[oldPath];
+        delete manualCuesDB[oldPath];
+    }
+    document.querySelectorAll('.playlist-table tr').forEach(row => {
+        if ((row.dataset.type || 'normal') === 'normal' && row.dataset.ruta === oldPath) row.dataset.ruta = newPath;
+        if (row.dataset.resolvedRandomPath === oldPath) row.dataset.resolvedRandomPath = newPath;
+    });
+    Object.keys(randomBagsCache).forEach(folder => {
+        randomBagsCache[folder] = (randomBagsCache[folder] || []).map(filePath => filePath === oldPath ? newPath : filePath);
+    });
+    randomFolderFileCache.forEach(entry => {
+        if (Array.isArray(entry?.files)) entry.files = entry.files.map(filePath => filePath === oldPath ? newPath : filePath);
+    });
+    if (currentPhysicalTrackPath === oldPath) currentPhysicalTrackPath = newPath;
+    saveSessionSnapshot();
+});
 
 document.getElementById('pm-transition-edit').addEventListener('click', () => {
     if (!rightClickedRow) return;

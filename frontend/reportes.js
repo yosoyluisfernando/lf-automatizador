@@ -58,7 +58,7 @@ function renderEntries() {
     }
 
     logBox.innerHTML = visibleEntries.map(entry => `
-        <div class="incident-entry" data-level="${escapeHtml(entry.level || 'info')}">
+        <div class="incident-entry" data-level="${escapeHtml(entry.level || 'info')}" data-file-path="${escapeHtml(entry.filePath || '')}">
             <div class="incident-entry-head">
                 <div class="incident-entry-meta">
                     <span class="incident-entry-time">${escapeHtml(entry.time || '--:--:--')}</span>
@@ -131,6 +131,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const btnRefresh = document.getElementById('btn-refresh-reports');
     if (btnRefresh) btnRefresh.addEventListener('click', () => { ipcRenderer.send('incident-request-sync'); });
+
+    const logBox = document.getElementById('sys-log');
+    if (logBox) logBox.addEventListener('contextmenu', async event => {
+        const entry = event.target.closest('.incident-entry');
+        const filePath = entry?.dataset?.filePath || '';
+        if (!filePath) return;
+        event.preventDefault();
+        const action = await ipcRenderer.invoke('show-context-menu', [{ id: 'show-folder', label: 'Mostrar en carpeta' }]);
+        if (action === 'show-folder') await ipcRenderer.invoke('file:show-in-folder', filePath);
+    });
 
     renderSnapshot();
     ipcRenderer.send('incident-request-sync');
