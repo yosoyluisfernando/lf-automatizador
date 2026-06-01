@@ -962,6 +962,8 @@ function sanitizeChangedTrackData(trackData) {
         p2_time: null,
         p3_active: false,
         p3_time: null,
+        p4_active: false,
+        p4_time: null,
         phora_active: false,
         phora_time: null,
         db: null,
@@ -1032,14 +1034,22 @@ function mapTrackRowToClient(row, artistCountryLookup = null, options = {}) {
         p1_mode: row.p1_mode,
         p1_time: row.p1_time,
         p1_file: row.p1_file,
+        p1_options: row.p1_options,
         p2_active: row.p2_active === 1,
         p2_mode: row.p2_mode,
         p2_time: row.p2_time,
         p2_file: row.p2_file,
+        p2_options: row.p2_options,
         p3_active: row.p3_active === 1,
         p3_mode: row.p3_mode,
         p3_time: row.p3_time,
         p3_file: row.p3_file,
+        p3_options: row.p3_options,
+        p4_active: row.p4_active === 1,
+        p4_mode: row.p4_mode,
+        p4_time: row.p4_time,
+        p4_file: row.p4_file,
+        p4_options: row.p4_options,
         phora_active: row.phora_active === 1,
         phora_mode: row.phora_mode,
         phora_time: row.phora_time,
@@ -1101,14 +1111,15 @@ const upsertLocalMetaForceStmt = db.prepare(`INSERT INTO tracks (file_path, cust
 const upsertLocalMetaFillStmt = db.prepare(`INSERT INTO tracks (file_path, custom_title, custom_artist, feat, is_remix, album, year, genre, file_size, file_mtime_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_path) DO UPDATE SET custom_title = COALESCE(NULLIF(tracks.custom_title, ''), excluded.custom_title), custom_artist = COALESCE(NULLIF(tracks.custom_artist, ''), excluded.custom_artist), feat = COALESCE(NULLIF(tracks.feat, ''), excluded.feat), is_remix = COALESCE(tracks.is_remix, excluded.is_remix), album = COALESCE(NULLIF(tracks.album, ''), excluded.album), year = COALESCE(NULLIF(tracks.year, ''), excluded.year), genre = COALESCE(NULLIF(tracks.genre, ''), excluded.genre), file_size = excluded.file_size, file_mtime_ms = excluded.file_mtime_ms`);
 const selectTrackMetaForWriteStmt = db.prepare("SELECT custom_title, custom_artist, feat, is_remix, album, year, genre FROM tracks WHERE file_path = ?");
 const saveDbTrackStmt = db.prepare(`
-    INSERT INTO tracks (file_path, custom_title, custom_artist, feat, is_remix, album, year, genre, inicio, intro, mix, outro, fin, p1_active, p1_mode, p1_time, p1_file, p2_active, p2_mode, p2_time, p2_file, p3_active, p3_mode, p3_time, p3_file, phora_active, phora_mode, phora_time, file_size, file_mtime_ms)
-    VALUES (@filePath, @customTitle, @customArtist, @feat, @is_remix, @album, @year, @genre, @inicio, @intro, @mix, @outro, @fin, @p1_active, @p1_mode, @p1_time, @p1_file, @p2_active, @p2_mode, @p2_time, @p2_file, @p3_active, @p3_mode, @p3_time, @p3_file, @phora_active, @phora_mode, @phora_time, @fileSize, @fileMtimeMs)
+    INSERT INTO tracks (file_path, custom_title, custom_artist, feat, is_remix, album, year, genre, inicio, intro, mix, outro, fin, p1_active, p1_mode, p1_time, p1_file, p1_options, p2_active, p2_mode, p2_time, p2_file, p2_options, p3_active, p3_mode, p3_time, p3_file, p3_options, p4_active, p4_mode, p4_time, p4_file, p4_options, phora_active, phora_mode, phora_time, file_size, file_mtime_ms)
+    VALUES (@filePath, @customTitle, @customArtist, @feat, @is_remix, @album, @year, @genre, @inicio, @intro, @mix, @outro, @fin, @p1_active, @p1_mode, @p1_time, @p1_file, @p1_options, @p2_active, @p2_mode, @p2_time, @p2_file, @p2_options, @p3_active, @p3_mode, @p3_time, @p3_file, @p3_options, @p4_active, @p4_mode, @p4_time, @p4_file, @p4_options, @phora_active, @phora_mode, @phora_time, @fileSize, @fileMtimeMs)
     ON CONFLICT(file_path) DO UPDATE SET
         custom_title = @customTitle, custom_artist = @customArtist, feat = @feat, is_remix = @is_remix, album = @album, year = @year, genre = @genre,
         inicio = @inicio, intro = @intro, mix = @mix, outro = @outro, fin = @fin,
-        p1_active = @p1_active, p1_mode = @p1_mode, p1_time = @p1_time, p1_file = @p1_file,
-        p2_active = @p2_active, p2_mode = @p2_mode, p2_time = @p2_time, p2_file = @p2_file,
-        p3_active = @p3_active, p3_mode = @p3_mode, p3_time = @p3_time, p3_file = @p3_file,
+        p1_active = @p1_active, p1_mode = @p1_mode, p1_time = @p1_time, p1_file = @p1_file, p1_options = @p1_options,
+        p2_active = @p2_active, p2_mode = @p2_mode, p2_time = @p2_time, p2_file = @p2_file, p2_options = @p2_options,
+        p3_active = @p3_active, p3_mode = @p3_mode, p3_time = @p3_time, p3_file = @p3_file, p3_options = @p3_options,
+        p4_active = @p4_active, p4_mode = @p4_mode, p4_time = @p4_time, p4_file = @p4_file, p4_options = @p4_options,
         phora_active = @phora_active, phora_mode = @phora_mode, phora_time = @phora_time,
         file_size = @fileSize, file_mtime_ms = @fileMtimeMs
 `);

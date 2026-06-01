@@ -79,9 +79,10 @@ function initDB() {
         CREATE TABLE IF NOT EXISTS tracks (
             file_path TEXT PRIMARY KEY, custom_title TEXT, custom_artist TEXT, album TEXT, year TEXT, genre TEXT,
             inicio REAL, intro REAL, mix REAL, outro REAL, fin REAL,
-            p1_active INTEGER, p1_mode TEXT, p1_time TEXT, p1_file TEXT,
-            p2_active INTEGER, p2_mode TEXT, p2_time TEXT, p2_file TEXT,
-            p3_active INTEGER, p3_mode TEXT, p3_time TEXT, p3_file TEXT,
+            p1_active INTEGER, p1_mode TEXT, p1_time TEXT, p1_file TEXT, p1_options TEXT,
+            p2_active INTEGER, p2_mode TEXT, p2_time TEXT, p2_file TEXT, p2_options TEXT,
+            p3_active INTEGER, p3_mode TEXT, p3_time TEXT, p3_file TEXT, p3_options TEXT,
+            p4_active INTEGER DEFAULT 0, p4_mode TEXT DEFAULT 'start', p4_time TEXT, p4_file TEXT, p4_options TEXT,
             phora_active INTEGER, phora_mode TEXT, phora_time TEXT,
             db REAL, bpm REAL, duration REAL, file_size INTEGER, file_mtime_ms INTEGER
         )
@@ -333,7 +334,15 @@ function ensureMetadataSchema() {
         'mood TEXT',
         'folder_genre_path TEXT',
         'metadata_locked INTEGER DEFAULT 0',
-        'metadata_updated_at TEXT'
+        'metadata_updated_at TEXT',
+        'p1_options TEXT',
+        'p2_options TEXT',
+        'p3_options TEXT',
+        'p4_active INTEGER DEFAULT 0',
+        "p4_mode TEXT DEFAULT 'start'",
+        'p4_time TEXT',
+        'p4_file TEXT',
+        'p4_options TEXT'
     ].forEach(columnDefinition => ensureColumn('tracks', columnDefinition));
 }
 
@@ -703,8 +712,9 @@ function migratePisadorUndefinedBugs() {
         const r1 = db.prepare("UPDATE tracks SET p1_file = NULL WHERE p1_file = 'undefined'").run();
         const r2 = db.prepare("UPDATE tracks SET p2_file = NULL WHERE p2_file = 'undefined'").run();
         const r3 = db.prepare("UPDATE tracks SET p3_file = NULL WHERE p3_file = 'undefined'").run();
+        const r4 = db.prepare("UPDATE tracks SET p4_file = NULL WHERE p4_file = 'undefined'").run();
         
-        const totalChanges = r1.changes + r2.changes + r3.changes;
+        const totalChanges = r1.changes + r2.changes + r3.changes + r4.changes;
         if (totalChanges > 0) {
             console.log(`[BD] Se limpiaron ${totalChanges} pisadores con valor 'undefined' corrupto.`);
         }
@@ -714,5 +724,28 @@ function migratePisadorUndefinedBugs() {
     db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('pisador_undefined_migrated', '1', ?)").run(now);
 }
 migratePisadorUndefinedBugs();
+
+function migrateLegacyTimePisadorToP4() {
+    const key = 'pisador_p4_time_migrated';
+    if (db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key)) return;
+    const builtinTime = JSON.stringify({ v: 1, kind: 'builtin', name: 'time' });
+    const defaultOptions = JSON.stringify({ v: 1, overflowPolicy: 'skip' });
+    db.transaction(() => {
+        db.prepare(`
+            UPDATE tracks
+            SET p4_active = 1,
+                p4_mode = COALESCE(NULLIF(phora_mode, ''), 'start'),
+                p4_time = phora_time,
+                p4_file = ?,
+                p4_options = ?
+            WHERE phora_active = 1
+              AND phora_time IS NOT NULL
+              AND COALESCE(p4_active, 0) = 0
+        `).run(builtinTime, defaultOptions);
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, '1', ?)")
+          .run(key, new Date().toISOString());
+    })();
+}
+migrateLegacyTimePisadorToP4();
 
 module.exports = db;
