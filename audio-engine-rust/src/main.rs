@@ -4922,6 +4922,9 @@ fn main() {
                     .unwrap_or_else(|| "default".to_string());
                 let channels_raw = json_get_u64(&line, "channels").unwrap_or(2) as u16;
                 let sample_rate_raw = json_get_u64(&line, "sampleRate").unwrap_or(44100) as u32;
+                let ring_buffer_seconds = json_get_u64(&line, "ringBufferSeconds")
+                    .unwrap_or(2)
+                    .clamp(2, 20) as u32;
 
                 // Garantizar program_mixer si el bus es de programa.
                 if is_program_bus(&bus_id) && state.program_mixer_input.is_none() {
@@ -4936,8 +4939,10 @@ fn main() {
                     }
                 }
 
-                // Buffer de ~2 s para absorber jitter del IPC.
-                let capacity = (sample_rate_raw as usize) * (channels_raw as usize) * 2;
+                // Node ajusta esta capacidad al prebuffer elegido para absorber jitter.
+                let capacity = (sample_rate_raw.max(1) as usize)
+                    * (channels_raw.max(1) as usize)
+                    * (ring_buffer_seconds as usize);
                 let (producer, consumer) = rtrb::RingBuffer::<f32>::new(capacity);
                 let finished = Arc::new(AtomicBool::new(false));
 

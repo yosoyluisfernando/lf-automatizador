@@ -874,7 +874,7 @@
             </div>
 
             <!-- Configuración avanzada -->
-            <div style="display:flex; gap:16px; align-items:center; background:#1a1a1c; border-radius:4px; padding:10px 12px;">
+            <div style="display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap; background:#1a1a1c; border-radius:4px; padding:10px 12px;">
                 <span style="font-size:11px; color:#888;">⚙ Avanzado:</span>
                 <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
                     Espera conexión
@@ -887,6 +887,13 @@
                     <input id="add-stream-retries" type="number" min="0" max="20" value="3"
                         style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
                 </label>
+                <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
+                    Prebuffer
+                    <input id="add-stream-prebuffer" type="number" min="1" max="15" value="5"
+                        style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#666; font-size:11px;">s</span>
+                </label>
+                <span style="width:100%; color:#888; font-size:11px;">Más estabilidad puede causar mayor demora al iniciar.</span>
             </div>
 
             <!-- Botones -->

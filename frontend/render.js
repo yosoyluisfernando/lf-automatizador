@@ -667,6 +667,7 @@ function serializePlaylistRow(row) {
         stopSeconds: row.dataset.stopSeconds ? parseInt(row.dataset.stopSeconds, 10) : null,
         connectTimeoutSec: row.dataset.connectTimeoutSec ? parseInt(row.dataset.connectTimeoutSec, 10) : null,
         maxRetries:        row.dataset.maxRetries ? parseInt(row.dataset.maxRetries, 10) : null,
+        prebufferSeconds:  row.dataset.prebufferSeconds ? parseInt(row.dataset.prebufferSeconds, 10) : null,
         metadataMode:      row.dataset.metadataMode || null,
         customMetadata:    row.dataset.customMetadata || null,
     };
@@ -3943,7 +3944,14 @@ async function handleSavePlaylist() {
             targetTab: Number.isInteger(parseInt(r.dataset.targetTab, 10)) ? parseInt(r.dataset.targetTab, 10) : null,
             eventId: r.dataset.eventId || null,
             eventName: r.dataset.eventName || null,
-            automaticPisadorRule: r.dataset.automaticPisadorRule || null
+            automaticPisadorRule: r.dataset.automaticPisadorRule || null,
+            stopPolicy: r.dataset.stopPolicy || null,
+            stopSeconds: r.dataset.stopSeconds ? parseInt(r.dataset.stopSeconds, 10) : null,
+            connectTimeoutSec: r.dataset.connectTimeoutSec ? parseInt(r.dataset.connectTimeoutSec, 10) : null,
+            maxRetries: r.dataset.maxRetries ? parseInt(r.dataset.maxRetries, 10) : null,
+            prebufferSeconds: r.dataset.prebufferSeconds ? parseInt(r.dataset.prebufferSeconds, 10) : null,
+            metadataMode: r.dataset.metadataMode || null,
+            customMetadata: r.dataset.customMetadata || null
         }));
         fs.writeFileSync(savePath, JSON.stringify(pData, null, 2));
         currentPlaylistPath = savePath; return true;
@@ -4005,7 +4013,8 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                         if (item.stopPolicy) lastInsertedRow.dataset.stopPolicy = item.stopPolicy;
                         if (item.stopSeconds != null) lastInsertedRow.dataset.stopSeconds = String(parseInt(item.stopSeconds, 10) || 0);
                         if (item.connectTimeoutSec != null) lastInsertedRow.dataset.connectTimeoutSec = String(parseInt(item.connectTimeoutSec, 10) || 5);
-                        if (item.maxRetries != null)        lastInsertedRow.dataset.maxRetries        = String(parseInt(item.maxRetries, 10) || 3);
+                        if (item.maxRetries != null)        lastInsertedRow.dataset.maxRetries        = String(normalizeStreamRetries(item.maxRetries));
+                        if (item.prebufferSeconds != null)  lastInsertedRow.dataset.prebufferSeconds  = String(Math.min(15, Math.max(1, parseInt(item.prebufferSeconds, 10) || 5)));
                         if (item.metadataMode)   lastInsertedRow.dataset.metadataMode   = item.metadataMode;
                         if (item.customMetadata) lastInsertedRow.dataset.customMetadata = item.customMetadata;
                         // Recalcular la celda de duración (se generó con el default '∞' antes de conocer stopPolicy).
@@ -4069,6 +4078,7 @@ function normalizePlaylistItem(item = {}) {
         stopSeconds: item.stopSeconds != null ? parseInt(item.stopSeconds, 10) : null,
         connectTimeoutSec: item.connectTimeoutSec != null ? parseInt(item.connectTimeoutSec, 10) : null,
         maxRetries:        item.maxRetries != null ? parseInt(item.maxRetries, 10) : null,
+        prebufferSeconds:  item.prebufferSeconds != null ? parseInt(item.prebufferSeconds, 10) : null,
         metadataMode:      item.metadataMode || null,
         customMetadata:    item.customMetadata || null,
     };
@@ -5844,7 +5854,14 @@ function serializePlaylistClipboardRow(tr, includeElement = false) {
         targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null,
         eventId: tr.dataset.eventId || null,
         eventName: tr.dataset.eventName || null,
-        automaticPisadorRule: tr.dataset.automaticPisadorRule || null
+        automaticPisadorRule: tr.dataset.automaticPisadorRule || null,
+        stopPolicy: tr.dataset.stopPolicy || null,
+        stopSeconds: tr.dataset.stopSeconds || null,
+        connectTimeoutSec: tr.dataset.connectTimeoutSec || null,
+        maxRetries: tr.dataset.maxRetries || null,
+        prebufferSeconds: tr.dataset.prebufferSeconds || null,
+        metadataMode: tr.dataset.metadataMode || null,
+        customMetadata: tr.dataset.customMetadata || null
     };
     if (includeElement) item.element = tr;
     return item;
@@ -5859,6 +5876,15 @@ function applyClipboardPlaylistMetadata(row, item, rowName) {
     if (item.type === 'execute_event') {
         row.dataset.eventId = item.eventId || item.ruta || '';
         row.dataset.eventName = item.eventName || rowName || '';
+    }
+    if (item.type === 'stream_url') {
+        if (item.stopPolicy) row.dataset.stopPolicy = item.stopPolicy;
+        if (item.stopSeconds != null) row.dataset.stopSeconds = String(item.stopSeconds);
+        if (item.connectTimeoutSec != null) row.dataset.connectTimeoutSec = String(item.connectTimeoutSec);
+        if (item.maxRetries != null) row.dataset.maxRetries = String(item.maxRetries);
+        if (item.prebufferSeconds != null) row.dataset.prebufferSeconds = String(item.prebufferSeconds);
+        if (item.metadataMode) row.dataset.metadataMode = item.metadataMode;
+        if (item.customMetadata) row.dataset.customMetadata = item.customMetadata;
     }
 }
 
@@ -5968,7 +5994,10 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
         stopPolicy:       tr.dataset.stopPolicy || 'manual',
         stopSeconds:      parseInt(tr.dataset.stopSeconds, 10) || 0,
         connectTimeoutSec: parseInt(tr.dataset.connectTimeoutSec, 10) || 5,
-        maxRetries:       parseInt(tr.dataset.maxRetries, 10) || 3,
+        maxRetries:       normalizeStreamRetries(tr.dataset.maxRetries),
+        prebufferSeconds: Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5)),
+        metadataMode:     tr.dataset.metadataMode || 'icy',
+        customMetadata:   tr.dataset.customMetadata || '',
     };
     hideAllMenus();
     // Abrimos el modal pre-llenado. Al confirmar, actualizamos la fila.
@@ -5982,6 +6011,7 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
             tr.dataset.stopSeconds      = String(updated.stopSeconds);
             tr.dataset.connectTimeoutSec = String(updated.connectTimeoutSec);
             tr.dataset.maxRetries       = String(updated.maxRetries);
+            tr.dataset.prebufferSeconds = String(updated.prebufferSeconds);
             tr.dataset.metadataMode     = updated.metadataMode || 'icy';
             tr.dataset.customMetadata   = updated.customMetadata || '';
             if (tr.children[1]) tr.children[1].innerText = newName;
@@ -9648,6 +9678,11 @@ function playTimeLocution() {
     ipcRenderer.send('update-metadata', ICON_CLOCK_LABEL);
 }
 
+function normalizeStreamRetries(value) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.min(20, Math.max(0, parsed)) : 3;
+}
+
 /**
  * Botonera de hora → motor Rust. Electron deja de saber la hora, los archivos
  * y la secuenciación. Solo envía el comando `timeLocution` con la carpeta y
@@ -11366,7 +11401,8 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
     const stopPolicy        = tr.dataset.stopPolicy || 'manual';
     const stopSeconds       = parseInt(tr.dataset.stopSeconds, 10) || 0;
     const connectTimeoutSec = Math.max(2, parseInt(tr.dataset.connectTimeoutSec, 10) || 10);
-    const maxRetries        = Math.max(0, parseInt(tr.dataset.maxRetries, 10) || 3);
+    const maxRetries        = normalizeStreamRetries(tr.dataset.maxRetries);
+    const prebufferSeconds  = Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5));
     const metaMode          = tr.dataset.metadataMode || 'icy';
     const customMeta        = tr.dataset.customMetadata || displayName;
 
@@ -11404,7 +11440,7 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
         if (txtT) { txtT.innerText = '00:00.0'; txtT.classList.remove('time-warning-blue','time-warning-red','time-flash'); }
     } catch (_) {}
 
-    logSystem(`[AIRE] Iniciando retransmisión: ${displayName} — timeout ${connectTimeoutSec}s, reintentos ${maxRetries}`);
+    logSystem(`[AIRE] Iniciando retransmisión: ${displayName} — timeout ${connectTimeoutSec}s, reintentos ${maxRetries}, prebuffer ${prebufferSeconds}s`);
 
     let result;
     try {
@@ -11412,7 +11448,8 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
             url,
             playerId: STREAM_LIVE_PLAYER_ID,
             displayName,
-            maxRetries
+            maxRetries,
+            prebufferSeconds
         });
     } catch (err) {
         recordIncident(`[STREAM] Error IPC: ${err.message || err}`, { category: 'air', level: 'error', autoAction: false });
@@ -13359,6 +13396,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
     const secsField    = document.getElementById('add-stream-seconds-field');
     const timeoutField   = document.getElementById('add-stream-timeout');
     const retriesField   = document.getElementById('add-stream-retries');
+    const prebufferField = document.getElementById('add-stream-prebuffer');
     const metaModeSelect = document.getElementById('add-stream-meta-mode');
     const metaCustomInput = document.getElementById('add-stream-meta-custom');
     // Mostrar/ocultar campo personalizado según selección del dropdown
@@ -13388,6 +13426,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
         secsField.value    = secs % 60;
         if (timeoutField)   timeoutField.value   = prefill.connectTimeoutSec != null ? prefill.connectTimeoutSec : 5;
         if (retriesField)   retriesField.value   = prefill.maxRetries != null ? prefill.maxRetries : 3;
+        if (prebufferField) prebufferField.value = prefill.prebufferSeconds != null ? prefill.prebufferSeconds : 5;
         if (metaModeSelect) { metaModeSelect.value = prefill.metadataMode || 'icy'; }
         if (metaCustomInput) {
             metaCustomInput.value   = prefill.customMetadata || '';
@@ -13450,13 +13489,14 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
               + (parseInt(secsField.value, 10) || 0)
             : 0;
         const connectTimeoutSec = Math.max(2, parseInt(timeoutField?.value, 10) || 5);
-        const maxRetries = Math.max(0, parseInt(retriesField?.value, 10) || 3);
+        const maxRetries = normalizeStreamRetries(retriesField?.value);
+        const prebufferSeconds = Math.min(15, Math.max(1, parseInt(prebufferField?.value, 10) || 5));
         const metadataMode   = metaModeSelect?.value || 'icy';
         const customMetadata = (metadataMode === 'custom') ? (metaCustomInput?.value.trim() || displayName) : '';
 
         if (_editCallback) {
             // Modo edición: devolver valores al caller
-            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, metadataMode, customMetadata });
+            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, prebufferSeconds, metadataMode, customMetadata });
             closeModal();
             return;
         }
@@ -13469,6 +13509,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
             newRow.dataset.stopSeconds      = String(stopSeconds);
             newRow.dataset.connectTimeoutSec = String(connectTimeoutSec);
             newRow.dataset.maxRetries       = String(maxRetries);
+            newRow.dataset.prebufferSeconds = String(prebufferSeconds);
             newRow.dataset.metadataMode     = metadataMode;
             newRow.dataset.customMetadata   = customMetadata;
             if (stopPolicy === 'timer' && stopSeconds > 0) {
