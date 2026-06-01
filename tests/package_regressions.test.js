@@ -67,6 +67,11 @@ test('packaging verifies ffmpeg-static hashes and publishes installer checksums'
     assert.match(verifySource, /linux-x64/);
 });
 
+test('beta releases publish as prereleases without requiring an Authenticode certificate', () => {
+    assert.match(workflowSource, /matrix\.platform == 'win' && startsWith\(github\.ref, 'refs\/tags\/'\) && !contains\(github\.ref_name, '-beta\.'\)/);
+    assert.match(workflowSource, /prerelease:\s+\$\{\{\s*contains\(github\.ref_name, '-'\)\s*\}\}/);
+});
+
 test('release tag validation runs through a portable Node script', () => {
     assert.match(workflowSource, /node build\/verify-release-tag\.js/);
     const { verifyReleaseTag } = require('../build/verify-release-tag');

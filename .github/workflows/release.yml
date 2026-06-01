@@ -126,7 +126,7 @@ jobs:
           subject-path: dist/SHA256SUMS-${{ matrix.platform }}.txt
 
       - name: Require Signed Windows Installer For Tags
-        if: matrix.platform == 'win' && startsWith(github.ref, 'refs/tags/')
+        if: matrix.platform == 'win' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-beta.')
         shell: pwsh
         run: |
           $installers = Get-ChildItem dist -Filter *.exe -File
@@ -228,6 +228,7 @@ jobs:
           name: LF Automatizador ${{ github.ref_name }}
           body: Instaladores generados automáticamente por GitHub Actions.
           make_latest: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
           files: |
             release-assets/*.exe
