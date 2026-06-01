@@ -72,6 +72,12 @@ test('beta releases publish as prereleases without requiring an Authenticode cer
     assert.match(workflowSource, /prerelease:\s+\$\{\{\s*contains\(github\.ref_name, '-'\)\s*\}\}/);
 });
 
+test('beta releases may omit the FFmpeg source bundle while stable releases remain fail-closed', () => {
+    assert.match(workflowSource, /Require Corresponding FFmpeg Source Bundle[\s\S]*if:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+    assert.match(workflowSource, /Attest FFmpeg Source Bundle Checksum[\s\S]*if:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+    assert.match(workflowSource, /fail_on_unmatched_files:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+});
+
 test('release tag validation runs through a portable Node script', () => {
     assert.match(workflowSource, /node build\/verify-release-tag\.js/);
     const { verifyReleaseTag } = require('../build/verify-release-tag');
