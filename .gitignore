@@ -61,3 +61,6 @@ explicit_types.json
 manual_cues.json
 Time/
 config/artists/img/
+
+# Wireframes temporales del companion de diseno
+.superpowers/
