@@ -2,6 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url'); 
 const { ipcRenderer } = require('electron');
+const {
+    PISADOR_IDS,
+    parsePisadorSource,
+    serializePisadorSource,
+    normalizePisadorOptions,
+    serializePisadorOptions,
+    conditionToStorage,
+    storageToCondition,
+    validateDynamicAnchor
+} = require('./pisador_rules');
 // WEBAUDIO_DISABLED_BEGIN — VU meter y enrutamiento Web Audio del editor de audio
 // El audio ya sale por el motor Rust al bus cue. Este bloque puede borrarse tras pruebas.
 // const { createEditorOutputRouter } = require('./editor_audio_output');
@@ -45,6 +55,78 @@ const aeCursorElement = document.getElementById('ae-cursor');
 const timeText = document.getElementById('ae-time-text');
 const zoomSlider = document.getElementById('zoom-slider');
 const scrollGuideElement = document.getElementById('ae-scroll-guide');
+const pisadorOptionsById = new Map();
+let editingOverflowPisadorId = '';
+
+function renderPisadorRows() {
+    const list = document.getElementById('pisadores-list');
+    if (!list) return;
+    list.innerHTML = PISADOR_IDS.map(id => `
+        <div class="pisador-row" data-pisador="${id}">
+            <div class="pisador-controls">
+                <strong>${id.toUpperCase()}:</strong>
+                <select id="condition-${id}" class="ae-input pisador-condition">
+                    <option value="start">Inicia en</option>
+                    <option value="end">Termina en</option>
+                    <option value="intro">Termina en Intro</option>
+                    <option value="outro">Inicia en Outro</option>
+                </select>
+                <input type="text" id="cue-${id}" class="cue-time" value="0.00" readonly>
+                <button class="cue-btn" id="fix-${id}" onclick="setCue('${id}')">Fijar</button>
+                <button class="cue-btn" onclick="openPisadorOverflowModal('${id}')" title="Seguridad">&#9881;</button>
+                <button class="cue-btn" style="color:#e74c3c;" onclick="clearCue('${id}')">X</button>
+            </div>
+            <div class="pisador-source-controls">
+                <select id="source-kind-${id}" class="ae-input pisador-source-kind">
+                    <option value="file">Archivo especifico</option>
+                    <option value="folder">Carpeta aleatoria</option>
+                    <option value="time">Locucion de hora</option>
+                    <option value="temperature">Temperatura</option>
+                    <option value="humidity">Humedad</option>
+                </select>
+                <input type="text" id="file-${id}" class="ae-input" placeholder="Archivo o carpeta..." readonly>
+                <button class="cue-btn" id="browse-${id}" onclick="browsePisador('${id}')">...</button>
+            </div>
+            <div id="warning-${id}" class="pisador-warning" style="display:none;"></div>
+        </div>
+    `).join('');
+    PISADOR_IDS.forEach(id => {
+        document.getElementById(`condition-${id}`).addEventListener('change', () => syncPisadorUiState(id));
+        document.getElementById(`source-kind-${id}`).addEventListener('change', () => syncPisadorUiState(id));
+        pisadorOptionsById.set(id, normalizePisadorOptions(null));
+        syncPisadorUiState(id);
+    });
+}
+
+function syncPisadorUiState(id) {
+    const condition = document.getElementById(`condition-${id}`).value;
+    const kind = document.getElementById(`source-kind-${id}`).value;
+    const dynamic = condition === 'intro' || condition === 'outro';
+    const needsPath = kind === 'file' || kind === 'folder';
+    document.getElementById(`cue-${id}`).style.display = dynamic ? 'none' : '';
+    document.getElementById(`fix-${id}`).disabled = dynamic;
+    document.getElementById(`file-${id}`).style.display = needsPath ? '' : 'none';
+    document.getElementById(`browse-${id}`).style.display = needsPath ? '' : 'none';
+    validatePisadorAnchor(id);
+}
+
+function validatePisadorAnchor(id) {
+    const condition = document.getElementById(`condition-${id}`).value;
+    const result = validateDynamicAnchor(condition, {
+        intro: document.getElementById('cue-intro').value,
+        outro: document.getElementById('cue-outro').value
+    });
+    const warning = document.getElementById(`warning-${id}`);
+    warning.style.display = result.ok ? 'none' : '';
+    warning.textContent = result.ok ? '' : `Debes fijar el marcador ${result.marker.toUpperCase()} antes de guardar.`;
+    return result.ok;
+}
+
+function validateAllPisadorAnchors() {
+    return PISADOR_IDS.map(id => validatePisadorAnchor(id)).every(Boolean);
+}
+
+renderPisadorRows();
 
 let isDraggingWave = false;
 let isDraggingMarker = false;
@@ -494,8 +576,14 @@ ipcRenderer.on('load-audio-file', async (e, filePath) => {
         if (countryInput) countryInput.value = '';
         document.getElementById('feat-list').innerHTML = '';
         
-        ['inicio', 'intro', 'mix', 'outro', 'fin', 'p1', 'p2', 'p3', 'phora'].forEach(k => { const el = document.getElementById(`cue-${k}`); if (el) el.value = '0.00'; });
-        ['p1', 'p2', 'p3'].forEach(k => { const el = document.getElementById(`file-${k}`); if (el) el.value = ''; });
+        ['inicio', 'intro', 'mix', 'outro', 'fin', ...PISADOR_IDS].forEach(k => { const el = document.getElementById(`cue-${k}`); if (el) el.value = '0.00'; });
+        PISADOR_IDS.forEach(k => {
+            document.getElementById(`condition-${k}`).value = 'start';
+            document.getElementById(`source-kind-${k}`).value = 'file';
+            document.getElementById(`file-${k}`).value = '';
+            pisadorOptionsById.set(k, normalizePisadorOptions(null));
+            syncPisadorUiState(k);
+        });
     } catch (cleanErr) {}
     
     pauseTime = 0; startTime = 0; isPlaying = false;
@@ -628,14 +716,19 @@ async function loadExistingCues(autoCues = null) {
             pendingAutoAnalysis = null;
         }
 
-        ['p1', 'p2', 'p3', 'phora'].forEach(k => {
-            if(row[`${k}_mode`]) document.getElementById(`mode-${k}`).value = row[`${k}_mode`];
+        PISADOR_IDS.forEach(k => {
+            document.getElementById(`condition-${k}`).value = storageToCondition(row[`${k}_mode`], row[`${k}_time`]);
             const elTime = document.getElementById(`cue-${k}`);
             if (elTime) {
-                if (row[`${k}_time`] !== null && row[`${k}_time`] !== undefined) elTime.value = parseFloat(row[`${k}_time`]).toFixed(2);
+                if (Number.isFinite(parseFloat(row[`${k}_time`]))) elTime.value = parseFloat(row[`${k}_time`]).toFixed(2);
                 else elTime.value = '0.00';
             }
-            if(k !== 'phora' && row[`${k}_file`]) document.getElementById(`file-${k}`).value = row[`${k}_file`];
+            const source = parsePisadorSource(row[`${k}_file`]);
+            document.getElementById(`source-kind-${k}`).value =
+                source?.kind === 'builtin' ? source.name : (source?.kind || 'file');
+            document.getElementById(`file-${k}`).value = source?.path || '';
+            pisadorOptionsById.set(k, normalizePisadorOptions(row[`${k}_options`]) || normalizePisadorOptions(null));
+            syncPisadorUiState(k);
         });
     } else {
         ['inicio', 'intro', 'mix', 'outro', 'fin'].forEach(k => {
@@ -704,14 +797,29 @@ async function saveCuesSilently() {
         }
     });
 
-    ['p1', 'p2', 'p3', 'phora'].forEach(k => {
-        const timeVal = document.getElementById(`cue-${k}`).value;
-        const numVal = parseFloat(timeVal);
-        mc[`${k}_active`] = (!isNaN(numVal) && numVal > 0);
-        mc[`${k}_mode`] = document.getElementById(`mode-${k}`).value;
-        mc[`${k}_time`] = (!isNaN(numVal) && numVal > 0) ? timeVal : null;
-        if(k !== 'phora') mc[`${k}_file`] = document.getElementById(`file-${k}`).value || null;
-    });
+    for (const k of PISADOR_IDS) {
+        const condition = document.getElementById(`condition-${k}`).value;
+        const manualTime = document.getElementById(`cue-${k}`).value;
+        const stored = conditionToStorage(condition, manualTime);
+        const sourceKind = document.getElementById(`source-kind-${k}`).value;
+        const source = ['time', 'temperature', 'humidity'].includes(sourceKind)
+            ? { v: 1, kind: 'builtin', name: sourceKind }
+            : { v: 1, kind: sourceKind, path: document.getElementById(`file-${k}`).value };
+        const validSource = serializePisadorSource(source);
+        const active = Boolean(validSource) && (
+            stored.time === 'intro' || stored.time === 'outro' || Number(stored.time) > 0
+        );
+        if (active && !validatePisadorAnchor(k)) throw new Error(`Pisador ${k.toUpperCase()} sin marcador dinamico.`);
+        mc[`${k}_active`] = active;
+        mc[`${k}_mode`] = stored.mode;
+        mc[`${k}_time`] = active ? stored.time : null;
+        mc[`${k}_file`] = validSource;
+        mc[`${k}_options`] = serializePisadorOptions(pisadorOptionsById.get(k));
+    }
+    const p4Source = parsePisadorSource(mc.p4_file);
+    mc.phora_active = mc.p4_active && p4Source?.kind === 'builtin' && p4Source.name === 'time';
+    mc.phora_mode = mc.phora_active ? mc.p4_mode : 'start';
+    mc.phora_time = mc.phora_active ? mc.p4_time : null;
 
     await ipcRenderer.invoke('lib-save-db-track', mc);
     ipcRenderer.send('refresh-manual-cues');
@@ -726,9 +834,13 @@ function stopAudioEditorRustOnExit() {
 window.addEventListener('beforeunload', stopAudioEditorRustOnExit);
 
 window.saveAndClose = async function() {
-    stopAudioEditorRustOnExit();
-    await saveCuesSilently();
-    window.close();
+    try {
+        await saveCuesSilently();
+        stopAudioEditorRustOnExit();
+        window.close();
+    } catch (err) {
+        alert(err.message || String(err));
+    }
 }
 // FASE 2A — el HTML pone onclick="window.close()" directo en el botón Cancelar.
 // Lo interceptamos sobreescribiendo window.close para que pare el player primero.
@@ -739,13 +851,13 @@ window.close = function() {
 };
 
 const btnPrev = document.getElementById('btn-prev-track');
-if(btnPrev) { btnPrev.addEventListener('click', async () => { await saveCuesSilently(); ipcRenderer.send('editor-request-track', { current: currentFilePath, dir: 'prev' }); }); }
+if(btnPrev) { btnPrev.addEventListener('click', async () => { try { await saveCuesSilently(); ipcRenderer.send('editor-request-track', { current: currentFilePath, dir: 'prev' }); } catch (err) { alert(err.message || String(err)); } }); }
 
 const btnNext = document.getElementById('btn-next-track');
-if(btnNext) { btnNext.addEventListener('click', async () => { await saveCuesSilently(); ipcRenderer.send('editor-request-track', { current: currentFilePath, dir: 'next' }); }); }
+if(btnNext) { btnNext.addEventListener('click', async () => { try { await saveCuesSilently(); ipcRenderer.send('editor-request-track', { current: currentFilePath, dir: 'next' }); } catch (err) { alert(err.message || String(err)); } }); }
 
-window.setCue = function(type) { let t = getEditorCurrentTime(); const el = document.getElementById(`cue-${type}`); if(el) el.value = t.toFixed(2); refreshOverlay(); };
-window.clearCue = function(type) { const el = document.getElementById(`cue-${type}`); if(el) el.value = '0.00'; refreshOverlay(); };
+window.setCue = function(type) { let t = getEditorCurrentTime(); const el = document.getElementById(`cue-${type}`); if(el) el.value = t.toFixed(2); validateAllPisadorAnchors(); refreshOverlay(); };
+window.clearCue = function(type) { const el = document.getElementById(`cue-${type}`); if(el) el.value = '0.00'; validateAllPisadorAnchors(); refreshOverlay(); };
 window.playFrom = function(type) { const cueInput = document.getElementById(`cue-${type}`); if (cueInput) { const timeVal = parseFloat(cueInput.value); if (!isNaN(timeVal)) playAudio(timeVal, true); } };
 window.togglePlay = async function() {
     try {
@@ -933,8 +1045,8 @@ function drawMarkers() {
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
     const markers = [
         { id: 'inicio', color: '#2ecc71', lbl: 'INICIO' }, { id: 'intro', color: '#f1c40f', lbl: 'INTRO' }, { id: 'mix', color: '#00a8ff', lbl: 'MIX' },
-        { id: 'outro', color: '#e74c3c', lbl: 'OUTRO' }, { id: 'fin', color: '#c0392b', lbl: 'FIN' }, { id: 'p1', color: '#9b59b6', lbl: 'P1' },
-        { id: 'p2', color: '#9b59b6', lbl: 'P2' }, { id: 'p3', color: '#9b59b6', lbl: 'P3' }, { id: 'phora', color: '#2ecc71', lbl: 'HORA' }
+        { id: 'outro', color: '#e74c3c', lbl: 'OUTRO' }, { id: 'fin', color: '#c0392b', lbl: 'FIN' },
+        ...PISADOR_IDS.map(id => ({ id, color: '#9b59b6', lbl: id.toUpperCase() }))
     ];
     overlayCtx.font = '10px Consolas';
     markers.forEach(m => {
@@ -951,7 +1063,7 @@ function drawMarkers() {
 }
 
 function getMarkerAtX(x) {
-    const tolerance = 10; const markers = ['inicio', 'intro', 'mix', 'outro', 'fin', 'p1', 'p2', 'p3', 'phora'];
+    const tolerance = 10; const markers = ['inicio', 'intro', 'mix', 'outro', 'fin', ...PISADOR_IDS];
     for (let id of markers) {
         const inputEl = document.getElementById(`cue-${id}`);
         if (inputEl && inputEl.value && !isNaN(parseFloat(inputEl.value))) {
@@ -1063,10 +1175,28 @@ window.addEventListener('blur', () => {
 // guarda `if (audioBuffer)` era false porque el motor Rust hace el decode.
 window.addEventListener('resize', () => { if(waveformPeaks) drawWaveform(); });
 window.browsePisador = async function(id) {
-    const filePath = await ipcRenderer.invoke('dialog:openFile');
-    if (filePath) {
-        document.getElementById(`file-${id}`).value = filePath;
-    }
+    const kind = document.getElementById(`source-kind-${id}`).value;
+    const channel = kind === 'folder' ? 'dialog:selectFolder' : 'dialog:openFile';
+    const selectedPath = await ipcRenderer.invoke(channel);
+    if (selectedPath) document.getElementById(`file-${id}`).value = selectedPath;
+};
+window.openPisadorOverflowModal = function(id) {
+    editingOverflowPisadorId = id;
+    document.getElementById('pisador-overflow-label').textContent = id.toUpperCase();
+    document.getElementById('pisador-overflow-policy').value =
+        (normalizePisadorOptions(pisadorOptionsById.get(id)) || normalizePisadorOptions(null)).overflowPolicy;
+    document.getElementById('pisador-overflow-modal').style.display = 'flex';
+};
+window.closePisadorOverflowModal = function() {
+    editingOverflowPisadorId = '';
+    document.getElementById('pisador-overflow-modal').style.display = 'none';
+};
+window.savePisadorOverflowModal = function() {
+    if (!editingOverflowPisadorId) return;
+    pisadorOptionsById.set(editingOverflowPisadorId, normalizePisadorOptions({
+        overflowPolicy: document.getElementById('pisador-overflow-policy').value
+    }));
+    window.closePisadorOverflowModal();
 };
 window.addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return; if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); togglePlay(); } });
 
