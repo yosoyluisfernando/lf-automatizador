@@ -38,3 +38,12 @@ test('playlist exposes quick automatic pisador modal and serializes row metadata
     assert.match(renderJs, /automaticPisadorRule/);
     assert.match(renderJs, /automatic_sweeper_rules\.json/);
 });
+
+test('renderer prepares, plays and clears overlay sessions instead of rerolling folders at trigger time', () => {
+    assert.match(renderJs, /prepareOverlaySession/);
+    assert.match(renderJs, /clearPreparedOverlaySession/);
+    assert.match(renderJs, /registerRustOverlayRuntime/);
+    assert.match(renderJs, /finishRustOverlayRuntime/);
+    assert.match(renderJs, /commandRustControlPlane\('play'/);
+    assert.doesNotMatch(renderJs, /playOverlayDrop\(mc\[`p\$\{i\}_file`\]\)/);
+});
