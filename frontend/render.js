@@ -13,6 +13,12 @@ const url = require('url');
 const { ipcRenderer, webUtils } = require('electron');
 const { normalizeAudioPrefs } = require('./audio_prefs');
 const { AudioEngineClient, RustAudioEngineAdapter } = require('./audio_engine_client');
+const {
+    parseQuickRule,
+    serializeQuickRule,
+    normalizeQuickRule,
+    normalizeRulePathKey
+} = require('./pisador_rules');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
 const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manager');
@@ -66,6 +72,7 @@ const encoderPrefsPath = path.join(configDir, 'encoder_prefs.json');
 const fileTypesPath = path.join(configDir, 'file_types.json');
 const clockwheelPrefsPath = path.join(configDir, 'clockwheel_prefs.json');
 const sessionStatePath = path.join(configDir, 'session_state.json');
+const automaticPisadorRulesPath = path.join(configDir, 'automatic_sweeper_rules.json');
 const SESSION_AUTOSAVE_MS = 3000;
 const PLAYBACK_GUARD_INTERVAL_MS = 1000;
 const PLAYBACK_GUARD_STALL_MS = 9000;
@@ -109,6 +116,28 @@ function loadConfig(filePath, defaultData) {
 
 function saveConfig(filePath, data) {
     try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2)); } catch (e) { }
+}
+
+let automaticPisadorRulesByPath = loadConfig(automaticPisadorRulesPath, {});
+
+function getPersistentAutomaticPisadorRule(route) {
+    if (!route) return null;
+    return parseQuickRule(automaticPisadorRulesByPath[normalizeRulePathKey(route)]);
+}
+
+function setPersistentAutomaticPisadorRule(route, rule) {
+    if (!route) return;
+    const key = normalizeRulePathKey(route);
+    if (rule) automaticPisadorRulesByPath[key] = normalizeQuickRule(rule);
+    else delete automaticPisadorRulesByPath[key];
+    saveConfig(automaticPisadorRulesPath, automaticPisadorRulesByPath);
+}
+
+function applyDefaultAutomaticPisadorRule(row) {
+    if (!row?.dataset?.ruta || row.dataset.automaticPisadorRule) return;
+    if (!['normal', 'random'].includes(row.dataset.type || 'normal')) return;
+    const rule = getPersistentAutomaticPisadorRule(row.dataset.ruta);
+    if (rule) row.dataset.automaticPisadorRule = serializeQuickRule(rule);
 }
 
 let waveformRenderToken = 0;
@@ -625,6 +654,7 @@ function serializePlaylistRow(row) {
         targetTab: Number.isInteger(parseInt(row.dataset.targetTab, 10)) ? parseInt(row.dataset.targetTab, 10) : null,
         eventId: row.dataset.eventId || null,
         eventName: row.dataset.eventName || null,
+        automaticPisadorRule: row.dataset.automaticPisadorRule || null,
         // stream_url specific fields
         stopPolicy: row.dataset.stopPolicy || null,
         stopSeconds: row.dataset.stopSeconds ? parseInt(row.dataset.stopSeconds, 10) : null,
@@ -2980,6 +3010,7 @@ async function restoreSessionState() {
                     if (!lastInsertedRow) return;
                     if (item.rowId) lastInsertedRow.dataset.rowId = item.rowId;
                     if (item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
+                    if (item.automaticPisadorRule) lastInsertedRow.dataset.automaticPisadorRule = item.automaticPisadorRule;
                     if (item.temp || /^[\u23f3\u231b]/.test(item.titulo || '')) lastInsertedRow.dataset.temp = 'true';
                 });
             });
@@ -3851,6 +3882,13 @@ function setPlaylistContextMenuMode(mode) {
     });
 }
 
+function syncAutomaticPisadorMenuAvailability() {
+    const item = document.getElementById('pm-auto-pisador');
+    if (!item) return;
+    const allowed = rightClickedRow && ['normal', 'random'].includes(rightClickedRow.dataset.type || 'normal');
+    item.classList.toggle('context-disabled', !allowed);
+}
+
 document.addEventListener('click', (e) => {
     try {
         if (!e.target.closest('.context-menu') && !e.target.closest('.modal-content')) hideAllMenus();
@@ -3896,7 +3934,8 @@ async function handleSavePlaylist() {
             noteText: r.dataset.noteText || null,
             targetTab: Number.isInteger(parseInt(r.dataset.targetTab, 10)) ? parseInt(r.dataset.targetTab, 10) : null,
             eventId: r.dataset.eventId || null,
-            eventName: r.dataset.eventName || null
+            eventName: r.dataset.eventName || null,
+            automaticPisadorRule: r.dataset.automaticPisadorRule || null
         }));
         fs.writeFileSync(savePath, JSON.stringify(pData, null, 2));
         currentPlaylistPath = savePath; return true;
@@ -3972,6 +4011,7 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                     }
                 }
                 if (lastInsertedRow && item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
+                if (lastInsertedRow && item.automaticPisadorRule) lastInsertedRow.dataset.automaticPisadorRule = item.automaticPisadorRule;
                 if (lastInsertedRow && (item.temp || /^[\u23f3\u231b]/.test(item.titulo || ''))) lastInsertedRow.dataset.temp = 'true';
                 if (lastInsertedRow) insertedCount++;
             }
@@ -4016,6 +4056,7 @@ function normalizePlaylistItem(item = {}) {
         targetTab: Number.isInteger(parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10)) ? parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10) : null,
         eventId: item.eventId || item.EventId || item.eventID || item.idEvento || item.IdEvento || null,
         eventName: item.eventName || item.EventName || item.nombreEvento || item.NombreEvento || null,
+        automaticPisadorRule: item.automaticPisadorRule || item.AutomaticPisadorRule || null,
         stopPolicy: item.stopPolicy || item.StopPolicy || null,
         stopSeconds: item.stopSeconds != null ? parseInt(item.stopSeconds, 10) : null,
         connectTimeoutSec: item.connectTimeoutSec != null ? parseInt(item.connectTimeoutSec, 10) : null,
@@ -5731,6 +5772,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             ensurePreanalysisForTrack(ruta, { dbMix: targetDb });
         }
     }
+    applyDefaultAutomaticPisadorRule(tr);
     return tr;
 }
 
@@ -5750,6 +5792,7 @@ if (playlistSection) {
             rightClickedRow = null;
             if (typeMenu) typeMenu.innerHTML = '';
             setPlaylistContextMenuMode('empty');
+            syncAutomaticPisadorMenuAvailability();
             showContextMenu(playlistContextMenu, e.pageX, e.pageY);
             applyMenuLogic();
             return;
@@ -5768,6 +5811,7 @@ if (playlistSection) {
 
 
         setPlaylistContextMenuMode(tr.dataset.type === 'note' ? 'note' : tr.dataset.type === 'stream_url' ? 'stream' : 'row');
+        syncAutomaticPisadorMenuAvailability();
 
         showContextMenu(playlistContextMenu, e.pageX, e.pageY);
         applyMenuLogic();
@@ -5781,9 +5825,108 @@ window.setExplicitType = function (typeId) {
     }); saveExplicitTypes(); hideAllMenus();
 }
 
-document.getElementById('pm-copy').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => ({ ruta: tr.dataset.ruta, nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''), duracion: tr.dataset.duracion, type: tr.dataset.type, temp: tr.dataset.temp === 'true', noteText: tr.dataset.noteText || null, targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null, eventId: tr.dataset.eventId || null, eventName: tr.dataset.eventName || null })); clipboardAction = 'copy'; hideAllMenus(); });
-document.getElementById('pm-cut').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => ({ ruta: tr.dataset.ruta, nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''), duracion: tr.dataset.duracion, type: tr.dataset.type, temp: tr.dataset.temp === 'true', noteText: tr.dataset.noteText || null, targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null, eventId: tr.dataset.eventId || null, eventName: tr.dataset.eventName || null, element: tr })); clipboardData.forEach(item => { if (item.element === queuedNextRow) queuedNextRow = null; item.element.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); clipboardAction = 'cut'; hideAllMenus(); });
-document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre)); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); if (newTr && item.temp) newTr.dataset.temp = 'true'; if (newTr && item.type === 'note' && item.noteText) newTr.dataset.noteText = item.noteText; if (newTr && item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) newTr.dataset.targetTab = parseInt(item.targetTab, 10); if (newTr && item.type === 'execute_event') { newTr.dataset.eventId = item.eventId || item.ruta || ''; newTr.dataset.eventName = item.eventName || rowName || ''; } targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
+function serializePlaylistClipboardRow(tr, includeElement = false) {
+    const item = {
+        ruta: tr.dataset.ruta,
+        nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''),
+        duracion: tr.dataset.duracion,
+        type: tr.dataset.type,
+        temp: tr.dataset.temp === 'true',
+        noteText: tr.dataset.noteText || null,
+        targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null,
+        eventId: tr.dataset.eventId || null,
+        eventName: tr.dataset.eventName || null,
+        automaticPisadorRule: tr.dataset.automaticPisadorRule || null
+    };
+    if (includeElement) item.element = tr;
+    return item;
+}
+
+function applyClipboardPlaylistMetadata(row, item, rowName) {
+    if (!row) return;
+    if (item.temp) row.dataset.temp = 'true';
+    if (item.automaticPisadorRule) row.dataset.automaticPisadorRule = item.automaticPisadorRule;
+    if (item.type === 'note' && item.noteText) row.dataset.noteText = item.noteText;
+    if (item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) row.dataset.targetTab = parseInt(item.targetTab, 10);
+    if (item.type === 'execute_event') {
+        row.dataset.eventId = item.eventId || item.ruta || '';
+        row.dataset.eventName = item.eventName || rowName || '';
+    }
+}
+
+function syncAutomaticPisadorModalSource() {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    document.getElementById('auto-pisador-path-row').style.display = ['file', 'folder'].includes(kind) ? 'flex' : 'none';
+}
+
+function openAutomaticPisadorModal(row) {
+    if (!row || !['normal', 'random'].includes(row.dataset.type || 'normal')) return;
+    const rule = parseQuickRule(row.dataset.automaticPisadorRule);
+    const source = rule?.source || { kind: 'file', path: '' };
+    document.getElementById('auto-pisador-source-kind').value = source.kind === 'builtin' ? source.name : source.kind;
+    document.getElementById('auto-pisador-source-path').value = source.path || '';
+    document.getElementById('auto-pisador-start').value = rule?.startSeconds ?? 0;
+    document.getElementById('auto-pisador-advanced-policy').value = rule?.advancedPolicy || 'respect';
+    document.getElementById('auto-pisador-scope').value = rule?.scope || 'row';
+    syncAutomaticPisadorModalSource();
+    document.getElementById('auto-pisador-modal').style.display = 'flex';
+}
+
+function closeAutomaticPisadorModal() {
+    document.getElementById('auto-pisador-modal').style.display = 'none';
+}
+
+function getAutomaticPisadorModalRule() {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    const source = ['file', 'folder'].includes(kind)
+        ? { kind, path: document.getElementById('auto-pisador-source-path').value }
+        : { kind: 'builtin', name: kind };
+    return normalizeQuickRule({
+        source,
+        startSeconds: document.getElementById('auto-pisador-start').value,
+        advancedPolicy: document.getElementById('auto-pisador-advanced-policy').value,
+        scope: document.getElementById('auto-pisador-scope').value
+    });
+}
+
+document.getElementById('pm-auto-pisador').addEventListener('click', () => {
+    if (!rightClickedRow || !['normal', 'random'].includes(rightClickedRow.dataset.type || 'normal')) return;
+    hideAllMenus();
+    openAutomaticPisadorModal(rightClickedRow);
+});
+document.getElementById('auto-pisador-source-kind').addEventListener('change', syncAutomaticPisadorModalSource);
+document.getElementById('auto-pisador-browse').addEventListener('click', async () => {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    const selectedPath = await ipcRenderer.invoke(kind === 'folder' ? 'dialog:selectFolder' : 'dialog:openFile');
+    if (selectedPath) document.getElementById('auto-pisador-source-path').value = selectedPath;
+});
+document.getElementById('auto-pisador-save').addEventListener('click', () => {
+    if (!rightClickedRow) return;
+    const previous = parseQuickRule(rightClickedRow.dataset.automaticPisadorRule);
+    const rule = getAutomaticPisadorModalRule();
+    if (!rule) {
+        window.alert('Selecciona un origen valido y un tiempo de inicio mayor o igual que cero.');
+        return;
+    }
+    if (previous?.scope === 'path' && rule.scope !== 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, null);
+    if (rule.scope === 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, rule);
+    rightClickedRow.dataset.automaticPisadorRule = serializeQuickRule(rule);
+    saveSessionSnapshot();
+    closeAutomaticPisadorModal();
+});
+document.getElementById('auto-pisador-clear').addEventListener('click', () => {
+    if (!rightClickedRow) return;
+    const previous = parseQuickRule(rightClickedRow.dataset.automaticPisadorRule);
+    if (previous?.scope === 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, null);
+    delete rightClickedRow.dataset.automaticPisadorRule;
+    saveSessionSnapshot();
+    closeAutomaticPisadorModal();
+});
+document.getElementById('auto-pisador-cancel').addEventListener('click', closeAutomaticPisadorModal);
+
+document.getElementById('pm-copy').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr)); clipboardAction = 'copy'; hideAllMenus(); });
+document.getElementById('pm-cut').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr, true)); clipboardData.forEach(item => { if (item.element === queuedNextRow) queuedNextRow = null; item.element.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); clipboardAction = 'cut'; hideAllMenus(); });
+document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre)); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); applyClipboardPlaylistMetadata(newTr, item, rowName); targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
 document.getElementById('pm-delete').addEventListener('click', () => { document.querySelectorAll('.selected-row').forEach(tr => { if (tr === queuedNextRow) queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, false); tr.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); hideAllMenus(); });
 document.getElementById('pm-clear').addEventListener('click', () => { handleClearPlaylist(); hideAllMenus(); });
 document.getElementById('pm-preview').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-preview', rightClickedRow.dataset.ruta); hideAllMenus(); });
@@ -11449,10 +11592,7 @@ window.addEventListener('keydown', (e) => {
         clipboardData.forEach(item => {
             const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre));
             const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody);
-            if (newTr && item.temp) newTr.dataset.temp = 'true';
-            if (newTr && item.type === 'note' && item.noteText) newTr.dataset.noteText = item.noteText;
-            if (newTr && item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) newTr.dataset.targetTab = parseInt(item.targetTab, 10);
-            if (newTr && item.type === 'execute_event') { newTr.dataset.eventId = item.eventId || item.ruta || ''; newTr.dataset.eventName = item.eventName || rowName || ''; }
+            applyClipboardPlaylistMetadata(newTr, item, rowName);
             targetRow = newTr;
         });
         if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; }

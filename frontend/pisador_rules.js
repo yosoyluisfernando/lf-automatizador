@@ -104,6 +104,20 @@ function normalizeQuickRule(rule) {
     };
 }
 
+function parseQuickRule(value) {
+    if (!value) return null;
+    try {
+        return normalizeQuickRule(typeof value === 'string' ? JSON.parse(value) : value);
+    } catch (err) {
+        return null;
+    }
+}
+
+function serializeQuickRule(value) {
+    const normalized = normalizeQuickRule(value);
+    return normalized ? JSON.stringify(normalized) : '';
+}
+
 function normalizeRulePathKey(value, platform = process.platform) {
     const resolver = platform === 'win32' ? path.win32 : path.posix;
     const resolved = resolver.resolve(String(value || '').trim());
@@ -121,5 +135,7 @@ module.exports = {
     storageToCondition,
     validateDynamicAnchor,
     normalizeQuickRule,
+    parseQuickRule,
+    serializeQuickRule,
     normalizeRulePathKey
 };

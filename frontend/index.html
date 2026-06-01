@@ -482,6 +482,7 @@
                 <div class="context-item" id="pm-advanced-edit" style="color: #00a8ff;">🎧 Editor de Pistas Avanzado</div>
                 <div class="context-item" id="pm-transition-edit" style="color: #2ecc71;">🔀 Editar Transición Musical</div>
                 <div class="context-item" id="pm-jingle-edit" style="color: #f39c12;">🎙️ Editar Cruce con Pisador</div>
+                <div class="context-item" id="pm-auto-pisador" style="color: #b56ad9;">Pisadores automaticos...</div>
                 <div class="context-separator"></div>
                 <div class="context-item" id="pm-edit-name">Editar nombre simple...</div>
                 <div class="context-item has-submenu" id="pm-set-type">
@@ -555,6 +556,40 @@
     </div>
 
     <div id="cw-profile-menu" class="context-menu" style="display: none; z-index: 3000;"></div>
+
+    <div id="auto-pisador-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="width: 430px; display:flex; flex-direction:column; gap:10px;">
+            <h3 style="margin:0; color:#b56ad9;">Pisador automatico</h3>
+            <label style="font-size:12px; color:#aaa;">Origen</label>
+            <select id="auto-pisador-source-kind" class="dark-select">
+                <option value="file">Archivo especifico</option>
+                <option value="folder">Carpeta aleatoria</option>
+                <option value="time">Locucion de hora</option>
+                <option value="temperature">Temperatura</option>
+                <option value="humidity">Humedad</option>
+            </select>
+            <div id="auto-pisador-path-row" style="display:flex; gap:6px;">
+                <input id="auto-pisador-source-path" class="settings-input" style="flex:1;" readonly>
+                <button id="auto-pisador-browse" class="settings-btn">...</button>
+            </div>
+            <label style="font-size:12px; color:#aaa;">Inicia en <input id="auto-pisador-start" class="settings-input" type="number" min="0" step="0.01" value="0" style="width:80px;"> segundos</label>
+            <label style="font-size:12px; color:#aaa;">Editor Avanzado</label>
+            <select id="auto-pisador-advanced-policy" class="dark-select">
+                <option value="respect">Respetar pisadores del Editor Avanzado</option>
+                <option value="ignore">Ignorar pisadores del Editor Avanzado</option>
+            </select>
+            <label style="font-size:12px; color:#aaa;">Aplicar regla</label>
+            <select id="auto-pisador-scope" class="dark-select">
+                <option value="row">Solo esta fila de playlist</option>
+                <option value="path">Cada vez que se vuelva a anadir esta ruta</option>
+            </select>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+                <button id="auto-pisador-clear" class="settings-btn" style="margin-right:auto;">Quitar regla</button>
+                <button id="auto-pisador-cancel" class="settings-btn" style="background:#444;">Cancelar</button>
+                <button id="auto-pisador-save" class="settings-btn" style="background:#27ae60;">Guardar</button>
+            </div>
+        </div>
+    </div>
 
     <div id="playlist-note-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content playlist-note-modal-content">

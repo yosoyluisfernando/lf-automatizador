@@ -174,3 +174,19 @@ test('path keys use platform-specific resolution and are case-insensitive only o
     assert.strictEqual(rules.normalizeRulePathKey('/Radio/IDS', 'linux'), path.posix.resolve('/Radio/IDS'));
     assert.strictEqual(rules.normalizeRulePathKey('Folder\\Child', 'darwin'), path.posix.resolve('Folder\\Child'));
 });
+
+test('quick rules serialize safely for dataset storage', () => {
+    const encoded = rules.serializeQuickRule({
+        source: { kind: 'builtin', name: 'humidity' },
+        startSeconds: 5,
+        advancedPolicy: 'respect',
+        scope: 'row'
+    });
+    assert.deepStrictEqual(rules.parseQuickRule(encoded), {
+        v: 1,
+        source: { v: 1, kind: 'builtin', name: 'humidity' },
+        startSeconds: 5,
+        advancedPolicy: 'respect',
+        scope: 'row'
+    });
+});
