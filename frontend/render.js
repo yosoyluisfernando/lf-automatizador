@@ -21,6 +21,8 @@ const {
     serializeQuickRule,
     normalizeQuickRule,
     normalizeQuickRuleForRowType,
+    resolveEffectiveQuickRule,
+    quickRuleNeedsZeroConfirmation,
     normalizeRulePathKey
 } = require('./pisador_rules');
 const { prepareOverlaySession } = require('./pisador_runtime');
@@ -5865,10 +5867,18 @@ function syncAutomaticPisadorModalSource() {
     document.getElementById('auto-pisador-path-row').style.display = ['file', 'folder'].includes(kind) ? 'flex' : 'none';
 }
 
+let automaticPisadorModalContext = null;
+
 function openAutomaticPisadorModal(row) {
     if (!row || !['normal', 'random'].includes(row.dataset.type || 'normal')) return;
     const rowType = row.dataset.type || 'normal';
-    const rule = normalizeQuickRuleForRowType(parseQuickRule(row.dataset.automaticPisadorRule), rowType);
+    const effective = resolveEffectiveQuickRule(
+        parseQuickRule(row.dataset.automaticPisadorRule),
+        rowType === 'random' ? getPersistentAutomaticPisadorRule(row.dataset.ruta) : null,
+        rowType
+    );
+    const rule = effective?.rule || null;
+    automaticPisadorModalContext = { row, loadedRule: rule, origin: effective?.origin || 'none' };
     const source = rule?.source || { kind: 'file', path: '' };
     document.getElementById('auto-pisador-source-kind').value = source.kind === 'builtin' ? source.name : source.kind;
     document.getElementById('auto-pisador-source-path').value = source.path || '';
@@ -5876,12 +5886,18 @@ function openAutomaticPisadorModal(row) {
     document.getElementById('auto-pisador-advanced-policy').value = rule?.advancedPolicy || 'respect';
     document.getElementById('auto-pisador-scope').value = rule?.scope || 'row';
     document.getElementById('auto-pisador-scope-row').style.display = rowType === 'random' ? 'flex' : 'none';
+    document.getElementById('auto-pisador-loaded-scope').textContent = effective?.origin === 'path'
+        ? 'Configuracion cargada: regla recordada para esta carpeta aleatoria.'
+        : (effective?.origin === 'row'
+            ? 'Configuracion cargada: regla propia de esta fila.'
+            : 'Este elemento todavia no tiene configuracion guardada.');
     syncAutomaticPisadorModalSource();
     document.getElementById('auto-pisador-modal').style.display = 'flex';
 }
 
 function closeAutomaticPisadorModal() {
     document.getElementById('auto-pisador-modal').style.display = 'none';
+    automaticPisadorModalContext = null;
 }
 
 function getAutomaticPisadorModalRule(rowType = 'normal') {
@@ -5909,24 +5925,27 @@ document.getElementById('auto-pisador-browse').addEventListener('click', async (
     if (selectedPath) document.getElementById('auto-pisador-source-path').value = selectedPath;
 });
 document.getElementById('auto-pisador-save').addEventListener('click', () => {
-    if (!rightClickedRow) return;
-    const previous = parseQuickRule(rightClickedRow.dataset.automaticPisadorRule);
-    const rule = getAutomaticPisadorModalRule(rightClickedRow.dataset.type || 'normal');
+    const row = automaticPisadorModalContext?.row;
+    if (!row) return;
+    const previous = automaticPisadorModalContext.loadedRule;
+    const rule = getAutomaticPisadorModalRule(row.dataset.type || 'normal');
     if (!rule) {
         window.alert('Selecciona un origen valido y un tiempo de inicio mayor o igual que cero.');
         return;
     }
-    if (previous?.scope === 'path' && rule.scope !== 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, null);
-    if (rule.scope === 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, rule);
-    rightClickedRow.dataset.automaticPisadorRule = serializeQuickRule(rule);
+    if (quickRuleNeedsZeroConfirmation(rule)
+        && !window.confirm('El pisador se ejecutara en el segundo 0. Desea guardar esta configuracion?')) return;
+    if (previous?.scope === 'path' && rule.scope !== 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, null);
+    if (rule.scope === 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, rule);
+    row.dataset.automaticPisadorRule = serializeQuickRule(rule);
     saveSessionSnapshot();
     closeAutomaticPisadorModal();
 });
 document.getElementById('auto-pisador-clear').addEventListener('click', () => {
-    if (!rightClickedRow) return;
-    const previous = parseQuickRule(rightClickedRow.dataset.automaticPisadorRule);
-    if (previous?.scope === 'path') setPersistentAutomaticPisadorRule(rightClickedRow.dataset.ruta, null);
-    delete rightClickedRow.dataset.automaticPisadorRule;
+    const row = automaticPisadorModalContext?.row;
+    if (!row) return;
+    if (automaticPisadorModalContext.loadedRule?.scope === 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, null);
+    delete row.dataset.automaticPisadorRule;
     saveSessionSnapshot();
     closeAutomaticPisadorModal();
 });

@@ -41,6 +41,14 @@ test('playlist exposes quick automatic pisador modal and serializes row metadata
     assert.match(renderJs, /normalizeQuickRuleForRowType/);
 });
 
+test('quick pisador modal explains loaded scope, deletes explicitly and confirms second zero', () => {
+    assert.match(indexHtml, /id="auto-pisador-loaded-scope"/);
+    assert.match(indexHtml, /id="auto-pisador-clear"[^>]*>Eliminar<\/button>/);
+    assert.match(renderJs, /resolveEffectiveQuickRule/);
+    assert.match(renderJs, /quickRuleNeedsZeroConfirmation/);
+    assert.match(renderJs, /window\.confirm/);
+});
+
 test('renderer prepares, plays and clears overlay sessions instead of rerolling folders at trigger time', () => {
     assert.match(renderJs, /prepareOverlaySession/);
     assert.match(renderJs, /clearPreparedOverlaySession/);

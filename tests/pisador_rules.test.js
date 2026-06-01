@@ -200,3 +200,39 @@ test('quick rules serialize safely for dataset storage', () => {
         scope: 'row'
     });
 });
+
+test('quick modal resolves the row rule before a remembered random-folder rule', () => {
+    const rowRule = { source: '/radio/local.mp3', startSeconds: 2, scope: 'row' };
+    const rememberedRule = { source: '/radio/remembered.mp3', startSeconds: 4, scope: 'path' };
+    assert.deepStrictEqual(rules.resolveEffectiveQuickRule(rowRule, rememberedRule, 'random'), {
+        rule: {
+            v: 1,
+            source: { v: 1, kind: 'file', path: '/radio/local.mp3' },
+            startSeconds: 2,
+            advancedPolicy: 'respect',
+            scope: 'row'
+        },
+        origin: 'row'
+    });
+});
+
+test('quick modal inherits remembered settings only for random folders', () => {
+    const rememberedRule = { source: '/radio/remembered.mp3', startSeconds: 4, scope: 'path' };
+    assert.strictEqual(rules.resolveEffectiveQuickRule(null, rememberedRule, 'normal'), null);
+    assert.deepStrictEqual(rules.resolveEffectiveQuickRule(null, rememberedRule, 'random'), {
+        rule: {
+            v: 1,
+            source: { v: 1, kind: 'file', path: '/radio/remembered.mp3' },
+            startSeconds: 4,
+            advancedPolicy: 'respect',
+            scope: 'path'
+        },
+        origin: 'path'
+    });
+});
+
+test('quick modal requires confirmation only for a valid zero-second rule', () => {
+    assert.strictEqual(rules.quickRuleNeedsZeroConfirmation({ source: '/radio/id.mp3', startSeconds: 0 }), true);
+    assert.strictEqual(rules.quickRuleNeedsZeroConfirmation({ source: '/radio/id.mp3', startSeconds: 1 }), false);
+    assert.strictEqual(rules.quickRuleNeedsZeroConfirmation({ source: '', startSeconds: 0 }), false);
+});

@@ -110,6 +110,25 @@ function normalizeQuickRuleForRowType(rule, rowType = 'normal') {
     return rowType === 'random' ? normalized : { ...normalized, scope: 'row' };
 }
 
+function resolveEffectiveQuickRule(rowRule, rememberedRule, rowType = 'normal') {
+    const normalizedRow = normalizeQuickRuleForRowType(rowRule, rowType);
+    if (normalizedRow) {
+        return {
+            rule: normalizedRow,
+            origin: normalizedRow.scope === 'path' ? 'path' : 'row'
+        };
+    }
+    if (rowType !== 'random') return null;
+    const normalizedRemembered = normalizeQuickRuleForRowType(rememberedRule, rowType);
+    return normalizedRemembered
+        ? { rule: { ...normalizedRemembered, scope: 'path' }, origin: 'path' }
+        : null;
+}
+
+function quickRuleNeedsZeroConfirmation(rule) {
+    return normalizeQuickRule(rule)?.startSeconds === 0;
+}
+
 function parseQuickRule(value) {
     if (!value) return null;
     try {
@@ -142,6 +161,8 @@ module.exports = {
     validateDynamicAnchor,
     normalizeQuickRule,
     normalizeQuickRuleForRowType,
+    resolveEffectiveQuickRule,
+    quickRuleNeedsZeroConfirmation,
     parseQuickRule,
     serializeQuickRule,
     normalizeRulePathKey
