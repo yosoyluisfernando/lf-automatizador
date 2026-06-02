@@ -160,4 +160,94 @@ module.exports = function(context) {
             return { success: false, error: err.message };
         }
     });
+
+    // ====================================================================
+    // RELOJ DE EVENTOS — Main Process (libera el hilo del renderer)
+    // La comprobación de hora y el cálculo de tiempos expandidos corren
+    // aquí; el renderer solo recibe un aviso y ejecuta la acción en DOM.
+    // ====================================================================
+
+    let localEventsDB = [];
+    const _expandedTimesCache = new Map(); // evId → { key, times }
+
+    function _pad(n) { return n.toString().padStart(2, '0'); }
+
+    function _isDateValidForEvent(d, ev) {
+        if (ev.dayMode === 'specific' && ev.specificDays && ev.specificDays.length > 0) {
+            if (!ev.specificDays.includes(d.getDay())) return false;
+        }
+        const testDate = new Date(d.getTime()); testDate.setHours(0, 0, 0, 0);
+        if (ev.validityStart) { const start = new Date(ev.validityStart + 'T00:00:00'); if (testDate < start) return false; }
+        if (ev.validityEnd)   { const end   = new Date(ev.validityEnd   + 'T00:00:00'); if (testDate > end)   return false; }
+        if (ev.dayMode === 'monthlyWeeks') {
+            if (!ev.targetWeeks || ev.targetWeeks.length === 0) return false;
+            const dom = d.getDate();
+            const weekIds = [Math.min(5, Math.ceil(dom / 7))];
+            const plusSeven = new Date(d.getTime()); plusSeven.setDate(dom + 7);
+            if (plusSeven.getMonth() !== d.getMonth()) weekIds.push(5);
+            if (!ev.targetWeeks.some(week => weekIds.includes(week))) return false;
+        }
+        return true;
+    }
+
+    function _getExpandedEventTimesCached(ev) {
+        const cacheKey = `${ev.primaryTime}|${JSON.stringify(ev.otherHours)}|${ev.cyclicActive}|${ev.cyclicInterval}|${ev.cyclicUnit}|${ev.cyclicLimit}`;
+        const cached = _expandedTimesCache.get(ev.id);
+        if (cached && cached.key === cacheKey) return cached.times;
+        const baseTimes = [ev.primaryTime];
+        if (ev.otherHours && ev.otherHours.length > 0) {
+            const [, pM, pS] = ev.primaryTime.split(':');
+            ev.otherHours.forEach(hNum => baseTimes.push(`${_pad(hNum)}:${pM}:${pS}`));
+        }
+        const allTimes = new Set(baseTimes);
+        if (ev.cyclicActive && ev.cyclicInterval > 0 && ev.cyclicLimit > 0) {
+            baseTimes.forEach(bt => {
+                const [h, m, s] = bt.split(':').map(Number);
+                for (let i = 1; i <= ev.cyclicLimit; i++) {
+                    const d = new Date(); d.setHours(h, m, s, 0);
+                    if (ev.cyclicUnit === 'minutes') d.setMinutes(d.getMinutes() + ev.cyclicInterval * i);
+                    else if (ev.cyclicUnit === 'hours') d.setHours(d.getHours() + ev.cyclicInterval * i);
+                    allTimes.add(`${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`);
+                }
+            });
+        }
+        const times = Array.from(allTimes);
+        _expandedTimesCache.set(ev.id, { key: cacheKey, times });
+        return times;
+    }
+
+    function _getEventFireId(ev, timeStr, date) {
+        if (!ev || !timeStr || !date) return null;
+        if (ev.dayMode === 'once') return `${ev.id}_${timeStr}`;
+        return `${ev.id}_${timeStr}_${date.toDateString()}`;
+    }
+
+    // El renderer envía su copia de eventsMasterDB cada vez que la modifica
+    ipcMain.on('events-clock-sync', (e, events) => {
+        localEventsDB = Array.isArray(events) ? events.map(ev => Object.assign({}, ev)) : [];
+    });
+
+    // Reloj de disparo: corre en Main Process, no compite con el render de Chromium
+    setInterval(() => {
+        if (!localEventsDB.length) return;
+        const win = context.mainWindow;
+        if (!win || win.isDestroyed()) return;
+
+        const now = new Date();
+        const currentStr = `${_pad(now.getHours())}:${_pad(now.getMinutes())}:${_pad(now.getSeconds())}`;
+
+        for (const ev of localEventsDB) {
+            if (!ev.primaryTime) continue;
+            if (!_isDateValidForEvent(now, ev)) continue;
+            const expandedTimes = _getExpandedEventTimesCached(ev);
+            for (const tTime of expandedTimes) {
+                if (currentStr !== tTime) continue;
+                const fireId = _getEventFireId(ev, tTime, now);
+                if (ev.lastFired === fireId) continue; // ya disparado en esta ocurrencia
+                ev.lastFired = fireId; // marcar localmente para no re-disparar en el siguiente tick
+                const ignoreId = `${ev.id}_${tTime}_${now.toDateString()}`;
+                win.webContents.send('event-clock-tick', { evId: ev.id, timeStr: tTime, nowMs: now.getTime(), fireId, ignoreId });
+            }
+        }
+    }, 1000);
 };
