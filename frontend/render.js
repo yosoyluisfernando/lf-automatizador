@@ -390,9 +390,9 @@ const defaultFadeProfile = {
     mixFadeoutActive: false
 };
 const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile }
+    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: true, voice: false, readonly: true, ...defaultFadeProfile },
+    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
+    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: true, voice: false, readonly: true, ...defaultFadeProfile }
 ];
 let fileTypesData = [];
 function normalizeFileTypes(types) {
@@ -482,7 +482,35 @@ let pgmTab = 0;
 let playlistBody = null;
 let isRestoringSession = false;
 let lastSessionSnapshotJson = '';
-let incidentEntries = [];
+const incidentReportPath = path.join(configDir, 'incident_report_history.json');
+function getIncidentReportCutoffMs() {
+    const value = Math.max(1, Math.min(366, parseInt(generalPrefs.reportRetentionValue, 10) || 7));
+    const unitMs = generalPrefs.reportRetentionUnit === 'hours' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    return Date.now() - value * unitMs;
+}
+function loadIncidentReportEntries() {
+    if (generalPrefs.reportPersistOnRestart === false) {
+        try { fs.unlinkSync(incidentReportPath); } catch (err) { }
+        return [];
+    }
+    try {
+        const loaded = JSON.parse(fs.readFileSync(incidentReportPath, 'utf-8'));
+        if (!Array.isArray(loaded)) return [];
+        const cutoff = getIncidentReportCutoffMs();
+        return loaded.filter(entry => Number(entry.createdAt) >= cutoff).slice(0, 5000);
+    } catch (err) {
+        return [];
+    }
+}
+function saveIncidentReportEntries() {
+    if (generalPrefs.reportPersistOnRestart === false) return;
+    try {
+        const cutoff = getIncidentReportCutoffMs();
+        const retained = incidentEntries.filter(entry => Number(entry.createdAt) >= cutoff).slice(0, 5000);
+        fs.writeFileSync(incidentReportPath, JSON.stringify(retained, null, 2), 'utf-8');
+    } catch (err) { }
+}
+let incidentEntries = loadIncidentReportEntries();
 let incidentFilter = 'all';
 let incidentAutoActionCount = 0;
 let incidentLastAutoAction = 'Ultima autoaccion: ninguna';
@@ -1301,20 +1329,23 @@ function recordIncident(msg, meta = {}) {
     }
     const entry = {
         id: `${now.getTime()}_${Math.random().toString(16).slice(2, 8)}`,
+        createdAt: now.getTime(),
         time: now.toLocaleString('es-PE', { hour12: false }),
         category: deriveIncidentCategory(msg, meta),
         level: deriveIncidentLevel(msg, meta),
         message: msg,
+        filePath: meta.filePath || '',
         autoAction: meta.autoAction === true || msg.includes('[GUARDIA AIRE]')
     };
     incidentEntries.unshift(entry);
-    if (incidentEntries.length > 250) incidentEntries.length = 250;
+    if (incidentEntries.length > 5000) incidentEntries.length = 5000;
     if (entry.autoAction) {
         incidentAutoActionCount++;
         incidentLastAutoAction = `Ultima autoaccion: ${entry.time} - ${entry.message}`;
         updateIncidentAutoSummary();
     }
     renderIncidentEntries();
+    saveIncidentReportEntries();
     pushIncidentSnapshot();
 }
 
@@ -3261,7 +3292,8 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function logSystem(msg) {
-    recordIncident(msg);
+    if (/\[(?:ERROR|ADVERTENCIA|SKIP|PISADOR)\]/i.test(String(msg || ''))) recordIncident(msg);
+    try { console.log(msg); } catch (err) { }
 }
 
 function persistRendererError(kind, payload) {
@@ -3714,13 +3746,49 @@ async function warmTrackFromLibraryAndFile(filePath, row = null) {
     return filePath;
 }
 
-function resolveRandomRow(row) {
+const recentMusicHistoryPaths = new Set();
+let recentMusicHistoryLoadedAt = 0;
+let lastRecordedPlaybackHistoryToken = '';
+
+async function refreshRecentMusicHistoryPaths(force = false) {
+    if (!force && Date.now() - recentMusicHistoryLoadedAt < 5000) return recentMusicHistoryPaths;
+    try {
+        const result = await ipcRenderer.invoke('playback-history-recent-paths', {
+            category: 'music',
+            days: generalPrefs.musicRandomProtectionDays || 1
+        });
+        if (result?.success) {
+            recentMusicHistoryPaths.clear();
+            (result.paths || []).forEach(filePath => recentMusicHistoryPaths.add(filePath));
+            recentMusicHistoryLoadedAt = Date.now();
+        }
+    } catch (err) { }
+    return recentMusicHistoryPaths;
+}
+
+async function takeRandomFolderFileAvoidingRecentMusic(folderPath) {
+    const files = getRandomFolderFilesFast(folderPath);
+    if (files.length === 0) return null;
+    await refreshRecentMusicHistoryPaths();
+    const eligible = files.filter(fileName => !recentMusicHistoryPaths.has(path.join(folderPath, fileName)));
+    if (eligible.length === 0) {
+        recordIncident('[HISTORIAL] La carpeta aleatoria agoto las canciones no repetidas. Se libero temporalmente la regla para continuar al aire.', { category: 'air', level: 'warn' });
+        return takeRandomFolderFile(folderPath);
+    }
+    const eligibleSet = new Set(eligible);
+    const currentBag = (randomBagsCache[folderPath] || []).filter(fileName => eligibleSet.has(fileName));
+    randomBagsCache[folderPath] = currentBag.length > 0 ? currentBag : shuffleArray([...eligible]);
+    const nextFile = randomBagsCache[folderPath].pop();
+    return nextFile ? path.join(folderPath, nextFile) : null;
+}
+
+async function resolveRandomRow(row) {
     if (!row || row.dataset.type !== 'random') return null;
     if (row.dataset.resolvedRandomPath && fs.existsSync(row.dataset.resolvedRandomPath)) {
         return row.dataset.resolvedRandomPath;
     }
     const folderPath = row.dataset.ruta;
-    const filePath = takeRandomFolderFile(folderPath);
+    const filePath = await takeRandomFolderFileAvoidingRecentMusic(folderPath);
     if (!filePath) return null;
     row.dataset.resolvedRandomPath = filePath;
     row.dataset.resolvedRandomName = path.basename(filePath);
@@ -3730,7 +3798,7 @@ function resolveRandomRow(row) {
 }
 
 async function hydrateRandomRowFromLibrary(row) {
-    const filePath = resolveRandomRow(row);
+    const filePath = await resolveRandomRow(row);
     if (!filePath) return null;
     return warmTrackFromLibraryAndFile(filePath, row);
 }
@@ -8706,6 +8774,44 @@ function buildAdvancedPisadores(mc = {}) {
     })).filter(item => item.source);
 }
 
+function getTrackHistoryDescriptor(filePath) {
+    const typeData = getTrackTypeData(filePath);
+    if (!typeData) {
+        return { category: 'music', report: generalPrefs.reportMusicEnabled !== false, history: generalPrefs.historyMusicEnabled !== false };
+    }
+    const category = typeData.id === 't_comercial'
+        ? 'commercial'
+        : typeData.id === 't_station_id'
+            ? 'station_id'
+            : typeData.voice === true
+                ? 'locution'
+                : String(typeData.id || 'custom');
+    return {
+        category,
+        report: typeData.report !== false,
+        history: typeData.history === true && category !== 'locution'
+    };
+}
+
+function registerTrackPlaybackOnce(row, filePath, title) {
+    const token = `${playRowSessionId}:${filePath}`;
+    if (!filePath || token === lastRecordedPlaybackHistoryToken) return;
+    lastRecordedPlaybackHistoryToken = token;
+    const descriptor = getTrackHistoryDescriptor(filePath);
+    if (descriptor.report) {
+        recordIncident(`${ICON_AIR_PREFIX} ${title}`, { category: 'air', level: 'success', filePath });
+    }
+    if (!descriptor.history) return;
+    if (descriptor.category === 'music') recentMusicHistoryPaths.add(filePath);
+    ipcRenderer.invoke('playback-history-record', {
+        filePath,
+        title,
+        category: descriptor.category,
+        sourceFolder: row?.dataset?.type === 'random' ? row.dataset.ruta : '',
+        retentionDays: generalPrefs.historyRetentionDays || 30
+    }).catch(() => {});
+}
+
 function buildPisadorPlannerDeps() {
     return {
         listFolderFiles: async folder => {
@@ -11180,6 +11286,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     `fuente=${rustTransitionPlan.settingsSource}, mix=${rustTransitionPlan.mixSource}, ` +
                     `fadeIn=${rustTransitionPlan.fadeInSeconds}s, gain=${rustTransitionPlan.targetGain.toFixed(3)}`);
                 logSystem(`${ICON_AIR_PREFIX} ${nombreMostrar} (Rust, deck=${nextPlayerId})`);
+                registerTrackPlaybackOnce(tr, rutaFisica, nombreMostrar);
                 return;
             } catch (err) {
                 refreshAirIncidentStatus();
@@ -11245,6 +11352,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 publishRustTransport({ force: true });
                 scheduleAirWaveform(rutaFisica, currentSessionId);
                 logSystem(`Sonando: ${nombreMostrar}`);
+                registerTrackPlaybackOnce(tr, rutaFisica, nombreMostrar);
             }).catch(err => { refreshAirIncidentStatus(); haltPlaybackOnFatalError(`No se pudo reproducir: ${nombreMostrar}. ${err?.message || ''}`.trim()); });
         };
         const targetMediaUrl = url.pathToFileURL(rutaFisica).href;

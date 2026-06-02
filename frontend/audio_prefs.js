@@ -19,6 +19,13 @@ const AUDIO_PREFS_DEFAULTS = {
     repeatDisableOnManualNext: true,
     removePlayedProtectionEnabled: false,
     removePlayedProtectionMinRemaining: 2,
+    historyRetentionDays: 30,
+    historyMusicEnabled: true,
+    reportMusicEnabled: true,
+    musicRandomProtectionDays: 1,
+    reportPersistOnRestart: true,
+    reportRetentionUnit: 'days',
+    reportRetentionValue: 7,
     // El motor Rust es la unica fuente de audio en produccion. El modo
     // 'webAudio' fue retirado del UI y de la logica: cualquier valor legado
     // ('webAudio', undefined, etc.) se promueve a 'rustAudio' en normalizeAudioPrefs.
@@ -79,6 +86,13 @@ function normalizeAudioPrefs(prefs = {}) {
         repeatDisableOnManualNext: prefs.repeatDisableOnManualNext !== false,
         removePlayedProtectionEnabled: prefs.removePlayedProtectionEnabled === true,
         removePlayedProtectionMinRemaining: Math.max(1, Math.min(999, parseInt(prefs.removePlayedProtectionMinRemaining, 10) || AUDIO_PREFS_DEFAULTS.removePlayedProtectionMinRemaining)),
+        historyRetentionDays: Math.max(1, Math.min(366, parseInt(prefs.historyRetentionDays, 10) || AUDIO_PREFS_DEFAULTS.historyRetentionDays)),
+        historyMusicEnabled: prefs.historyMusicEnabled !== false,
+        reportMusicEnabled: prefs.reportMusicEnabled !== false,
+        musicRandomProtectionDays: Math.max(1, Math.min(366, parseInt(prefs.musicRandomProtectionDays, 10) || AUDIO_PREFS_DEFAULTS.musicRandomProtectionDays)),
+        reportPersistOnRestart: prefs.reportPersistOnRestart !== false,
+        reportRetentionUnit: prefs.reportRetentionUnit === 'hours' ? 'hours' : 'days',
+        reportRetentionValue: Math.max(1, Math.min(366, parseInt(prefs.reportRetentionValue, 10) || AUDIO_PREFS_DEFAULTS.reportRetentionValue)),
         audioEngineMode,
         rustPlaylistOwnerEnabled: true,
         eventPreHoldActive: prefs.eventPreHoldActive !== false,

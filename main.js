@@ -2673,3 +2673,4 @@ require('./backend/ipc/windows')(sharedState);
 require('./backend/ipc/cartwall')(sharedState);
 require('./backend/ipc/library')(sharedState);
 require('./backend/ipc/stream')(sharedState);
+require('./backend/ipc/history')(sharedState);

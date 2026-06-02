@@ -153,6 +153,7 @@ ipcMain.handle('lib-rename-track-file', (e, payload = {}) => {
                         ['commercial_block_items', 'file_path'],
                         ['commercial_logs', 'asset_path'],
                         ['events', 'file_path'],
+                        ['playback_history', 'file_path'],
                         ['tracks', 'file_path'],
                     ];
                     updates.forEach(([table, column]) => {
