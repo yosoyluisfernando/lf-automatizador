@@ -41,9 +41,9 @@ const defaultFadeProfile = {
 };
 
 const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile }
+    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
+    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
+    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile }
 ];
 
 function normalizeFileTypes(types) {
@@ -131,7 +131,6 @@ function loadTypeDetails(id) {
     document.getElementById('type-color').value = t.color;
     document.getElementById('type-color').disabled = t.readonly;
     document.getElementById('type-amp').value = t.amp;
-    document.getElementById('type-report').checked = t.report;
     document.getElementById('type-voice').checked = t.voice;
     const delBtn = document.getElementById('btn-del-type');
     if (delBtn) {
@@ -183,7 +182,6 @@ function saveCurrentTypeState() {
                 t.color = document.getElementById('type-color').value;
             }
             t.amp = parseFloat(document.getElementById('type-amp').value) || 0;
-            t.report = document.getElementById('type-report').checked;
             t.voice = document.getElementById('type-voice').checked;
             t.fadeinActive = document.getElementById('chk-fadein').checked;
             t.fadein = parseFloat(document.getElementById('num-fadein').value) || 0;

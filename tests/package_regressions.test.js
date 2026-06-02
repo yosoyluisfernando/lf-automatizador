@@ -67,6 +67,24 @@ test('packaging verifies ffmpeg-static hashes and publishes installer checksums'
     assert.match(verifySource, /linux-x64/);
 });
 
+test('beta releases publish as prereleases without requiring an Authenticode certificate', () => {
+    assert.match(workflowSource, /matrix\.platform == 'win' && startsWith\(github\.ref, 'refs\/tags\/'\) && !contains\(github\.ref_name, '-beta\.'\)/);
+    assert.match(workflowSource, /prerelease:\s+\$\{\{\s*contains\(github\.ref_name, '-'\)\s*\}\}/);
+});
+
+test('beta releases may omit the FFmpeg source bundle while stable releases remain fail-closed', () => {
+    assert.match(workflowSource, /Require Corresponding FFmpeg Source Bundle[\s\S]*if:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+    assert.match(workflowSource, /Attest FFmpeg Source Bundle Checksum[\s\S]*if:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+    assert.match(workflowSource, /fail_on_unmatched_files:\s+\$\{\{\s*!contains\(github\.ref_name, '-beta\.'\)\s*\}\}/);
+});
+
+test('release tag validation runs through a portable Node script', () => {
+    assert.match(workflowSource, /node build\/verify-release-tag\.js/);
+    const { verifyReleaseTag } = require('../build/verify-release-tag');
+    assert.doesNotThrow(() => verifyReleaseTag('v0.9.12-beta.2', '0.9.12-beta.2'));
+    assert.throws(() => verifyReleaseTag('v0.9.12-beta.1', '0.9.12-beta.2'), /no coincide/);
+});
+
 test('package version is valid SemVer so electron-builder preserves the release number', () => {
     assert.match(packageJson.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     assert.ok(packageJson.build.files.includes('LICENSE'));

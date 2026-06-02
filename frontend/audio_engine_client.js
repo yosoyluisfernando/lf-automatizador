@@ -18,6 +18,9 @@ const AUDIO_ENGINE_COMMANDS = Object.freeze([
     'playlistManualNext',
     'cartwallPlay',
     'cartwallStop',
+    'cacheDuration',
+    'cartwallSequence',
+    'loadSequence',
     'startEncoder',
     'stopEncoder',
     'timeLocution',
@@ -345,6 +348,17 @@ class RustAudioEngineAdapter {
                     paths: Array.isArray(payload.paths) ? payload.paths : [],
                     outputId: payload.outputId || payload.deviceId || 'default',
                     gain: payload.gain ?? payload.volume ?? 1,
+                    cacheDir: payload.cacheDir || ''
+                };
+            case 'loadSequence':
+                return {
+                    cmd: 'loadSequence',
+                    player: payload.player || payload.playerId || payload.id || `sequence-${Date.now()}`,
+                    bus: payload.bus || 'jingle',
+                    paths: Array.isArray(payload.paths) ? payload.paths : [],
+                    outputId: payload.outputId || payload.deviceId || 'default',
+                    gain: payload.gain ?? payload.volume ?? 1,
+                    autoplay: payload.autoplay === true,
                     cacheDir: payload.cacheDir || ''
                 };
             case 'masterGain':

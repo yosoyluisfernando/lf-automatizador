@@ -1,4 +1,15 @@
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const { normalizeAudioPrefs } = require('./audio_prefs');
+const { getConfigDir } = require('../backend/utils/app_paths');
+
+const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
+const generalPrefsPath = path.join(configDir, 'general_settings.json');
+const fileTypesPath = path.join(configDir, 'file_types.json');
+const readJson = (filePath, fallback) => { try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (err) { return fallback; } };
+const byId = id => document.getElementById(id);
+const setChecked = (id, value) => { if (byId(id)) byId(id).checked = value !== false; };
 
 let incidentFilter = 'all';
 let currentSnapshot = {
@@ -58,7 +69,7 @@ function renderEntries() {
     }
 
     logBox.innerHTML = visibleEntries.map(entry => `
-        <div class="incident-entry" data-level="${escapeHtml(entry.level || 'info')}">
+        <div class="incident-entry" data-level="${escapeHtml(entry.level || 'info')}" data-file-path="${escapeHtml(entry.filePath || '')}">
             <div class="incident-entry-head">
                 <div class="incident-entry-meta">
                     <span class="incident-entry-time">${escapeHtml(entry.time || '--:--:--')}</span>
@@ -131,6 +142,90 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const btnRefresh = document.getElementById('btn-refresh-reports');
     if (btnRefresh) btnRefresh.addEventListener('click', () => { ipcRenderer.send('incident-request-sync'); });
+
+    const overlay = byId('report-settings-overlay');
+    const loadReportSettings = () => {
+        const prefs = normalizeAudioPrefs(readJson(generalPrefsPath, {}));
+        const types = readJson(fileTypesPath, []);
+        const getType = id => types.find(item => item.id === id) || {};
+        setChecked('report-music-enabled', prefs.reportMusicEnabled);
+        setChecked('history-music-enabled', prefs.historyMusicEnabled);
+        setChecked('report-commercial-enabled', getType('t_comercial').report);
+        setChecked('history-commercial-enabled', getType('t_comercial').history);
+        setChecked('report-station-enabled', getType('t_station_id').report);
+        setChecked('history-station-enabled', getType('t_station_id').history);
+        setChecked('report-locution-enabled', getType('t_time').report);
+        byId('history-retention-days').value = prefs.historyRetentionDays;
+        byId('music-random-protection-value').value = prefs.musicRandomProtectionValue;
+        byId('music-random-protection-unit').value = prefs.musicRandomProtectionUnit;
+        syncProtectionLimits();
+        byId('report-persist-on-restart').checked = prefs.reportPersistOnRestart;
+        byId('report-retention-value').value = prefs.reportRetentionValue;
+        byId('report-retention-unit').value = prefs.reportRetentionUnit;
+    };
+    const syncProtectionLimits = () => {
+        const input = byId('music-random-protection-value');
+        const unit = byId('music-random-protection-unit').value;
+        const max = unit === 'hours' ? 24 : 7;
+        input.max = max;
+        input.min = 1;
+        if (parseInt(input.value, 10) > max) input.value = max;
+        if (parseInt(input.value, 10) < 1) input.value = 1;
+    };
+    byId('music-random-protection-unit').addEventListener('change', syncProtectionLimits);
+    byId('btn-report-settings').addEventListener('click', () => { loadReportSettings(); overlay.style.display = 'flex'; });
+    byId('btn-report-settings-cancel').addEventListener('click', () => { overlay.style.display = 'none'; });
+    byId('btn-report-settings-save').addEventListener('click', () => {
+        // ── Validación de rangos antes de guardar ──
+        const protUnit = byId('music-random-protection-unit').value;
+        const protMax = protUnit === 'hours' ? 24 : 7;
+        const validations = [
+            { id: 'history-retention-days', label: 'Conservar memoria fisica', min: 1, max: 366 },
+            { id: 'music-random-protection-value', label: 'Evitar repetir musica aleatoria', min: 1, max: protMax },
+            { id: 'report-retention-value', label: 'Conservar reporte visual', min: 1, max: 366 }
+        ];
+        for (const rule of validations) {
+            const raw = parseInt(byId(rule.id).value, 10);
+            if (isNaN(raw) || raw < rule.min || raw > rule.max) {
+                alert(`"${rule.label}" debe ser un valor entre ${rule.min} y ${rule.max}.`);
+                byId(rule.id).focus();
+                return;
+            }
+        }
+        const prefs = normalizeAudioPrefs({
+            ...readJson(generalPrefsPath, {}),
+            reportMusicEnabled: byId('report-music-enabled').checked,
+            historyMusicEnabled: byId('history-music-enabled').checked,
+            historyRetentionDays: byId('history-retention-days').value,
+            musicRandomProtectionValue: byId('music-random-protection-value').value,
+            musicRandomProtectionUnit: byId('music-random-protection-unit').value,
+            reportPersistOnRestart: byId('report-persist-on-restart').checked,
+            reportRetentionValue: byId('report-retention-value').value,
+            reportRetentionUnit: byId('report-retention-unit').value
+        });
+        const types = readJson(fileTypesPath, []);
+        const updateType = (id, report, history) => {
+            const type = types.find(item => item.id === id);
+            if (type) { type.report = report; type.history = history; }
+        };
+        updateType('t_comercial', byId('report-commercial-enabled').checked, byId('history-commercial-enabled').checked);
+        updateType('t_station_id', byId('report-station-enabled').checked, byId('history-station-enabled').checked);
+        updateType('t_time', byId('report-locution-enabled').checked, false);
+        fs.writeFileSync(generalPrefsPath, JSON.stringify(prefs, null, 2));
+        fs.writeFileSync(fileTypesPath, JSON.stringify(types, null, 2));
+        ipcRenderer.send('settings-updated', {});
+        overlay.style.display = 'none';
+    });
+
+    const logBox = document.getElementById('sys-log');
+    if (logBox) logBox.addEventListener('contextmenu', async event => {
+        const entry = event.target.closest('.incident-entry');
+        const filePath = entry?.dataset?.filePath || '';
+        if (!filePath) return;
+        event.preventDefault();
+        const action = await ipcRenderer.invoke('show-context-menu', [{ id: 'show-folder', label: 'Mostrar en carpeta' }]);
+        if (action === 'show-folder') await ipcRenderer.invoke('file:show-in-folder', filePath);
+    });
 
     renderSnapshot();
     ipcRenderer.send('incident-request-sync');

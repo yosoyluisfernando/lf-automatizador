@@ -1,7 +1,7 @@
 {
   "name": "lf-automatizador",
   "productName": "LF Automatizador",
-  "version": "0.9.11-beta.3",
+  "version": "0.9.12",
   "description": "Software de Automatizacion de Radio",
   "main": "main.js",
   "scripts": {
@@ -14,14 +14,16 @@
     "predist:linux": "npm run verify:ffmpeg-static && npm run prepare:rust-engine",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win nsis --publish never",
-    "dist:linux": "electron-builder --linux AppImage deb --publish never"
+    "dist:linux": "electron-builder --linux AppImage deb --publish never",
+    "manual:dev": "vitepress dev manual"
   },
   "author": "Luis Fernando",
   "license": "GPL-3.0-only",
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "electron": "^41.7.0",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.8.1",
+    "vitepress": "^1.6.4"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

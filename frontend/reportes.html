@@ -12,7 +12,10 @@
                 <div class="reports-title">Centro de Estado e Incidencias</div>
                 <div class="reports-subtitle">Vista completa del aire, eventos, encoder, sesión y acciones automáticas.</div>
             </div>
-            <button class="mini-btn" id="btn-refresh-reports">Actualizar</button>
+            <div style="display:flex;gap:8px;">
+                <button class="mini-btn" id="btn-report-settings" title="Configurar memoria e historial">&#9881; Configurar</button>
+                <button class="mini-btn" id="btn-refresh-reports">Actualizar</button>
+            </div>
         </div>
 
         <div class="system-log reports-panel">
@@ -57,6 +60,30 @@
                 <button class="incident-filter" data-filter="system">Sistema</button>
             </div>
             <div class="log-messages reports-log" id="sys-log"></div>
+        </div>
+    </div>
+
+    <div id="report-settings-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);align-items:center;justify-content:center;">
+        <div style="width:520px;background:#222225;border:1px solid #555;border-radius:6px;padding:16px;color:#ddd;">
+            <h3 style="margin-top:0;color:#00a8ff;">Memoria e historial</h3>
+            <p style="font-size:12px;color:#aaa;">El reporte visual y la memoria fisica son independientes.</p>
+            <table style="width:100%;font-size:12px;margin-bottom:12px;">
+                <tr><th style="text-align:left;">Tipo</th><th style="text-align:center;">Mostrar en reporte</th><th style="text-align:center;">Guardar memoria</th></tr>
+                <tr><td>Musica</td><td style="text-align:center;"><input type="checkbox" id="report-music-enabled"></td><td style="text-align:center;"><input type="checkbox" id="history-music-enabled"></td></tr>
+                <tr><td>Comerciales</td><td style="text-align:center;"><input type="checkbox" id="report-commercial-enabled"></td><td style="text-align:center;"><input type="checkbox" id="history-commercial-enabled"></td></tr>
+                <tr><td>Identificaciones</td><td style="text-align:center;"><input type="checkbox" id="report-station-enabled"></td><td style="text-align:center;"><input type="checkbox" id="history-station-enabled"></td></tr>
+                <tr><td>Locuciones</td><td style="text-align:center;"><input type="checkbox" id="report-locution-enabled"></td><td style="text-align:center;"><input type="checkbox" disabled title="Las locuciones no se guardan en memoria fisica."></td></tr>
+            </table>
+            <div style="display:grid;grid-template-columns:1fr 100px 90px;gap:8px;align-items:center;font-size:12px;">
+                <label>Conservar reporte al reiniciar:</label><input type="checkbox" id="report-persist-on-restart"><span></span>
+                <label>Conservar memoria fisica:</label><input type="number" id="history-retention-days" min="1" max="366" value="30"><span>dias</span>
+                <label>Evitar repetir musica aleatoria:</label><input type="number" id="music-random-protection-value" min="1" max="7" value="1"><select id="music-random-protection-unit"><option value="days">Dias</option><option value="hours">Horas</option></select>
+                <label>Conservar reporte visual:</label><input type="number" id="report-retention-value" min="1" max="366" value="7"><select id="report-retention-unit"><option value="days">Dias</option><option value="hours">Horas</option></select>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+                <button class="mini-btn" id="btn-report-settings-cancel">Cancelar</button>
+                <button class="mini-btn" id="btn-report-settings-save">Guardar</button>
+            </div>
         </div>
     </div>
 

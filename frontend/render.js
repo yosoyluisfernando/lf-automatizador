@@ -13,6 +13,19 @@ const url = require('url');
 const { ipcRenderer, webUtils } = require('electron');
 const { normalizeAudioPrefs } = require('./audio_prefs');
 const { AudioEngineClient, RustAudioEngineAdapter } = require('./audio_engine_client');
+const {
+    PISADOR_IDS,
+    parsePisadorSource,
+    normalizePisadorOptions,
+    parseQuickRule,
+    serializeQuickRule,
+    normalizeQuickRule,
+    normalizeQuickRuleForRowType,
+    resolveEffectiveQuickRule,
+    quickRuleNeedsZeroConfirmation,
+    normalizeRulePathKey
+} = require('./pisador_rules');
+const { prepareOverlaySession } = require('./pisador_runtime');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
 const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manager');
@@ -66,6 +79,7 @@ const encoderPrefsPath = path.join(configDir, 'encoder_prefs.json');
 const fileTypesPath = path.join(configDir, 'file_types.json');
 const clockwheelPrefsPath = path.join(configDir, 'clockwheel_prefs.json');
 const sessionStatePath = path.join(configDir, 'session_state.json');
+const automaticPisadorRulesPath = path.join(configDir, 'automatic_sweeper_rules.json');
 const SESSION_AUTOSAVE_MS = 3000;
 const PLAYBACK_GUARD_INTERVAL_MS = 1000;
 const PLAYBACK_GUARD_STALL_MS = 9000;
@@ -109,6 +123,28 @@ function loadConfig(filePath, defaultData) {
 
 function saveConfig(filePath, data) {
     try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2)); } catch (e) { }
+}
+
+let automaticPisadorRulesByPath = loadConfig(automaticPisadorRulesPath, {});
+
+function getPersistentAutomaticPisadorRule(route) {
+    if (!route) return null;
+    return parseQuickRule(automaticPisadorRulesByPath[normalizeRulePathKey(route)]);
+}
+
+function setPersistentAutomaticPisadorRule(route, rule) {
+    if (!route) return;
+    const key = normalizeRulePathKey(route);
+    if (rule) automaticPisadorRulesByPath[key] = normalizeQuickRule(rule);
+    else delete automaticPisadorRulesByPath[key];
+    saveConfig(automaticPisadorRulesPath, automaticPisadorRulesByPath);
+}
+
+function applyDefaultAutomaticPisadorRule(row) {
+    if (!row?.dataset?.ruta || row.dataset.automaticPisadorRule) return;
+    if (row.dataset.type !== 'random') return;
+    const rule = getPersistentAutomaticPisadorRule(row.dataset.ruta);
+    if (rule) row.dataset.automaticPisadorRule = serializeQuickRule(rule);
 }
 
 let waveformRenderToken = 0;
@@ -354,9 +390,9 @@ const defaultFadeProfile = {
     mixFadeoutActive: false
 };
 const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, voice: false, readonly: true, ...defaultFadeProfile }
+    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
+    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
+    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile }
 ];
 let fileTypesData = [];
 function normalizeFileTypes(types) {
@@ -446,7 +482,35 @@ let pgmTab = 0;
 let playlistBody = null;
 let isRestoringSession = false;
 let lastSessionSnapshotJson = '';
-let incidentEntries = [];
+const incidentReportPath = path.join(configDir, 'incident_report_history.json');
+function getIncidentReportCutoffMs() {
+    const value = Math.max(1, Math.min(366, parseInt(generalPrefs.reportRetentionValue, 10) || 7));
+    const unitMs = generalPrefs.reportRetentionUnit === 'hours' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    return Date.now() - value * unitMs;
+}
+function loadIncidentReportEntries() {
+    if (generalPrefs.reportPersistOnRestart === false) {
+        try { fs.unlinkSync(incidentReportPath); } catch (err) { }
+        return [];
+    }
+    try {
+        const loaded = JSON.parse(fs.readFileSync(incidentReportPath, 'utf-8'));
+        if (!Array.isArray(loaded)) return [];
+        const cutoff = getIncidentReportCutoffMs();
+        return loaded.filter(entry => Number(entry.createdAt) >= cutoff).slice(0, 5000);
+    } catch (err) {
+        return [];
+    }
+}
+function saveIncidentReportEntries() {
+    if (generalPrefs.reportPersistOnRestart === false) return;
+    try {
+        const cutoff = getIncidentReportCutoffMs();
+        const retained = incidentEntries.filter(entry => Number(entry.createdAt) >= cutoff).slice(0, 5000);
+        fs.writeFileSync(incidentReportPath, JSON.stringify(retained, null, 2), 'utf-8');
+    } catch (err) { }
+}
+let incidentEntries = loadIncidentReportEntries();
 let incidentFilter = 'all';
 let incidentAutoActionCount = 0;
 let incidentLastAutoAction = 'Ultima autoaccion: ninguna';
@@ -625,11 +689,13 @@ function serializePlaylistRow(row) {
         targetTab: Number.isInteger(parseInt(row.dataset.targetTab, 10)) ? parseInt(row.dataset.targetTab, 10) : null,
         eventId: row.dataset.eventId || null,
         eventName: row.dataset.eventName || null,
+        automaticPisadorRule: row.dataset.automaticPisadorRule || null,
         // stream_url specific fields
         stopPolicy: row.dataset.stopPolicy || null,
         stopSeconds: row.dataset.stopSeconds ? parseInt(row.dataset.stopSeconds, 10) : null,
         connectTimeoutSec: row.dataset.connectTimeoutSec ? parseInt(row.dataset.connectTimeoutSec, 10) : null,
         maxRetries:        row.dataset.maxRetries ? parseInt(row.dataset.maxRetries, 10) : null,
+        prebufferSeconds:  row.dataset.prebufferSeconds ? parseInt(row.dataset.prebufferSeconds, 10) : null,
         metadataMode:      row.dataset.metadataMode || null,
         customMetadata:    row.dataset.customMetadata || null,
     };
@@ -1263,20 +1329,23 @@ function recordIncident(msg, meta = {}) {
     }
     const entry = {
         id: `${now.getTime()}_${Math.random().toString(16).slice(2, 8)}`,
+        createdAt: now.getTime(),
         time: now.toLocaleString('es-PE', { hour12: false }),
         category: deriveIncidentCategory(msg, meta),
         level: deriveIncidentLevel(msg, meta),
         message: msg,
+        filePath: meta.filePath || '',
         autoAction: meta.autoAction === true || msg.includes('[GUARDIA AIRE]')
     };
     incidentEntries.unshift(entry);
-    if (incidentEntries.length > 250) incidentEntries.length = 250;
+    if (incidentEntries.length > 5000) incidentEntries.length = 5000;
     if (entry.autoAction) {
         incidentAutoActionCount++;
         incidentLastAutoAction = `Ultima autoaccion: ${entry.time} - ${entry.message}`;
         updateIncidentAutoSummary();
     }
     renderIncidentEntries();
+    saveIncidentReportEntries();
     pushIncidentSnapshot();
 }
 
@@ -2980,6 +3049,7 @@ async function restoreSessionState() {
                     if (!lastInsertedRow) return;
                     if (item.rowId) lastInsertedRow.dataset.rowId = item.rowId;
                     if (item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
+                    if (item.automaticPisadorRule) lastInsertedRow.dataset.automaticPisadorRule = item.automaticPisadorRule;
                     if (item.temp || /^[\u23f3\u231b]/.test(item.titulo || '')) lastInsertedRow.dataset.temp = 'true';
                 });
             });
@@ -3222,7 +3292,8 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function logSystem(msg) {
-    recordIncident(msg);
+    if (/\[(?:ERROR|ADVERTENCIA|SKIP|PISADOR)\]/i.test(String(msg || ''))) recordIncident(msg);
+    try { console.log(msg); } catch (err) { }
 }
 
 function persistRendererError(kind, payload) {
@@ -3671,16 +3742,54 @@ async function warmTrackFromLibraryAndFile(filePath, row = null) {
     }
 
     maybeRequestTransitionPreanalysis(filePath, transitionConfig);
+    warmPisadorSourcesForTrack(filePath).catch(() => {});
     return filePath;
 }
 
-function resolveRandomRow(row) {
+const recentMusicHistoryPaths = new Set();
+let recentMusicHistoryLoadedAt = 0;
+let lastRecordedPlaybackHistoryToken = '';
+
+async function refreshRecentMusicHistoryPaths(force = false) {
+    if (!force && Date.now() - recentMusicHistoryLoadedAt < 5000) return recentMusicHistoryPaths;
+    try {
+        const result = await ipcRenderer.invoke('playback-history-recent-paths', {
+            category: 'music',
+            value: generalPrefs.musicRandomProtectionValue || 1,
+            unit: generalPrefs.musicRandomProtectionUnit || 'days'
+        });
+        if (result?.success) {
+            recentMusicHistoryPaths.clear();
+            (result.paths || []).forEach(filePath => recentMusicHistoryPaths.add(filePath));
+            recentMusicHistoryLoadedAt = Date.now();
+        }
+    } catch (err) { }
+    return recentMusicHistoryPaths;
+}
+
+async function takeRandomFolderFileAvoidingRecentMusic(folderPath) {
+    const files = getRandomFolderFilesFast(folderPath);
+    if (files.length === 0) return null;
+    await refreshRecentMusicHistoryPaths();
+    const eligible = files.filter(fileName => !recentMusicHistoryPaths.has(path.join(folderPath, fileName)));
+    if (eligible.length === 0) {
+        recordIncident('[HISTORIAL] La carpeta aleatoria agoto las canciones no repetidas. Se libero temporalmente la regla para continuar al aire.', { category: 'air', level: 'warn' });
+        return takeRandomFolderFile(folderPath);
+    }
+    const eligibleSet = new Set(eligible);
+    const currentBag = (randomBagsCache[folderPath] || []).filter(fileName => eligibleSet.has(fileName));
+    randomBagsCache[folderPath] = currentBag.length > 0 ? currentBag : shuffleArray([...eligible]);
+    const nextFile = randomBagsCache[folderPath].pop();
+    return nextFile ? path.join(folderPath, nextFile) : null;
+}
+
+async function resolveRandomRow(row) {
     if (!row || row.dataset.type !== 'random') return null;
     if (row.dataset.resolvedRandomPath && fs.existsSync(row.dataset.resolvedRandomPath)) {
         return row.dataset.resolvedRandomPath;
     }
     const folderPath = row.dataset.ruta;
-    const filePath = takeRandomFolderFile(folderPath);
+    const filePath = await takeRandomFolderFileAvoidingRecentMusic(folderPath);
     if (!filePath) return null;
     row.dataset.resolvedRandomPath = filePath;
     row.dataset.resolvedRandomName = path.basename(filePath);
@@ -3690,7 +3799,7 @@ function resolveRandomRow(row) {
 }
 
 async function hydrateRandomRowFromLibrary(row) {
-    const filePath = resolveRandomRow(row);
+    const filePath = await resolveRandomRow(row);
     if (!filePath) return null;
     return warmTrackFromLibraryAndFile(filePath, row);
 }
@@ -3851,6 +3960,13 @@ function setPlaylistContextMenuMode(mode) {
     });
 }
 
+function syncAutomaticPisadorMenuAvailability() {
+    const item = document.getElementById('pm-auto-pisador');
+    if (!item) return;
+    const allowed = rightClickedRow && ['normal', 'random'].includes(rightClickedRow.dataset.type || 'normal');
+    item.classList.toggle('context-disabled', !allowed);
+}
+
 document.addEventListener('click', (e) => {
     try {
         if (!e.target.closest('.context-menu') && !e.target.closest('.modal-content')) hideAllMenus();
@@ -3896,7 +4012,15 @@ async function handleSavePlaylist() {
             noteText: r.dataset.noteText || null,
             targetTab: Number.isInteger(parseInt(r.dataset.targetTab, 10)) ? parseInt(r.dataset.targetTab, 10) : null,
             eventId: r.dataset.eventId || null,
-            eventName: r.dataset.eventName || null
+            eventName: r.dataset.eventName || null,
+            automaticPisadorRule: r.dataset.automaticPisadorRule || null,
+            stopPolicy: r.dataset.stopPolicy || null,
+            stopSeconds: r.dataset.stopSeconds ? parseInt(r.dataset.stopSeconds, 10) : null,
+            connectTimeoutSec: r.dataset.connectTimeoutSec ? parseInt(r.dataset.connectTimeoutSec, 10) : null,
+            maxRetries: r.dataset.maxRetries ? parseInt(r.dataset.maxRetries, 10) : null,
+            prebufferSeconds: r.dataset.prebufferSeconds ? parseInt(r.dataset.prebufferSeconds, 10) : null,
+            metadataMode: r.dataset.metadataMode || null,
+            customMetadata: r.dataset.customMetadata || null
         }));
         fs.writeFileSync(savePath, JSON.stringify(pData, null, 2));
         currentPlaylistPath = savePath; return true;
@@ -3958,7 +4082,8 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                         if (item.stopPolicy) lastInsertedRow.dataset.stopPolicy = item.stopPolicy;
                         if (item.stopSeconds != null) lastInsertedRow.dataset.stopSeconds = String(parseInt(item.stopSeconds, 10) || 0);
                         if (item.connectTimeoutSec != null) lastInsertedRow.dataset.connectTimeoutSec = String(parseInt(item.connectTimeoutSec, 10) || 5);
-                        if (item.maxRetries != null)        lastInsertedRow.dataset.maxRetries        = String(parseInt(item.maxRetries, 10) || 3);
+                        if (item.maxRetries != null)        lastInsertedRow.dataset.maxRetries        = String(normalizeStreamRetries(item.maxRetries));
+                        if (item.prebufferSeconds != null)  lastInsertedRow.dataset.prebufferSeconds  = String(Math.min(15, Math.max(1, parseInt(item.prebufferSeconds, 10) || 5)));
                         if (item.metadataMode)   lastInsertedRow.dataset.metadataMode   = item.metadataMode;
                         if (item.customMetadata) lastInsertedRow.dataset.customMetadata = item.customMetadata;
                         // Recalcular la celda de duración (se generó con el default '∞' antes de conocer stopPolicy).
@@ -3972,6 +4097,7 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                     }
                 }
                 if (lastInsertedRow && item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
+                if (lastInsertedRow && item.automaticPisadorRule) lastInsertedRow.dataset.automaticPisadorRule = item.automaticPisadorRule;
                 if (lastInsertedRow && (item.temp || /^[\u23f3\u231b]/.test(item.titulo || ''))) lastInsertedRow.dataset.temp = 'true';
                 if (lastInsertedRow) insertedCount++;
             }
@@ -4016,10 +4142,12 @@ function normalizePlaylistItem(item = {}) {
         targetTab: Number.isInteger(parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10)) ? parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10) : null,
         eventId: item.eventId || item.EventId || item.eventID || item.idEvento || item.IdEvento || null,
         eventName: item.eventName || item.EventName || item.nombreEvento || item.NombreEvento || null,
+        automaticPisadorRule: item.automaticPisadorRule || item.AutomaticPisadorRule || null,
         stopPolicy: item.stopPolicy || item.StopPolicy || null,
         stopSeconds: item.stopSeconds != null ? parseInt(item.stopSeconds, 10) : null,
         connectTimeoutSec: item.connectTimeoutSec != null ? parseInt(item.connectTimeoutSec, 10) : null,
         maxRetries:        item.maxRetries != null ? parseInt(item.maxRetries, 10) : null,
+        prebufferSeconds:  item.prebufferSeconds != null ? parseInt(item.prebufferSeconds, 10) : null,
         metadataMode:      item.metadataMode || null,
         customMetadata:    item.customMetadata || null,
     };
@@ -5731,6 +5859,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             ensurePreanalysisForTrack(ruta, { dbMix: targetDb });
         }
     }
+    applyDefaultAutomaticPisadorRule(tr);
     return tr;
 }
 
@@ -5750,6 +5879,7 @@ if (playlistSection) {
             rightClickedRow = null;
             if (typeMenu) typeMenu.innerHTML = '';
             setPlaylistContextMenuMode('empty');
+            syncAutomaticPisadorMenuAvailability();
             showContextMenu(playlistContextMenu, e.pageX, e.pageY);
             applyMenuLogic();
             return;
@@ -5768,6 +5898,7 @@ if (playlistSection) {
 
 
         setPlaylistContextMenuMode(tr.dataset.type === 'note' ? 'note' : tr.dataset.type === 'stream_url' ? 'stream' : 'row');
+        syncAutomaticPisadorMenuAvailability();
 
         showContextMenu(playlistContextMenu, e.pageX, e.pageY);
         applyMenuLogic();
@@ -5781,9 +5912,143 @@ window.setExplicitType = function (typeId) {
     }); saveExplicitTypes(); hideAllMenus();
 }
 
-document.getElementById('pm-copy').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => ({ ruta: tr.dataset.ruta, nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''), duracion: tr.dataset.duracion, type: tr.dataset.type, temp: tr.dataset.temp === 'true', noteText: tr.dataset.noteText || null, targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null, eventId: tr.dataset.eventId || null, eventName: tr.dataset.eventName || null })); clipboardAction = 'copy'; hideAllMenus(); });
-document.getElementById('pm-cut').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => ({ ruta: tr.dataset.ruta, nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''), duracion: tr.dataset.duracion, type: tr.dataset.type, temp: tr.dataset.temp === 'true', noteText: tr.dataset.noteText || null, targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null, eventId: tr.dataset.eventId || null, eventName: tr.dataset.eventName || null, element: tr })); clipboardData.forEach(item => { if (item.element === queuedNextRow) queuedNextRow = null; item.element.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); clipboardAction = 'cut'; hideAllMenus(); });
-document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre)); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); if (newTr && item.temp) newTr.dataset.temp = 'true'; if (newTr && item.type === 'note' && item.noteText) newTr.dataset.noteText = item.noteText; if (newTr && item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) newTr.dataset.targetTab = parseInt(item.targetTab, 10); if (newTr && item.type === 'execute_event') { newTr.dataset.eventId = item.eventId || item.ruta || ''; newTr.dataset.eventName = item.eventName || rowName || ''; } targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
+function serializePlaylistClipboardRow(tr, includeElement = false) {
+    const item = {
+        ruta: tr.dataset.ruta,
+        nombre: (tr.dataset.pureName || '') + (tr.dataset.ext || ''),
+        duracion: tr.dataset.duracion,
+        type: tr.dataset.type,
+        temp: tr.dataset.temp === 'true',
+        noteText: tr.dataset.noteText || null,
+        targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null,
+        eventId: tr.dataset.eventId || null,
+        eventName: tr.dataset.eventName || null,
+        automaticPisadorRule: tr.dataset.automaticPisadorRule || null,
+        stopPolicy: tr.dataset.stopPolicy || null,
+        stopSeconds: tr.dataset.stopSeconds || null,
+        connectTimeoutSec: tr.dataset.connectTimeoutSec || null,
+        maxRetries: tr.dataset.maxRetries || null,
+        prebufferSeconds: tr.dataset.prebufferSeconds || null,
+        metadataMode: tr.dataset.metadataMode || null,
+        customMetadata: tr.dataset.customMetadata || null
+    };
+    if (includeElement) item.element = tr;
+    return item;
+}
+
+function applyClipboardPlaylistMetadata(row, item, rowName) {
+    if (!row) return;
+    if (item.temp) row.dataset.temp = 'true';
+    if (item.automaticPisadorRule) row.dataset.automaticPisadorRule = item.automaticPisadorRule;
+    if (item.type === 'note' && item.noteText) row.dataset.noteText = item.noteText;
+    if (item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) row.dataset.targetTab = parseInt(item.targetTab, 10);
+    if (item.type === 'execute_event') {
+        row.dataset.eventId = item.eventId || item.ruta || '';
+        row.dataset.eventName = item.eventName || rowName || '';
+    }
+    if (item.type === 'stream_url') {
+        if (item.stopPolicy) row.dataset.stopPolicy = item.stopPolicy;
+        if (item.stopSeconds != null) row.dataset.stopSeconds = String(item.stopSeconds);
+        if (item.connectTimeoutSec != null) row.dataset.connectTimeoutSec = String(item.connectTimeoutSec);
+        if (item.maxRetries != null) row.dataset.maxRetries = String(item.maxRetries);
+        if (item.prebufferSeconds != null) row.dataset.prebufferSeconds = String(item.prebufferSeconds);
+        if (item.metadataMode) row.dataset.metadataMode = item.metadataMode;
+        if (item.customMetadata) row.dataset.customMetadata = item.customMetadata;
+    }
+}
+
+function syncAutomaticPisadorModalSource() {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    document.getElementById('auto-pisador-path-row').style.display = ['file', 'folder'].includes(kind) ? 'flex' : 'none';
+}
+
+let automaticPisadorModalContext = null;
+
+function openAutomaticPisadorModal(row) {
+    if (!row || !['normal', 'random'].includes(row.dataset.type || 'normal')) return;
+    const rowType = row.dataset.type || 'normal';
+    const effective = resolveEffectiveQuickRule(
+        parseQuickRule(row.dataset.automaticPisadorRule),
+        rowType === 'random' ? getPersistentAutomaticPisadorRule(row.dataset.ruta) : null,
+        rowType
+    );
+    const rule = effective?.rule || null;
+    automaticPisadorModalContext = { row, loadedRule: rule, origin: effective?.origin || 'none' };
+    const source = rule?.source || { kind: 'file', path: '' };
+    document.getElementById('auto-pisador-source-kind').value = source.kind === 'builtin' ? source.name : source.kind;
+    document.getElementById('auto-pisador-source-path').value = source.path || '';
+    document.getElementById('auto-pisador-start').value = rule?.startSeconds ?? 0;
+    document.getElementById('auto-pisador-advanced-policy').value = rule?.advancedPolicy || 'respect';
+    document.getElementById('auto-pisador-scope').value = rule?.scope || 'row';
+    document.getElementById('auto-pisador-scope-row').style.display = rowType === 'random' ? 'flex' : 'none';
+    document.getElementById('auto-pisador-loaded-scope').textContent = effective?.origin === 'path'
+        ? 'Configuracion cargada: regla recordada para esta carpeta aleatoria.'
+        : (effective?.origin === 'row'
+            ? 'Configuracion cargada: regla propia de esta fila.'
+            : 'Este elemento todavia no tiene configuracion guardada.');
+    syncAutomaticPisadorModalSource();
+    document.getElementById('auto-pisador-modal').style.display = 'flex';
+}
+
+function closeAutomaticPisadorModal() {
+    document.getElementById('auto-pisador-modal').style.display = 'none';
+    automaticPisadorModalContext = null;
+}
+
+function getAutomaticPisadorModalRule(rowType = 'normal') {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    const source = ['file', 'folder'].includes(kind)
+        ? { kind, path: document.getElementById('auto-pisador-source-path').value }
+        : { kind: 'builtin', name: kind };
+    return normalizeQuickRuleForRowType({
+        source,
+        startSeconds: document.getElementById('auto-pisador-start').value,
+        advancedPolicy: document.getElementById('auto-pisador-advanced-policy').value,
+        scope: document.getElementById('auto-pisador-scope').value
+    }, rowType);
+}
+
+document.getElementById('pm-auto-pisador').addEventListener('click', () => {
+    if (!rightClickedRow || !['normal', 'random'].includes(rightClickedRow.dataset.type || 'normal')) return;
+    hideAllMenus();
+    openAutomaticPisadorModal(rightClickedRow);
+});
+document.getElementById('auto-pisador-source-kind').addEventListener('change', syncAutomaticPisadorModalSource);
+document.getElementById('auto-pisador-browse').addEventListener('click', async () => {
+    const kind = document.getElementById('auto-pisador-source-kind').value;
+    const selectedPath = await ipcRenderer.invoke(kind === 'folder' ? 'dialog:selectFolder' : 'dialog:openFile');
+    if (selectedPath) document.getElementById('auto-pisador-source-path').value = selectedPath;
+});
+document.getElementById('auto-pisador-save').addEventListener('click', () => {
+    const row = automaticPisadorModalContext?.row;
+    if (!row) return;
+    const previous = automaticPisadorModalContext.loadedRule;
+    const rule = getAutomaticPisadorModalRule(row.dataset.type || 'normal');
+    if (!rule) {
+        window.alert('Selecciona un origen valido y un tiempo de inicio mayor o igual que cero.');
+        return;
+    }
+    if (quickRuleNeedsZeroConfirmation(rule)
+        && !window.confirm('El pisador se ejecutara en el segundo 0. Desea guardar esta configuracion?')) return;
+    if (previous?.scope === 'path' && rule.scope !== 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, null);
+    if (rule.scope === 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, rule);
+    row.dataset.automaticPisadorRule = serializeQuickRule(rule);
+    saveSessionSnapshot();
+    closeAutomaticPisadorModal();
+});
+document.getElementById('auto-pisador-clear').addEventListener('click', () => {
+    const row = automaticPisadorModalContext?.row;
+    if (!row) return;
+    if (automaticPisadorModalContext.loadedRule?.scope === 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, null);
+    delete row.dataset.automaticPisadorRule;
+    saveSessionSnapshot();
+    closeAutomaticPisadorModal();
+});
+document.getElementById('auto-pisador-cancel').addEventListener('click', closeAutomaticPisadorModal);
+
+document.getElementById('pm-copy').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr)); clipboardAction = 'copy'; hideAllMenus(); });
+document.getElementById('pm-cut').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr, true)); clipboardData.forEach(item => { if (item.element === queuedNextRow) queuedNextRow = null; item.element.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); clipboardAction = 'cut'; hideAllMenus(); });
+document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre)); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); applyClipboardPlaylistMetadata(newTr, item, rowName); targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
 document.getElementById('pm-delete').addEventListener('click', () => { document.querySelectorAll('.selected-row').forEach(tr => { if (tr === queuedNextRow) queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, false); tr.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); hideAllMenus(); });
 document.getElementById('pm-clear').addEventListener('click', () => { handleClearPlaylist(); hideAllMenus(); });
 document.getElementById('pm-preview').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-preview', rightClickedRow.dataset.ruta); hideAllMenus(); });
@@ -5798,7 +6063,10 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
         stopPolicy:       tr.dataset.stopPolicy || 'manual',
         stopSeconds:      parseInt(tr.dataset.stopSeconds, 10) || 0,
         connectTimeoutSec: parseInt(tr.dataset.connectTimeoutSec, 10) || 5,
-        maxRetries:       parseInt(tr.dataset.maxRetries, 10) || 3,
+        maxRetries:       normalizeStreamRetries(tr.dataset.maxRetries),
+        prebufferSeconds: Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5)),
+        metadataMode:     tr.dataset.metadataMode || 'icy',
+        customMetadata:   tr.dataset.customMetadata || '',
     };
     hideAllMenus();
     // Abrimos el modal pre-llenado. Al confirmar, actualizamos la fila.
@@ -5812,6 +6080,7 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
             tr.dataset.stopSeconds      = String(updated.stopSeconds);
             tr.dataset.connectTimeoutSec = String(updated.connectTimeoutSec);
             tr.dataset.maxRetries       = String(updated.maxRetries);
+            tr.dataset.prebufferSeconds = String(updated.prebufferSeconds);
             tr.dataset.metadataMode     = updated.metadataMode || 'icy';
             tr.dataset.customMetadata   = updated.customMetadata || '';
             if (tr.children[1]) tr.children[1].innerText = newName;
@@ -5829,28 +6098,61 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
     }
 });
 
-document.getElementById('pm-edit-name').addEventListener('click', () => {
-    if (!rightClickedRow) return;
-    let currentName = rightClickedRow.dataset.pureName || rightClickedRow.children[1].innerText;
-    let isTemp = rightClickedRow.dataset.temp === 'true';
-    if (/^(?:\u23f3|⏳)\s/.test(currentName)) currentName = currentName.replace(/^(?:\u23f3|⏳)\s*/, '');
+function getPhysicalTrackPathForRow(row) {
+    if (!row) return '';
+    if ((row.dataset.type || 'normal') !== 'random') return row.dataset.ruta || '';
+    if (row === currentPlayingRow && currentPhysicalTrackPath) return currentPhysicalTrackPath;
+    return row.dataset.resolvedRandomPath || '';
+}
 
-    const newName = prompt("Editar nombre de la pista:", currentName);
-    if (newName && newName.trim() !== "") {
-        let finalName = newName.trim(); if (isTemp) finalName = ICON_TEMP_PREFIX + finalName;
-        rightClickedRow.dataset.pureName = finalName; rightClickedRow.dataset.ext = ''; rightClickedRow.children[1].innerText = finalName;
-        if (currentPlayingRow === rightClickedRow) {
-            let cleanName = finalName.replace(/^(?:\u23f3|⏳)\s*/, '');
-            document.getElementById('txt-cancion').innerText = cleanName;
-            if (isPlaybackActuallyOnAir()) ipcRenderer.send('update-metadata', cleanName);
-            else setIdleBroadcastMetadata();
-        }
-        if (queuedNextRow === rightClickedRow) updateNextTrackVisuals();
-    } hideAllMenus();
+document.getElementById('pm-edit-name').addEventListener('click', () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    hideAllMenus();
+    if (!filePath) {
+        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        return;
+    }
+    ipcRenderer.send('open-file-metadata-editor', filePath);
+});
+
+document.getElementById('pm-show-folder').addEventListener('click', async () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    hideAllMenus();
+    if (!filePath) {
+        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        return;
+    }
+    const result = await ipcRenderer.invoke('file:show-in-folder', filePath);
+    if (!result?.success) alert(result?.error || 'No se pudo mostrar el archivo en su carpeta.');
 });
 
 document.getElementById('pm-set-next').addEventListener('click', () => { const nextRow = resolveNextOperationalRow(rightClickedRow, false); if (nextRow) { setQueuedNextManual(nextRow); } hideAllMenus(); });
-document.getElementById('pm-advanced-edit').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-audio-editor', rightClickedRow.dataset.ruta); hideAllMenus(); });
+document.getElementById('pm-advanced-edit').addEventListener('click', () => {
+    const filePath = getPhysicalTrackPathForRow(rightClickedRow);
+    if (filePath) ipcRenderer.send('open-audio-editor', filePath);
+    else alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+    hideAllMenus();
+});
+
+ipcRenderer.on('track-file-renamed', (event, { oldPath, newPath } = {}) => {
+    if (!oldPath || !newPath || oldPath === newPath) return;
+    if (manualCuesDB[oldPath]) {
+        manualCuesDB[newPath] = manualCuesDB[oldPath];
+        delete manualCuesDB[oldPath];
+    }
+    document.querySelectorAll('.playlist-table tr').forEach(row => {
+        if ((row.dataset.type || 'normal') === 'normal' && row.dataset.ruta === oldPath) row.dataset.ruta = newPath;
+        if (row.dataset.resolvedRandomPath === oldPath) row.dataset.resolvedRandomPath = newPath;
+    });
+    Object.keys(randomBagsCache).forEach(folder => {
+        randomBagsCache[folder] = (randomBagsCache[folder] || []).map(filePath => filePath === oldPath ? newPath : filePath);
+    });
+    randomFolderFileCache.forEach(entry => {
+        if (Array.isArray(entry?.files)) entry.files = entry.files.map(filePath => filePath === oldPath ? newPath : filePath);
+    });
+    if (currentPhysicalTrackPath === oldPath) currentPhysicalTrackPath = newPath;
+    saveSessionSnapshot();
+});
 
 document.getElementById('pm-transition-edit').addEventListener('click', () => {
     if (!rightClickedRow) return;
@@ -8442,7 +8744,8 @@ let currentTrackConfig = null; let crossfadeTriggered = false; let crossfadeTrig
 // avanzar a la siguiente, para evitar loops. Se limpia cuando entra a sonar
 // una fila distinta.
 let pendingRetryRow = null;
-let currentStartTimeOffset = 0; let currentFiredDrops = [];
+let currentStartTimeOffset = 0;
+let currentPhysicalTrackPath = '';
 let playRowSessionId = 0;
 let lastOverlayEvalSessionId = 0;
 let lastOverlayEvalElapsed = 0;
@@ -8453,54 +8756,158 @@ let lastOverlayTriggerInfo = null;
 const rustPlaylistPreDuckingGains = new Map();
 const rustOverlayRuntimes = new Map();
 
-// Caché síncrono de duraciones de archivos de pisador. Se precalienta al
-// iniciar cada pista (precachePisadorDurations) para que handleTimeUpdate
-// pueda consultar la duración sin await y calcular correctamente el modo
-// "Termina en" (el pisador debe arrancar N segundos antes de la marca).
+// Cache de duraciones concretas resueltas por sesion. El planner selecciona
+// primero el archivo real y luego mide exactamente ese mismo audio.
 const overlayDurationCache = new Map();
 
-async function resolveOverlayFileDuration(filePath) {
-    if (!filePath) return 0;
-    try {
-        if (!fs.existsSync(filePath)) return 0;
-        let targetPath = filePath;
-        if (fs.statSync(filePath).isDirectory()) {
-            const files = fs.readdirSync(filePath).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f));
-            if (files.length > 0) targetPath = path.join(filePath, files[0]);
-            else return 0;
-        }
-        return await getAudioDuration(targetPath);
-    } catch (e) {
-        return 0;
-    }
+let preparedOverlaySession = null;
+let preparedOverlaySessionPromise = null;
+let overlayPreparationGeneration = 0;
+
+function buildAdvancedPisadores(mc = {}) {
+    return PISADOR_IDS.map(id => ({
+        id,
+        active: mc[`${id}_active`] === true || mc[`${id}_active`] === 1,
+        mode: mc[`${id}_mode`] || 'start',
+        time: mc[`${id}_time`],
+        source: parsePisadorSource(mc[`${id}_file`]),
+        options: normalizePisadorOptions(mc[`${id}_options`])
+    })).filter(item => item.source);
 }
 
-async function precachePisadorDurations(mc) {
-    if (!mc) return;
-    // P1, P2, P3: obtener duración real del archivo de audio del pisador
-    for (let i = 1; i <= 3; i++) {
-        const file = mc[`p${i}_file`];
-        if (mc[`p${i}_active`] && file) {
-            try {
-                const dur = await resolveOverlayFileDuration(file);
-                if (dur > 0) overlayDurationCache.set(file, dur);
-            } catch (e) {}
-        }
+function getTrackHistoryDescriptor(filePath) {
+    const typeData = getTrackTypeData(filePath);
+    if (!typeData) {
+        return { category: 'music', report: generalPrefs.reportMusicEnabled !== false, history: generalPrefs.historyMusicEnabled !== false };
     }
-    // Phora: estimar duración sumando los archivos de la locución horaria
-    // actual (hora + minuto). Si no se puede resolver, se usa 5s de fallback.
-    if (mc.phora_active && mc.phora_time) {
-        try {
-            const folder = generalPrefs.timeFolder;
-            const files = resolveTimeLocutionFiles(folder);
-            let totalDur = 0;
-            for (const f of files) {
-                const dur = await getAudioDuration(f);
-                if (dur > 0) totalDur += dur;
-            }
-            overlayDurationCache.set('__phora__', totalDur > 0 ? totalDur : 5);
-        } catch (e) {
-            overlayDurationCache.set('__phora__', 5);
+    const category = typeData.id === 't_comercial'
+        ? 'commercial'
+        : typeData.id === 't_station_id'
+            ? 'station_id'
+            : typeData.voice === true
+                ? 'locution'
+                : String(typeData.id || 'custom');
+    return {
+        category,
+        report: typeData.report !== false,
+        history: typeData.history === true && category !== 'locution'
+    };
+}
+
+function registerTrackPlaybackOnce(row, filePath, title) {
+    const token = `${playRowSessionId}:${filePath}`;
+    if (!filePath || token === lastRecordedPlaybackHistoryToken) return;
+    lastRecordedPlaybackHistoryToken = token;
+    const descriptor = getTrackHistoryDescriptor(filePath);
+    if (descriptor.report) {
+        recordIncident(`${ICON_AIR_PREFIX} ${title}`, { category: 'air', level: 'success', filePath });
+    }
+    if (!descriptor.history) return;
+    if (descriptor.category === 'music') recentMusicHistoryPaths.add(filePath);
+    ipcRenderer.invoke('playback-history-record', {
+        filePath,
+        title,
+        category: descriptor.category,
+        sourceFolder: row?.dataset?.type === 'random' ? row.dataset.ruta : '',
+        retentionDays: generalPrefs.historyRetentionDays || 30
+    }).catch(() => {});
+}
+
+function buildPisadorPlannerDeps() {
+    return {
+        listFolderFiles: async folder => {
+            await warmRandomFolder(folder);
+            return getRandomFolderFilesFast(folder).map(name => path.join(folder, name));
+        },
+        getDuration: async filePath => {
+            if (overlayDurationCache.has(filePath)) return overlayDurationCache.get(filePath);
+            const duration = await getAudioDuration(filePath);
+            if (duration > 0) overlayDurationCache.set(filePath, duration);
+            return duration;
+        },
+        chooseRandom: files => files[Math.floor(Math.random() * files.length)],
+        resolveBuiltin: async source => {
+            if (source.name === 'time') return resolveTimeLocutionFiles(generalPrefs.timeFolder);
+            const value = await ensureClimateWeatherValue(source.name);
+            const filePath = Number.isFinite(value) ? resolveClimateLocutionFile(source.name, value) : '';
+            return filePath ? [filePath] : [];
+        },
+        preloadFile: plan => shouldRustOwnJingleBus()
+            ? commandRustControlPlane('load', {
+                player: plan.playerId,
+                bus: 'jingle',
+                path: plan.resolvedPaths[0],
+                gain: 1,
+                autoplay: false,
+                cacheDir: mainWaveformCacheDir
+            })
+            : preloadOverlayPlanViaWebAudio(plan),
+        preloadSequence: plan => shouldRustOwnJingleBus()
+            ? commandRustControlPlane('loadSequence', {
+                player: plan.playerId,
+                bus: 'jingle',
+                paths: plan.resolvedPaths,
+                gain: 1,
+                autoplay: false,
+                cacheDir: mainWaveformCacheDir
+            })
+            : preloadOverlayPlanViaWebAudio(plan)
+    };
+}
+
+function clearPreparedOverlaySession() {
+    overlayPreparationGeneration++;
+    preparedOverlaySession?.plans.forEach(plan => {
+        stopPreparedWebAudioOverlay(plan);
+        clearPreparedWebAudioPreloads(plan);
+        if (rustOverlayRuntimes.has(plan.playerId)) {
+            finishRustOverlayRuntime(plan.playerId);
+        } else if (shouldMirrorRustControlPlane()) {
+            commandRustControlPlane('stop', { player: plan.playerId }).catch(() => {});
+        }
+    });
+    preparedOverlaySession = null;
+    preparedOverlaySessionPromise = null;
+}
+
+async function prepareCurrentOverlaySession(row, physicalTrackPath, startOffset) {
+    clearPreparedOverlaySession();
+    const mc = manualCuesDB[physicalTrackPath] || {};
+    const targetSessionId = playRowSessionId;
+    const targetGeneration = overlayPreparationGeneration;
+    const preparation = prepareOverlaySession({
+        sessionId: targetSessionId,
+        trackPath: physicalTrackPath,
+        startOffset,
+        markers: { intro: Number(mc.intro) || 0, outro: Number(mc.outro) || 0 },
+        advanced: buildAdvancedPisadores(mc),
+        quickRule: parseQuickRule(row?.dataset?.automaticPisadorRule)
+    }, buildPisadorPlannerDeps());
+    preparedOverlaySessionPromise = preparation;
+    const nextSession = await preparation;
+    if (targetSessionId !== playRowSessionId || targetGeneration !== overlayPreparationGeneration) {
+        nextSession.plans.forEach(plan => {
+            clearPreparedWebAudioPreloads(plan);
+            commandRustControlPlane('stop', { player: plan.playerId }).catch(() => {});
+        });
+        return null;
+    }
+    preparedOverlaySession = nextSession;
+    nextSession.warnings.forEach(message => {
+        logSystem(`[PISADOR] ${physicalTrackPath}: ${message}`);
+        recordIncident(`[PISADOR] ${message}`, { category: 'air', level: 'warn' });
+    });
+    return nextSession;
+}
+
+async function warmPisadorSourcesForTrack(filePath) {
+    const mc = manualCuesDB[filePath] || {};
+    for (const item of buildAdvancedPisadores(mc)) {
+        if (item.source.kind !== 'folder') continue;
+        const names = await warmRandomFolder(item.source.path);
+        const paths = names.map(name => path.join(item.source.path, name));
+        if (paths.length) {
+            commandRustControlPlane('cacheDuration', { paths, cacheDir: mainWaveformCacheDir }).catch(() => {});
         }
     }
 }
@@ -8566,10 +8973,6 @@ function endProgramOverlayDucking() {
     }
 }
 
-function buildRustOverlayPlayerId(prefix = 'overlay') {
-    return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-}
-
 function registerRustOverlayRuntime(runtime = {}) {
     if (!runtime.playerId) return;
     rustOverlayRuntimes.set(runtime.playerId, runtime);
@@ -8596,70 +8999,91 @@ function reconcileRustOverlayRuntimeStatus(status = {}) {
     });
 }
 
-async function playOverlayDropViaRust(filePath) {
-    const playerId = buildRustOverlayPlayerId('overlay');
-    registerRustOverlayRuntime({ playerId, path: filePath, type: 'overlay', affectsProgram: true });
-    const result = await commandRustControlPlane('load', {
-        player: playerId,
-        bus: 'jingle',
-        path: filePath,
-        gain: 1,
-        autoplay: true
+function cleanupPreparedWebAudioElement(plan) {
+    const audio = plan?.webAudioElement;
+    if (!audio) return;
+    try { audio.pause(); } catch (err) {}
+    try { plan.webAudioSource?.disconnect(); } catch (err) {}
+    audio.onended = null;
+    audio.onerror = null;
+    audio.src = '';
+    overlayDropInstances.delete(audio);
+    plan.webAudioElement = null;
+    plan.webAudioSource = null;
+}
+
+function clearPreparedWebAudioPreloads(plan) {
+    const preloads = Array.isArray(plan?.webAudioPreloads) ? plan.webAudioPreloads : [];
+    preloads.forEach(audio => {
+        if (!audio || audio === plan.webAudioElement) return;
+        try { audio.pause(); } catch (err) {}
+        audio.src = '';
     });
-    if (result?.ok) return true;
-    finishRustOverlayRuntime(playerId);
-    logSystem(`[RUST OVERLAY] No se pudo reproducir pisador: ${result?.error || 'sin detalle'}`);
-    return false;
+    if (plan) plan.webAudioPreloads = [];
 }
 
-async function playOverlayDrop(filePath) {
-    if (!fs.existsSync(filePath)) return;
-    let finalPath = filePath;
-    if (fs.statSync(filePath).isDirectory()) {
-        const files = fs.readdirSync(filePath).filter(f => /\.(mp3|wav|ogg|m4a)$/i.test(f));
-        if (files.length > 0) finalPath = path.join(filePath, files[Math.floor(Math.random() * files.length)]); else return;
-    }
-    if (shouldRustOwnJingleBus()) {
-        await playOverlayDropViaRust(finalPath);
-        return;
-    }
+function preloadOverlayPlanViaWebAudio(plan) {
     try {
-        const dropAudio = new window.Audio(url.pathToFileURL(finalPath).href);
-        dropAudio.__lfSourcePath = finalPath;
-        const dropSource = audioCtx.createMediaElementSource(dropAudio);
-        dropSource.connect(jingleBus);
-        overlayDropInstances.add(dropAudio);
-
-        beginProgramOverlayDucking();
-
-        dropAudio.play().catch(e => { });
-        dropAudio.onended = () => {
-            dropSource.disconnect();
-            dropAudio.src = '';
-            overlayDropInstances.delete(dropAudio);
-            endProgramOverlayDucking();
-        };
-    } catch (err) { }
+        plan.webAudioPreloads = plan.resolvedPaths.map(filePath => {
+            const audio = new window.Audio(url.pathToFileURL(filePath).href);
+            audio.preload = 'auto';
+            audio.load();
+            return audio;
+        });
+        return Promise.resolve({ ok: true });
+    } catch (err) {
+        clearPreparedWebAudioPreloads(plan);
+        return Promise.resolve({ ok: false, error: err.message || String(err) });
+    }
 }
 
-function resolveTimedOverlayTrigger({ markerTime, mode = 'start', startOffset = 0, estimatedDuration = 0 }) {
-    const marker = parseFloat(markerTime);
-    if (!Number.isFinite(marker)) return null;
-    const offset = Number.isFinite(Number(startOffset)) ? Number(startOffset) : 0;
-    const duration = Math.max(0, Number(estimatedDuration) || 0);
-    let absoluteTrigger = marker;
-    let adjustedMode = mode || 'start';
+function stopPreparedWebAudioOverlay(plan) {
+    if (!plan?.webAudioActive) return;
+    plan.webAudioActive = false;
+    plan.webAudioCancelled = true;
+    cleanupPreparedWebAudioElement(plan);
+    clearPreparedWebAudioPreloads(plan);
+    endProgramOverlayDucking();
+}
 
-    if (adjustedMode === 'end') {
-        const endModeTrigger = marker - duration;
-        // Si una marca temprana no alcanza para restar la duracion del pisador,
-        // se respeta la marca como disparo directo en vez de forzar 0.1s.
-        absoluteTrigger = endModeTrigger >= offset ? endModeTrigger : marker;
-        if (absoluteTrigger === marker) adjustedMode = 'start-fallback';
-    }
-
-    const triggerTime = Math.max(0, absoluteTrigger - offset);
-    return { marker, triggerTime, adjustedMode };
+function playPreparedOverlayPlanViaWebAudio(plan) {
+    if (!plan?.resolvedPaths?.length || plan.webAudioActive) return;
+    plan.webAudioActive = true;
+    plan.webAudioCancelled = false;
+    beginProgramOverlayDucking();
+    let index = 0;
+    const playNext = () => {
+        if (!plan.webAudioActive || plan.webAudioCancelled) return;
+        if (index >= plan.resolvedPaths.length) {
+            stopPreparedWebAudioOverlay(plan);
+            return;
+        }
+        try {
+            const filePath = plan.resolvedPaths[index];
+            if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+                stopPreparedWebAudioOverlay(plan);
+                return;
+            }
+            const audio = plan.webAudioPreloads?.[index] || new window.Audio(url.pathToFileURL(filePath).href);
+            const source = audioCtx.createMediaElementSource(audio);
+            audio.__lfSourcePath = filePath;
+            source.connect(jingleBus);
+            overlayDropInstances.add(audio);
+            plan.webAudioElement = audio;
+            plan.webAudioSource = source;
+            const advance = () => {
+                cleanupPreparedWebAudioElement(plan);
+                index++;
+                playNext();
+            };
+            audio.onended = advance;
+            audio.onerror = () => stopPreparedWebAudioOverlay(plan);
+            audio.play().catch(() => stopPreparedWebAudioOverlay(plan));
+        } catch (err) {
+            stopPreparedWebAudioOverlay(plan);
+        }
+    };
+    playNext();
 }
 
 function didCrossOverlayTrigger(triggerTime, realElapsed) {
@@ -8670,7 +9094,7 @@ function didCrossOverlayTrigger(triggerTime, realElapsed) {
         lastOverlayEvalElapsed = 0;
     }
     const previousElapsed = lastOverlayEvalElapsed;
-    return previousElapsed < triggerTime
+    return previousElapsed <= triggerTime
         && realElapsed >= triggerTime
         && realElapsed <= triggerTime + 1.5;
 }
@@ -8815,10 +9239,8 @@ function handleTimeUpdate(player) {
     // procesa con el flujo estándar (pinta el reloj, detecta fin, dispara
     // playNext con transición). Ya no hace falta la rama especial isPlaylistTimeActive.
 
-    let startOffset = 0;
-    if (manualCuesDB[currentPlayingRow.dataset.ruta]) {
-        startOffset = parseFloat(manualCuesDB[currentPlayingRow.dataset.ruta].inicio) || 0;
-    }
+    const physicalTrackPath = currentPhysicalTrackPath || currentPlayingRow.dataset.ruta;
+    const startOffset = Number(currentStartTimeOffset) || 0;
 
     let elapsed = getPlayerClockTime(activePlayer);
     let realElapsed = elapsed - startOffset;
@@ -8864,8 +9286,8 @@ function handleTimeUpdate(player) {
 
     let absTime = elapsed;
     let introTime = 0, outroTime = 0;
-    if (currentPlayingRow && manualCuesDB[currentPlayingRow.dataset.ruta]) {
-        const mc = manualCuesDB[currentPlayingRow.dataset.ruta];
+    if (currentPlayingRow && manualCuesDB[physicalTrackPath]) {
+        const mc = manualCuesDB[physicalTrackPath];
         if (mc.intro) introTime = parseFloat(mc.intro);
         if (mc.outro) outroTime = parseFloat(mc.outro);
     }
@@ -8964,63 +9386,49 @@ function handleTimeUpdate(player) {
         }
     }
 
-    if (currentPlayingRow && manualCuesDB[currentPlayingRow.dataset.ruta]) {
-        const mc = manualCuesDB[currentPlayingRow.dataset.ruta];
-
-        // GUARDIA: No disparar pisadores en los primeros 0.5s de la canciÃ³n
-        // para evitar que un cÃ¡lculo negativo mal ajustado por startOffset force un disparo inmediato.
-        if (realElapsed >= 0.5) {
-            [1, 2, 3].forEach(i => {
-                if (mc[`p${i}_active`] && mc[`p${i}_time`] && mc[`p${i}_file`] && !currentFiredDrops.includes(i)) {
-                    const trigger = resolveTimedOverlayTrigger({
-                        markerTime: mc[`p${i}_time`],
-                        mode: mc[`p${i}_mode`] || 'start',
-                        startOffset,
-                        estimatedDuration: overlayDurationCache.get(mc[`p${i}_file`]) || 0
-                    });
-                    if (trigger) {
-                        const { marker, triggerTime, adjustedMode } = trigger;
-                        if (didCrossOverlayTrigger(triggerTime, realElapsed)) {
-                            currentFiredDrops.push(i);
-                            lastOverlayTriggerInfo = {
-                                type: `p${i}`,
-                                marker,
-                                mode: adjustedMode,
-                                triggerTime,
-                                realElapsed,
-                                at: Date.now()
-                            };
-                            playOverlayDrop(mc[`p${i}_file`]);
-                            logSystem(`[INFO] Pisador ${i} disparado. Marca: ${marker}s, mode: ${adjustedMode}, startOffset: ${startOffset}s, triggerTime: ${triggerTime.toFixed(2)}s, realElapsed: ${realElapsed.toFixed(2)}s`);
-                        }
-                    }
-                }
-            });
-            if (mc.phora_active && mc.phora_time && !currentFiredDrops.includes('phora')) {
-                const trigger = resolveTimedOverlayTrigger({
-                    markerTime: mc.phora_time,
-                    mode: mc.phora_mode || 'start',
-                    startOffset,
-                    estimatedDuration: overlayDurationCache.get('__phora__') || 5
-                });
-                if (trigger) {
-                    const { marker, triggerTime, adjustedMode } = trigger;
-                    if (didCrossOverlayTrigger(triggerTime, realElapsed)) {
-                        currentFiredDrops.push('phora');
-                        lastOverlayTriggerInfo = {
-                            type: 'hora',
-                            marker,
-                            mode: adjustedMode,
-                            triggerTime,
-                            realElapsed,
-                            at: Date.now()
-                        };
-                        playTimeLocution();
-                        logSystem(`[INFO] Locucion Hora disparada. Marca: ${marker}s, mode: ${adjustedMode}, startOffset: ${startOffset}s, triggerTime: ${triggerTime.toFixed(2)}s, realElapsed: ${realElapsed.toFixed(2)}s`);
-                    }
-                }
+    if (preparedOverlaySession?.sessionId === playRowSessionId) {
+        preparedOverlaySession.plans.forEach(plan => {
+            if (!plan.fired && realElapsed > plan.triggerTime + 1.5) {
+                plan.fired = true;
+                logSystem(`[PISADOR] ${plan.id} omitido: la precarga no llego antes de su ventana.`);
+                recordIncident(`[PISADOR] ${plan.id} omitido por precarga tardia.`, { category: 'air', level: 'warn' });
+                return;
             }
-        }
+            if (plan.fired || !didCrossOverlayTrigger(plan.triggerTime, realElapsed)) return;
+            plan.fired = true;
+            lastOverlayTriggerInfo = {
+                type: plan.id,
+                triggerTime: plan.triggerTime,
+                realElapsed,
+                at: Date.now()
+            };
+            if (!shouldRustOwnJingleBus()) {
+                playPreparedOverlayPlanViaWebAudio(plan);
+                return;
+            }
+            registerRustOverlayRuntime({
+                playerId: plan.playerId,
+                path: plan.resolvedPaths.join(' | '),
+                type: 'overlay',
+                affectsProgram: true
+            });
+            commandRustControlPlane('play', { player: plan.playerId }).then(result => {
+                if (!result?.ok) {
+                    finishRustOverlayRuntime(plan.playerId);
+                    logSystem(`[PISADOR] No se pudo disparar ${plan.id}: ${result?.error || 'sin detalle'}`);
+                }
+            }).catch(err => {
+                finishRustOverlayRuntime(plan.playerId);
+                logSystem(`[PISADOR] No se pudo disparar ${plan.id}: ${err.message || err}`);
+            });
+        });
+        preparedOverlaySession.plans.forEach(plan => {
+            if (plan.fired && plan.stopAt !== null && absTime >= plan.stopAt) {
+                stopPreparedWebAudioOverlay(plan);
+                finishRustOverlayRuntime(plan.playerId);
+                plan.stopAt = null;
+            }
+        });
     }
     rememberOverlayEval(realElapsed);
 
@@ -9310,8 +9718,7 @@ async function playClimateLocution(kind) {
 
     const playerId = `climate-${kind}`;
     isJinglePlaying = true;
-    // Registrar el runtime ANTES del comando load (mismo patrón que
-    // playOverlayDropViaRust). Si registramos después del await y la
+    // Registrar el runtime ANTES del comando load. Si registramos despues del await y la
     // locución es muy corta, Rust puede reportar 'ended' antes de que el
     // reconcile sepa que existe → onEnded jamás se llamaba y
     // isJinglePlaying quedaba stuck en true, lo que bloqueaba los
@@ -9409,6 +9816,11 @@ function playTimeLocution() {
 
     let currentIndex = 0; const playJingleSequence = () => { jingleElement.src = url.pathToFileURL(filesToPlay[currentIndex]).href; jingleElement.load(); jingleElement.oncanplay = () => { jingleElement.oncanplay = null; jingleElement.play().catch(e => { }); }; jingleElement.onended = () => { currentIndex++; if (currentIndex < filesToPlay.length) { playJingleSequence(); } else { isJinglePlaying = false; endProgramOverlayDucking(); jingleElement.onended = null; } }; }; playJingleSequence();
     ipcRenderer.send('update-metadata', ICON_CLOCK_LABEL);
+}
+
+function normalizeStreamRetries(value) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.min(20, Math.max(0, parsed)) : 3;
 }
 
 /**
@@ -9948,9 +10360,12 @@ setInterval(() => {
 
 function drawMainMarkers(filePath, duration, startOffset) {
     const container = document.getElementById('panel-aire'); if (!container) return; container.querySelectorAll('.main-marker, .main-marker-lbl').forEach(e => e.remove()); if (!manualCuesDB[filePath]) return; const mc = manualCuesDB[filePath];
-    const markers = [{ active: mc.p1_active, time: mc.p1_time, lbl: 'P1', color: '#9b59b6' }, { active: mc.p2_active, time: mc.p2_time, lbl: 'P2', color: '#9b59b6' }, { active: mc.p3_active, time: mc.p3_time, lbl: 'P3', color: '#9b59b6' }, { active: mc.phora_active, time: mc.phora_time, lbl: 'HORA', color: '#2ecc71' }, { active: (mc.mix !== undefined && mc.mix !== ''), time: mc.mix, lbl: 'MIX', color: '#00a8ff' }];
+    const markers = [
+        ...PISADOR_IDS.map(id => ({ active: mc[`${id}_active`], time: mc[`${id}_time`], lbl: id.toUpperCase(), color: '#9b59b6' })),
+        { active: (mc.mix !== undefined && mc.mix !== ''), time: mc.mix, lbl: 'MIX', color: '#00a8ff' }
+    ];
     const waveCanvas = document.getElementById('waveform-canvas'); if (!waveCanvas) return; const w = waveCanvas.offsetWidth; let endT = mc.fin ? parseFloat(mc.fin) : duration; let realDuration = endT - startOffset; if (realDuration <= 0) realDuration = duration;
-    markers.forEach(m => { if (m.active && m.time !== undefined && m.time !== '') { let t = parseFloat(m.time) - startOffset; if (t >= 0 && t <= realDuration) { let px = (t / realDuration) * w; const line = document.createElement('div'); line.className = 'main-marker'; line.style.cssText = `position: absolute; top: 0; height: calc(100% - 44px); width: 1px; border-left: 2px dashed ${m.color}; z-index: 5; pointer-events: none; left: ${px}px;`; const lbl = document.createElement('div'); lbl.className = 'main-marker-lbl'; lbl.style.cssText = `position: absolute; top: 5px; font-size: 10px; font-family: Consolas; font-weight: bold; background: ${m.color}; color: #000; padding: 1px 4px; border-radius: 2px; z-index: 5; pointer-events: none; left: ${px + 3}px;`; lbl.innerText = m.lbl; container.appendChild(line); container.appendChild(lbl); } } });
+    markers.forEach(m => { const markerTime = parseFloat(m.time); if (m.active && Number.isFinite(markerTime)) { let t = markerTime - startOffset; if (t >= 0 && t <= realDuration) { let px = (t / realDuration) * w; const line = document.createElement('div'); line.className = 'main-marker'; line.style.cssText = `position: absolute; top: 0; height: calc(100% - 44px); width: 1px; border-left: 2px dashed ${m.color}; z-index: 5; pointer-events: none; left: ${px}px;`; const lbl = document.createElement('div'); lbl.className = 'main-marker-lbl'; lbl.style.cssText = `position: absolute; top: 5px; font-size: 10px; font-family: Consolas; font-weight: bold; background: ${m.color}; color: #000; padding: 1px 4px; border-radius: 2px; z-index: 5; pointer-events: none; left: ${px + 3}px;`; lbl.innerText = m.lbl; container.appendChild(line); container.appendChild(lbl); } } });
 }
 
 async function drawWaveform(filePath) {
@@ -10038,6 +10453,8 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         return;
     }
     playRowSessionId++;
+    clearPreparedOverlaySession();
+    currentPhysicalTrackPath = '';
     const currentSessionId = playRowSessionId;
     const previousPlayingRow = currentPlayingRow;
     if (previousPlayingRow !== tr) repeatTrackFinishCount = 0;
@@ -10222,10 +10639,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 stopActiveRustTimeLocution();
             }
         }
-        currentStartTimeOffset = 0; currentFiredDrops = []; lastOverlayEvalSessionId = currentSessionId; lastOverlayEvalElapsed = 0; let manualFin = null;
-        // Precalentar duraciones de pisadores para que "Termina en" funcione
-        overlayDurationCache.clear();
-        if (manualCuesDB[tr.dataset.ruta]) precachePisadorDurations(manualCuesDB[tr.dataset.ruta]);
+        currentStartTimeOffset = 0; lastOverlayEvalSessionId = currentSessionId; lastOverlayEvalElapsed = 0; let manualFin = null;
         const savedResumeStart = parseFloat(tr.dataset.resumeStart || '');
         const resumeStart = type === 'normal' && Number.isFinite(savedResumeStart) && savedResumeStart > 0.25 ? savedResumeStart : null;
         delete tr.dataset.resumeStart;
@@ -10646,6 +11060,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             schedulePlayNextAfterFailure(isAutoMix);
             return;
         }
+        currentPhysicalTrackPath = rutaFisica;
+        prepareCurrentOverlaySession(tr, rutaFisica, currentStartTimeOffset).catch(err => {
+            logSystem(`[PISADOR] No se pudo preparar la sesion: ${err.message || err}`);
+        });
         calcularHorasPlaylist(); updateNextTrackVisuals();
         setPlayerPlaybackMeta(activePlayer, {
             row: tr,
@@ -10869,6 +11287,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                     `fuente=${rustTransitionPlan.settingsSource}, mix=${rustTransitionPlan.mixSource}, ` +
                     `fadeIn=${rustTransitionPlan.fadeInSeconds}s, gain=${rustTransitionPlan.targetGain.toFixed(3)}`);
                 logSystem(`${ICON_AIR_PREFIX} ${nombreMostrar} (Rust, deck=${nextPlayerId})`);
+                registerTrackPlaybackOnce(tr, rutaFisica, nombreMostrar);
                 return;
             } catch (err) {
                 refreshAirIncidentStatus();
@@ -10934,6 +11353,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
                 publishRustTransport({ force: true });
                 scheduleAirWaveform(rutaFisica, currentSessionId);
                 logSystem(`Sonando: ${nombreMostrar}`);
+                registerTrackPlaybackOnce(tr, rutaFisica, nombreMostrar);
             }).catch(err => { refreshAirIncidentStatus(); haltPlaybackOnFatalError(`No se pudo reproducir: ${nombreMostrar}. ${err?.message || ''}`.trim()); });
         };
         const targetMediaUrl = url.pathToFileURL(rutaFisica).href;
@@ -11123,7 +11543,8 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
     const stopPolicy        = tr.dataset.stopPolicy || 'manual';
     const stopSeconds       = parseInt(tr.dataset.stopSeconds, 10) || 0;
     const connectTimeoutSec = Math.max(2, parseInt(tr.dataset.connectTimeoutSec, 10) || 10);
-    const maxRetries        = Math.max(0, parseInt(tr.dataset.maxRetries, 10) || 3);
+    const maxRetries        = normalizeStreamRetries(tr.dataset.maxRetries);
+    const prebufferSeconds  = Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5));
     const metaMode          = tr.dataset.metadataMode || 'icy';
     const customMeta        = tr.dataset.customMetadata || displayName;
 
@@ -11161,7 +11582,7 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
         if (txtT) { txtT.innerText = '00:00.0'; txtT.classList.remove('time-warning-blue','time-warning-red','time-flash'); }
     } catch (_) {}
 
-    logSystem(`[AIRE] Iniciando retransmisión: ${displayName} — timeout ${connectTimeoutSec}s, reintentos ${maxRetries}`);
+    logSystem(`[AIRE] Iniciando retransmisión: ${displayName} — timeout ${connectTimeoutSec}s, reintentos ${maxRetries}, prebuffer ${prebufferSeconds}s`);
 
     let result;
     try {
@@ -11169,7 +11590,8 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
             url,
             playerId: STREAM_LIVE_PLAYER_ID,
             displayName,
-            maxRetries
+            maxRetries,
+            prebufferSeconds
         });
     } catch (err) {
         recordIncident(`[STREAM] Error IPC: ${err.message || err}`, { category: 'air', level: 'error', autoAction: false });
@@ -11296,6 +11718,8 @@ function skipToNextTrack() {
 
 function stopAll() {
     clearPlaybackFatalHalt();
+    clearPreparedOverlaySession();
+    currentPhysicalTrackPath = '';
     playbackHoldByUser = false;
     const preservedQueuedNextRow = (queuedNextRow && document.body.contains(queuedNextRow))
         ? queuedNextRow
@@ -11449,10 +11873,7 @@ window.addEventListener('keydown', (e) => {
         clipboardData.forEach(item => {
             const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre));
             const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody);
-            if (newTr && item.temp) newTr.dataset.temp = 'true';
-            if (newTr && item.type === 'note' && item.noteText) newTr.dataset.noteText = item.noteText;
-            if (newTr && item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) newTr.dataset.targetTab = parseInt(item.targetTab, 10);
-            if (newTr && item.type === 'execute_event') { newTr.dataset.eventId = item.eventId || item.ruta || ''; newTr.dataset.eventName = item.eventName || rowName || ''; }
+            applyClipboardPlaylistMetadata(newTr, item, rowName);
             targetRow = newTr;
         });
         if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; }
@@ -13117,6 +13538,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
     const secsField    = document.getElementById('add-stream-seconds-field');
     const timeoutField   = document.getElementById('add-stream-timeout');
     const retriesField   = document.getElementById('add-stream-retries');
+    const prebufferField = document.getElementById('add-stream-prebuffer');
     const metaModeSelect = document.getElementById('add-stream-meta-mode');
     const metaCustomInput = document.getElementById('add-stream-meta-custom');
     // Mostrar/ocultar campo personalizado según selección del dropdown
@@ -13146,6 +13568,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
         secsField.value    = secs % 60;
         if (timeoutField)   timeoutField.value   = prefill.connectTimeoutSec != null ? prefill.connectTimeoutSec : 5;
         if (retriesField)   retriesField.value   = prefill.maxRetries != null ? prefill.maxRetries : 3;
+        if (prebufferField) prebufferField.value = prefill.prebufferSeconds != null ? prefill.prebufferSeconds : 5;
         if (metaModeSelect) { metaModeSelect.value = prefill.metadataMode || 'icy'; }
         if (metaCustomInput) {
             metaCustomInput.value   = prefill.customMetadata || '';
@@ -13208,13 +13631,14 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
               + (parseInt(secsField.value, 10) || 0)
             : 0;
         const connectTimeoutSec = Math.max(2, parseInt(timeoutField?.value, 10) || 5);
-        const maxRetries = Math.max(0, parseInt(retriesField?.value, 10) || 3);
+        const maxRetries = normalizeStreamRetries(retriesField?.value);
+        const prebufferSeconds = Math.min(15, Math.max(1, parseInt(prebufferField?.value, 10) || 5));
         const metadataMode   = metaModeSelect?.value || 'icy';
         const customMetadata = (metadataMode === 'custom') ? (metaCustomInput?.value.trim() || displayName) : '';
 
         if (_editCallback) {
             // Modo edición: devolver valores al caller
-            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, metadataMode, customMetadata });
+            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, prebufferSeconds, metadataMode, customMetadata });
             closeModal();
             return;
         }
@@ -13227,6 +13651,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
             newRow.dataset.stopSeconds      = String(stopSeconds);
             newRow.dataset.connectTimeoutSec = String(connectTimeoutSec);
             newRow.dataset.maxRetries       = String(maxRetries);
+            newRow.dataset.prebufferSeconds = String(prebufferSeconds);
             newRow.dataset.metadataMode     = metadataMode;
             newRow.dataset.customMetadata   = customMetadata;
             if (stopPolicy === 'timer' && stopSeconds > 0) {

@@ -11,14 +11,27 @@
             font-family: 'Segoe UI', Tahoma, Geneva, sans-serif;
             background-color: #1a1a1c;
             color: #e0e0e0;
-            height: 100vh;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            overflow: hidden;
+            justify-content: flex-start;
+            padding: 20px 0;
+            overflow-y: auto;
+            overflow-x: hidden;
             user-select: none;
             -webkit-user-select: none;
+        }
+
+        body::-webkit-scrollbar {
+            width: 6px;
+        }
+        body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        body::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
         }
 
         .card {
@@ -26,7 +39,8 @@
             border: 1px solid #333;
             border-radius: 8px;
             padding: 28px 32px 24px;
-            width: 360px;
+            width: 420px;
+            margin: auto;
             text-align: center;
             animation: fadeIn 0.25s ease;
         }
@@ -157,6 +171,73 @@
         }
         .link-btn:hover .arrow { color: #00a8ff; }
 
+        /* Dependencias */
+        .deps-details {
+            margin-top: 15px;
+            text-align: left;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid #333;
+            border-radius: 5px;
+            overflow: hidden;
+            width: 100%;
+        }
+        .deps-summary {
+            font-size: 11px;
+            color: #aaa;
+            padding: 8px 10px;
+            cursor: pointer;
+            user-select: none;
+            font-weight: 600;
+            outline: none;
+            transition: background 0.15s, color 0.15s;
+        }
+        .deps-summary:hover {
+            color: #00a8ff;
+            background: #333;
+        }
+        .deps-list {
+            padding: 10px;
+            max-height: 180px;
+            overflow-y: auto;
+            border-top: 1px solid #333;
+            font-size: 10.5px;
+            color: #ccc;
+            line-height: 1.4;
+            background: #1a1a1c;
+        }
+        .deps-list::-webkit-scrollbar { width: 5px; }
+        .deps-list::-webkit-scrollbar-track { background: transparent; }
+        .deps-list::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+        
+        .dep-item {
+            margin-bottom: 10px;
+        }
+        .dep-item:last-child {
+            margin-bottom: 0;
+        }
+        .dep-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 3px;
+        }
+        .dep-name {
+            font-weight: bold;
+            color: #00a8ff;
+            font-size: 11.5px;
+        }
+        .dep-license {
+            font-size: 9px;
+            color: #888;
+            background: #2a2a2e;
+            padding: 2px 5px;
+            border-radius: 4px;
+            margin-left: 8px;
+            border: 1px solid #444;
+        }
+        .dep-desc {
+            color: #aaa;
+        }
+
         /* Footer */
         .footer {
             margin-top: 16px;
@@ -197,7 +278,66 @@
                 <span class="label">Grupo de la comunidad (Telegram)</span>
                 <span class="arrow">↗</span>
             </button>
+            <button class="link-btn" id="btn-paypal">
+                <span class="icon">☕</span>
+                <span class="label">Apóyame (Donar por PayPal)</span>
+                <span class="arrow">↗</span>
+            </button>
         </div>
+
+        <details class="deps-details">
+            <summary class="deps-summary">Librerías de código abierto utilizadas</summary>
+            <div class="deps-list">
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">electron</span><span class="dep-license">MIT</span></div>
+                    <div class="dep-desc">Framework principal que permite construir y ejecutar la aplicación de radio en el escritorio utilizando tecnologías web.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">electron-builder</span><span class="dep-license">MIT</span></div>
+                    <div class="dep-desc">Herramienta para empaquetar y generar los instaladores de la aplicación listos para su distribución.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">@electron/rebuild</span><span class="dep-license">MIT</span></div>
+                    <div class="dep-desc">Recompila módulos nativos de Node.js para asegurar su compatibilidad con la versión interna de Node que usa Electron.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">better-sqlite3</span><span class="dep-license">MIT</span></div>
+                    <div class="dep-desc">Librería rápida para SQLite3. Maneja la base de datos local (catálogos de canciones, pautas y horarios).</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">ffmpeg-static</span><span class="dep-license">GPL-3.0</span></div>
+                    <div class="dep-desc">Binarios precompilados de FFmpeg. Se utiliza para el procesamiento y análisis técnico de los archivos de audio.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">fuse.js</span><span class="dep-license">Apache-2.0</span></div>
+                    <div class="dep-desc">Librería de búsqueda aproximada. Permite buscar rápidamente pistas, artistas o álbumes en la biblioteca.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">node-id3</span><span class="dep-license">MIT</span></div>
+                    <div class="dep-desc">Lector y editor de metadatos. Extrae la información de las etiquetas ID3 (título, artista, etc.) de los audios.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">cpal (Rust)</span><span class="dep-license">Apache-2.0</span></div>
+                    <div class="dep-desc">Librería de entrada/salida de audio. Interfaz de bajo nivel con las tarjetas de sonido del sistema.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">rodio (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
+                    <div class="dep-desc">Librería principal de reproducción de audio. Maneja decodificación, mezcla y envío al canal de audio.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">libc (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
+                    <div class="dep-desc">Enlaces directos a funciones fundamentales del sistema operativo (usado para leer el reloj nativo).</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">rtrb (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
+                    <div class="dep-desc">Estructura de memoria rápida (ring buffer) para transferir audio entre hilos sin interrupciones.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">base64 (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
+                    <div class="dep-desc">Permite codificar bloques de audio en texto plano para transmitirlos rápidamente hacia la interfaz.</div>
+                </div>
+            </div>
+        </details>
 
         <div class="footer">Motor de audio Rust &nbsp;·&nbsp; Construido con Electron</div>
     </div>
@@ -217,6 +357,9 @@
         });
         document.getElementById('btn-telegram-group').addEventListener('click', () => {
             shell.openExternal('https://t.me/+bXppwWvJvSg5YjNh');
+        });
+        document.getElementById('btn-paypal').addEventListener('click', () => {
+            shell.openExternal('https://www.paypal.com/donate/?hosted_button_id=TSBS3RQ88MRBQ');
         });
 
         document.addEventListener('keydown', (e) => {

@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>LF Automatizador v0.9.11-beta.3</title>
+    <title>LF Automatizador v0.9.12-beta.7</title>
     <link rel="stylesheet" href="style.css">
     <style>
         .fx-module {
@@ -482,8 +482,10 @@
                 <div class="context-item" id="pm-advanced-edit" style="color: #00a8ff;">🎧 Editor de Pistas Avanzado</div>
                 <div class="context-item" id="pm-transition-edit" style="color: #2ecc71;">🔀 Editar Transición Musical</div>
                 <div class="context-item" id="pm-jingle-edit" style="color: #f39c12;">🎙️ Editar Cruce con Pisador</div>
+                <div class="context-item" id="pm-auto-pisador" style="color: #b56ad9;">Pisadores automaticos...</div>
                 <div class="context-separator"></div>
-                <div class="context-item" id="pm-edit-name">Editar nombre simple...</div>
+                <div class="context-item" id="pm-edit-name">Editar archivo y metadatos...</div>
+                <div class="context-item" id="pm-show-folder">Mostrar en carpeta</div>
                 <div class="context-item has-submenu" id="pm-set-type">
                     <span style="display: flex; justify-content: space-between;">Establecer tipo de archivo <span>▶</span></span>
                     <div class="submenu" id="pm-type-list" style="max-height: 250px; overflow-y: auto;"></div>
@@ -555,6 +557,43 @@
     </div>
 
     <div id="cw-profile-menu" class="context-menu" style="display: none; z-index: 3000;"></div>
+
+    <div id="auto-pisador-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="width: 430px; display:flex; flex-direction:column; gap:10px;">
+            <h3 style="margin:0; color:#b56ad9;">Pisador automatico</h3>
+            <label style="font-size:12px; color:#aaa;">Origen</label>
+            <select id="auto-pisador-source-kind" class="dark-select">
+                <option value="file">Archivo especifico</option>
+                <option value="folder">Carpeta aleatoria</option>
+                <option value="time">Locucion de hora</option>
+                <option value="temperature">Temperatura</option>
+                <option value="humidity">Humedad</option>
+            </select>
+            <div id="auto-pisador-path-row" style="display:flex; gap:6px;">
+                <input id="auto-pisador-source-path" class="settings-input" style="flex:1;" readonly>
+                <button id="auto-pisador-browse" class="settings-btn">...</button>
+            </div>
+            <label style="font-size:12px; color:#aaa;">Inicia en <input id="auto-pisador-start" class="settings-input" type="number" min="0" step="0.01" value="0" style="width:80px;"> segundos</label>
+            <div id="auto-pisador-loaded-scope" style="font-size:11px; color:#9aa6b2;"></div>
+            <label style="font-size:12px; color:#aaa;">Editor Avanzado</label>
+            <select id="auto-pisador-advanced-policy" class="dark-select">
+                <option value="respect">Respetar pisadores del Editor Avanzado</option>
+                <option value="ignore">Ignorar pisadores del Editor Avanzado</option>
+            </select>
+            <div id="auto-pisador-scope-row" style="display:flex; flex-direction:column; gap:6px;">
+                <label style="font-size:12px; color:#aaa;">Aplicar regla</label>
+                <select id="auto-pisador-scope" class="dark-select">
+                    <option value="row">Solo esta fila de playlist</option>
+                    <option value="path">Cada vez que se vuelva a anadir esta carpeta aleatoria</option>
+                </select>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+                <button id="auto-pisador-clear" class="settings-btn" style="margin-right:auto;">Eliminar</button>
+                <button id="auto-pisador-cancel" class="settings-btn" style="background:#444;">Cancelar</button>
+                <button id="auto-pisador-save" class="settings-btn" style="background:#27ae60;">Guardar</button>
+            </div>
+        </div>
+    </div>
 
     <div id="playlist-note-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content playlist-note-modal-content">
@@ -836,7 +875,7 @@
             </div>
 
             <!-- Configuración avanzada -->
-            <div style="display:flex; gap:16px; align-items:center; background:#1a1a1c; border-radius:4px; padding:10px 12px;">
+            <div style="display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap; background:#1a1a1c; border-radius:4px; padding:10px 12px;">
                 <span style="font-size:11px; color:#888;">⚙ Avanzado:</span>
                 <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
                     Espera conexión
@@ -849,6 +888,13 @@
                     <input id="add-stream-retries" type="number" min="0" max="20" value="3"
                         style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
                 </label>
+                <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
+                    Prebuffer
+                    <input id="add-stream-prebuffer" type="number" min="1" max="15" value="5"
+                        style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
+                    <span style="color:#666; font-size:11px;">s</span>
+                </label>
+                <span style="width:100%; color:#888; font-size:11px;">Más estabilidad puede causar mayor demora al iniciar.</span>
             </div>
 
             <!-- Botones -->

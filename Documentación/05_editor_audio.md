@@ -125,14 +125,14 @@ Este fieldset contiene los 5 marcadores de tiempo fundamentales de la automatiza
 
 ### 4. Fieldset — Pisadores (Eventos sobre pista)
 
-Los "pisadores" son eventos de audio secundario que se disparan sobre la canción principal en momentos específicos. Hay 3 pisadores generales (P1, P2, P3) y un pisador especial de hora (⌚).
+Los "pisadores" son eventos de audio secundario que se disparan sobre la canción principal en momentos específicos. Hay cuatro pisadores uniformes (`P1` a `P4`). Cada uno puede usar un archivo específico, una carpeta aleatoria o una locución automática de hora, temperatura o humedad.
 
-#### Pisadores P1, P2, P3 (patrón repetido × 3)
+#### Pisadores P1, P2, P3 y P4 (patrón repetido × 4)
 | Pregunta | Respuesta |
 |---|---|
-| 🧩 **Quién** | Bloque de controles con etiqueta coloreada en morado (P1, P2, P3) |
+| 🧩 **Quién** | Bloque de controles con etiqueta coloreada en morado (`P1`, `P2`, `P3`, `P4`) |
 | ⚡ **Qué** | Define un evento de audio secundario (jingle, cuña, ID de radio) que se reproduce sobre la canción en un tiempo específico |
-| ⏱️ **Cuándo** | Solo activo si tiene un tiempo (`cue-p1/p2/p3`) mayor a 0 y un archivo de audio asignado |
+| ⏱️ **Cuándo** | Solo activo si tiene una condición válida y un origen asignado |
 | 📍 **Dónde** | El evento se ejecuta durante la reproducción automática según el modo seleccionado |
 | 💡 **Por qué** | Permite programar jingles, cuñas o identificativos de la estación que se reproducen automáticamente en momentos predeterminados de la canción |
 
@@ -140,22 +140,18 @@ Los "pisadores" son eventos de audio secundario que se disparan sobre la canció
 
 | Control | ID | Acción |
 |---|---|---|
-| Selector de Modo | `#mode-p1/p2/p3` | `"Inicia en"`: el pisador comienza en el tiempo marcado. `"Termina en"`: el pisador termina exactamente en ese tiempo (sincronía hacia atrás). |
-| Input de tiempo | `#cue-p1/p2/p3` | Tiempo en segundos (readonly, se fija con botón) |
+| Selector de condición | `#condition-p1/p2/p3/p4` | En este orden: `"Inicia en"`, `"Termina en"`, `"Termina en Intro"` e `"Inicia en Outro"`. Solo se elige una condición por pisador. |
+| Input de tiempo | `#cue-p1/p2/p3/p4` | Tiempo manual en segundos. Se oculta en anclajes dinámicos. |
 | Botón "Fijar" | — | Captura tiempo actual del cursor |
-| Botón "▶" | — | Salta a ese tiempo para previsualizar |
 | Botón "X" | — | Limpia el tiempo (desactiva el pisador) |
-| Input de archivo | `#file-p1/p2/p3` | Ruta del archivo de audio secundario (readonly) |
-| Botón "..." | — | Abre diálogo de selección de archivo de audio. Filtra por `audio/*`. Llama a `browsePisador(id)`. |
+| Selector de origen | `#source-kind-p1/p2/p3/p4` | Archivo específico, carpeta aleatoria, locución de hora, temperatura o humedad |
+| Input de ruta | `#file-p1/p2/p3/p4` | Ruta readonly para archivo o carpeta. Se oculta para locuciones automáticas. |
+| Botón "..." | — | Abre diálogo de archivo o carpeta según el origen seleccionado. Llama a `browsePisador(id)`. |
+| Botón de engranaje | — | Abre la seguridad del pisador: cancelar con aviso, truncar al llegar al Intro o permitir superposición si ningún audio cabe. |
 
-#### Pisador de Hora (`⌚` — `#cue-phora`, `#mode-phora`)
-| Pregunta | Respuesta |
-|---|---|
-| 🧩 **Quién** | Bloque especial con etiqueta verde "⌚:" |
-| ⚡ **Qué** | Pisador especial de sincronía horaria — define un momento en la canción donde el sistema puede ejecutar la hora exacta en el reloj de la estación |
-| ⏱️ **Cuándo** | Igual que los pisadores P, pero sin campo de archivo (no tiene `#file-phora`). Solo define tiempo + modo. |
-| 📍 **Dónde** | La lógica de sincronía horaria usa este marcador para saber en qué momento la canción "entrega" el control al reloj |
-| 💡 **Por qué** | Fundamental para emisoras con horario exacto. Permite que una canción termine exactamente cuando el reloj marca la hora en punto, sin silencio ni corte brusco |
+Los anclajes dinámicos usan los marcadores de la pista en tiempo real. Si se elige `"Termina en Intro"` sin marcador Intro, o `"Inicia en Outro"` sin marcador Outro, el editor muestra una advertencia y bloquea el guardado hasta que el marcador exista.
+
+Cuando el origen es una carpeta aleatoria, el automatizador elige un archivo concreto al preparar la canción, mide ese mismo archivo y lo precarga sin autoplay. Al repetir o volver a cargar la pista se realiza un sorteo nuevo.
 
 ---
 
@@ -183,11 +179,11 @@ La forma de onda es un sistema de doble canvas (capa base + capa overlay) que pe
 - Superpuesta sobre el canvas base (z-index 2)
 - Dibuja los 9 marcadores como líneas verticales punteadas con etiquetas de texto
 - Colores de marcadores:
-  - Verde: INICIO, HORA
+  - Verde: INICIO
   - Amarillo: INTRO
   - Azul: MIX
   - Rojo: OUTRO, FIN
-  - Morado: P1, P2, P3
+  - Morado: P1, P2, P3, P4
 
 **Cursor de reproducción (`#ae-cursor`):**
 - Línea vertical roja de 1px (z-index 3)
@@ -439,7 +435,7 @@ Este archivo implementó el enrutamiento de audio del editor cuando usaba el mot
 | `ipcRenderer.invoke('get-cache-dir')` | Comando Tauri `get_cache_dir` → `tauri::api::path::cache_dir()` + subdirectorio de la app. |
 | Canvas de forma de onda | Se mantiene en el frontend (Tauri usa WebView). El render canvas/2D es nativo del navegador embebido. No requiere cambios en la lógica de dibujo. |
 | `localStorage` (estado del acordeón) | `tauri-plugin-store` o `localStorage` (disponible en WebView de Tauri). |
-| `window.browsePisador` / input[type=file] | Diálogo de archivo Tauri: `dialog::open()` filtrado por `audio/*`. Más robusto que el input HTML. |
+| `window.browsePisador` | Diálogo Tauri de archivo o carpeta según el origen seleccionado. |
 | `editor_audio_output.js` | **Eliminar completamente.** El motor Rust maneja el enrutamiento de audio. |
 
 ---

@@ -8,7 +8,12 @@ const test = require('node:test');
 const vm = require('vm');
 
 const rootDir = path.join(__dirname, '..');
-const { StreamProxy } = require('../backend/stream_proxy');
+const {
+    StreamProxy,
+    PCM_BYTES_PER_SECOND,
+    normalizePrebufferSeconds,
+    ringBufferSecondsForPrebuffer,
+} = require('../backend/stream_proxy');
 
 function extractFunction(source, name) {
     const start = source.indexOf(`function ${name}(`);
@@ -182,6 +187,20 @@ test('playNextAfterFailedStream stops cleanly when loop resolves back to the onl
     assert.strictEqual(stopped, true);
 });
 
+test('stream prebuffer defaults to five seconds and clamps the supported range', () => {
+    assert.strictEqual(normalizePrebufferSeconds(), 5);
+    assert.strictEqual(normalizePrebufferSeconds('8'), 8);
+    assert.strictEqual(normalizePrebufferSeconds(0), 1);
+    assert.strictEqual(normalizePrebufferSeconds(20), 15);
+    assert.strictEqual(normalizePrebufferSeconds('not-a-number'), 5);
+});
+
+test('Rust ring capacity grows proportionally with the selected prebuffer', () => {
+    assert.strictEqual(ringBufferSecondsForPrebuffer(1), 2);
+    assert.strictEqual(ringBufferSecondsForPrebuffer(5), 7);
+    assert.strictEqual(ringBufferSecondsForPrebuffer(15), 20);
+});
+
 test('stream IPC stops a terminal proxy before removing it from active streams', async () => {
     const streamProxyPath = require.resolve('../backend/stream_proxy');
     const ipcPath = require.resolve('../backend/ipc/stream');
@@ -195,8 +214,10 @@ test('stream IPC stops a terminal proxy before removing it from active streams',
             FakeStreamProxy.instances.push(this);
         }
 
-        start(_url, playerId) {
+        start(_url, playerId, maxRetries, prebufferSeconds) {
             this.playerId = playerId;
+            this.maxRetries = maxRetries;
+            this.prebufferSeconds = prebufferSeconds;
         }
 
         stop() {
@@ -210,7 +231,7 @@ test('stream IPC stops a terminal proxy before removing it from active streams',
         id: streamProxyPath,
         filename: streamProxyPath,
         loaded: true,
-        exports: { StreamProxy: FakeStreamProxy },
+        exports: { StreamProxy: FakeStreamProxy, normalizePrebufferSeconds },
     };
     delete require.cache[ipcPath];
 
@@ -230,10 +251,12 @@ test('stream IPC stops a terminal proxy before removing it from active streams',
             url: 'https://example.invalid/radio',
             playerId: 'stream-live',
             displayName: 'Radio test',
+            prebufferSeconds: 12,
         });
         await new Promise(resolve => setImmediate(resolve));
         assert.strictEqual(result.success, true);
         const proxy = FakeStreamProxy.instances[0];
+        assert.strictEqual(proxy.prebufferSeconds, 12);
 
         proxy.emit('status', 'error');
 
@@ -277,7 +300,7 @@ test('stream IPC starts only the newest proxy when two requests reserve the same
         id: streamProxyPath,
         filename: streamProxyPath,
         loaded: true,
-        exports: { StreamProxy: FakeStreamProxy },
+        exports: { StreamProxy: FakeStreamProxy, normalizePrebufferSeconds },
     };
     delete require.cache[ipcPath];
 
@@ -366,6 +389,34 @@ test('StreamProxy ignores PCM that arrives after stop', () => {
 
     assert.deepStrictEqual(commands, []);
     assert.deepStrictEqual(sends, [{ cmd: 'stream_stop', player: 'stream-live' }]);
+});
+
+test('StreamProxy waits for the configured prebuffer and tells Rust its proportional capacity', () => {
+    const { proxy, processes, commands, sends } = makeProxyHarness();
+    proxy.start('https://example.invalid/radio', 'stream-live', 3, 5);
+    processes[0].stdout.emit('data', Buffer.alloc((PCM_BYTES_PER_SECOND * 5) - 1));
+
+    assert.deepStrictEqual(commands, []);
+
+    processes[0].stdout.emit('data', Buffer.alloc(1));
+
+    assert.deepStrictEqual(commands, [{
+        cmd: 'stream_start',
+        player: 'stream-live',
+        bus: 'master',
+        sampleRate: 44100,
+        channels: 2,
+        gain: 1.0,
+        ringBufferSeconds: 7,
+    }]);
+    assert.strictEqual(sends.at(-1)?.cmd, 'stream_play');
+    proxy.stop();
+});
+
+test('Rust prepares a URL stream paused and only plays after Node primes the ring buffer', () => {
+    const source = fs.readFileSync(path.join(rootDir, 'audio-engine-rust', 'src', 'main.rs'), 'utf8');
+    assert.match(source, /"stream_start"[\s\S]*player\.pause\(\)/);
+    assert.match(source, /"stream_play"\s*=>[\s\S]*player\.play\(\)/);
 });
 
 test('StreamProxy ignores close from an obsolete FFmpeg process', () => {
@@ -464,4 +515,38 @@ test('renderer treats RustAudio timeouts as infrastructure incidents instead of 
     assert.match(source, /text\.includes\('proceso rustaudio detenido'\)/);
     assert.match(source, /if \(!result\?\.ok\) \{\s*if \(isRustInfrastructureFailure\(result\?\.error\)\) \{\s*recoverRustAudioAfterInfrastructureFailure\(tr, result\.error\);/);
     assert.ok((source.match(/recoverRustAudioAfterInfrastructureFailure\(tr, result\.error\);/g) || []).length >= 2);
+});
+
+test('stream URL modal exposes a per-row prebuffer with its startup-delay warning', () => {
+    const html = fs.readFileSync(path.join(rootDir, 'frontend', 'index.html'), 'utf8');
+    assert.match(html, /id="add-stream-prebuffer"/);
+    assert.match(html, /id="add-stream-prebuffer"[^>]*min="1"[^>]*max="15"[^>]*value="5"/);
+    assert.match(html, /estabilidad.+demora|demora.+estabilidad/i);
+});
+
+test('renderer persists and forwards the stream URL prebuffer setting', () => {
+    const source = fs.readFileSync(path.join(rootDir, 'frontend', 'render.js'), 'utf8');
+    assert.match(source, /prebufferSeconds:\s*row\.dataset\.prebufferSeconds/);
+    assert.match(source, /prebufferSeconds:\s*item\.prebufferSeconds/);
+    assert.match(source, /const prebufferSeconds\s*=\s*Math\.min\(15,\s*Math\.max\(1,/);
+    assert.match(source, /prebufferSeconds\s*\n?\s*\}\);/);
+});
+
+test('renderer preserves zero stream retries instead of replacing it with the default', () => {
+    const source = fs.readFileSync(path.join(rootDir, 'frontend', 'render.js'), 'utf8');
+    const helperSource = extractFunction(source, 'normalizeStreamRetries');
+    const context = {};
+    vm.createContext(context);
+    vm.runInContext(helperSource, context);
+
+    assert.strictEqual(context.normalizeStreamRetries(0), 0);
+    assert.strictEqual(context.normalizeStreamRetries('20'), 20);
+    assert.strictEqual(context.normalizeStreamRetries('invalid'), 3);
+});
+
+test('Rust sizes the live PCM ring from the capacity requested by Node', () => {
+    const source = fs.readFileSync(path.join(rootDir, 'audio-engine-rust', 'src', 'main.rs'), 'utf8');
+    assert.match(source, /json_get_u64\(&line,\s*"ringBufferSeconds"\)/);
+    assert.match(source, /ring_buffer_seconds/);
+    assert.match(source, /\*\s*\(ring_buffer_seconds as usize\)/);
 });

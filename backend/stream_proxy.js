@@ -34,15 +34,21 @@ const { EventEmitter } = require('events');
 // Tamaño de chunk PCM enviado a Rust: 20 ms @ 44100 Hz estéreo s16le.
 // 44100 * 2 canales * 2 bytes/muestra * 0.02 s = 3528 bytes.
 const PCM_CHUNK_BYTES = 3528;
+const PCM_BYTES_PER_SECOND = 44100 * 2 * 2;
+const MIN_PREBUFFER_SECONDS = 1;
+const DEFAULT_PREBUFFER_SECONDS = 5;
+const MAX_PREBUFFER_SECONDS = 15;
 
-// Tamaño máximo del buffer interno antes de descartar datos (10 s de audio).
-const MAX_BUFFER_BYTES = 44100 * 2 * 2 * 10;
+function normalizePrebufferSeconds(value = DEFAULT_PREBUFFER_SECONDS) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return DEFAULT_PREBUFFER_SECONDS;
+    return Math.min(MAX_PREBUFFER_SECONDS, Math.max(MIN_PREBUFFER_SECONDS, Math.round(parsed)));
+}
 
-// Pre-buffer: acumulamos este número de bytes ANTES de enviar stream_start a Rust.
-// 1.5 s @ 44100 Hz estéreo s16le = 264 600 bytes. Evita los glitches iniciales
-// causados por el arranque lento del decoder de FFmpeg. Rust arranca con el buffer
-// lleno al 75 % (de los 2 s totales del ring), sin underruns.
-const PRE_BUFFER_BYTES = Math.floor(44100 * 2 * 2 * 1.5); // ~264 600
+function ringBufferSecondsForPrebuffer(value = DEFAULT_PREBUFFER_SECONDS) {
+    const prebufferSeconds = normalizePrebufferSeconds(value);
+    return Math.max(2, Math.ceil(prebufferSeconds * 4 / 3));
+}
 
 class StreamProxy extends EventEmitter {
     /**
@@ -69,6 +75,10 @@ class StreamProxy extends EventEmitter {
         this._startupTimer = null;
         this._retryCount = 0;
         this._maxRetries = 3; // sobreescrito en start()
+        this._prebufferSeconds = DEFAULT_PREBUFFER_SECONDS;
+        this._preBufferBytes = PCM_BYTES_PER_SECOND * DEFAULT_PREBUFFER_SECONDS;
+        this._ringBufferSeconds = ringBufferSecondsForPrebuffer(DEFAULT_PREBUFFER_SECONDS);
+        this._maxBufferBytes = PCM_BYTES_PER_SECOND * (DEFAULT_PREBUFFER_SECONDS + 5);
     }
 
     /** Estado actual ('connecting'|'live'|'reconnecting'|'error'|'stopped'). */
@@ -202,7 +212,7 @@ class StreamProxy extends EventEmitter {
      * @param {string} url       URL del stream de radio.
      * @param {string} playerId  ID del player Rust ('player-a', 'player-b', etc.).
      */
-    start(url, playerId, maxRetries = 3) {
+    start(url, playerId, maxRetries = 3, prebufferSeconds = DEFAULT_PREBUFFER_SECONDS) {
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = null;
         clearTimeout(this._startupTimer);
@@ -217,6 +227,13 @@ class StreamProxy extends EventEmitter {
         this._buffer = Buffer.alloc(0);
         this._retryCount = 0;
         this._maxRetries = maxRetries;
+        this._prebufferSeconds = normalizePrebufferSeconds(prebufferSeconds);
+        this._preBufferBytes = PCM_BYTES_PER_SECOND * this._prebufferSeconds;
+        this._ringBufferSeconds = ringBufferSecondsForPrebuffer(this._prebufferSeconds);
+        this._maxBufferBytes = PCM_BYTES_PER_SECOND * Math.max(
+            this._ringBufferSeconds,
+            this._prebufferSeconds + 5
+        );
         this._setStatus('connecting');
         this._spawn();
     }
@@ -302,8 +319,8 @@ class StreamProxy extends EventEmitter {
         proc.stdout.on('data', (chunk) => {
             if (this._stopping || this._process !== proc) return;
             // Protección contra buffer desbordado
-            if (this._buffer.length + chunk.length > MAX_BUFFER_BYTES) {
-                const excess = (this._buffer.length + chunk.length) - MAX_BUFFER_BYTES;
+            if (this._buffer.length + chunk.length > this._maxBufferBytes) {
+                const excess = (this._buffer.length + chunk.length) - this._maxBufferBytes;
                 this._buffer = this._buffer.slice(excess);
             }
             this._buffer = Buffer.concat([this._buffer, chunk]);
@@ -311,7 +328,7 @@ class StreamProxy extends EventEmitter {
             // Pre-buffer: no enviar a Rust hasta tener suficiente audio acumulado.
             // Esto garantiza que el ring buffer de Rust esté lleno desde el inicio.
             if (!preBufferFull) {
-                if (this._buffer.length < PRE_BUFFER_BYTES) return; // seguir acumulando
+                if (this._buffer.length < this._preBufferBytes) return; // seguir acumulando
                 preBufferFull = true;
                 // Activar el deck en Rust ANTES de enviar los chunks
                 if (this.engine && this._playerId) {
@@ -322,19 +339,18 @@ class StreamProxy extends EventEmitter {
                             bus: 'master',
                             sampleRate: 44100,
                             channels: 2,
-                            gain: 1.0
+                            gain: 1.0,
+                            ringBufferSeconds: this._ringBufferSeconds
                         }).catch(() => {});
                     } catch (_) {}
                 }
-                // Pequeña pausa para que Rust procese stream_start antes de recibir chunks
-                clearTimeout(this._startupTimer);
-                this._startupTimer = setTimeout(() => {
-                    this._startupTimer = null;
-                    if (!this._stopping && this._process === proc) {
-                        this._flushBuffer();
-                        this._setStatus('live'); // ahora sí: tenemos audio estable
-                    }
-                }, 120);
+                // Rust prepara el player pausado. El orden del pipe stdin garantiza
+                // que stream_play llegue despues de todos los chunks precargados.
+                this._flushBuffer();
+                if (this.engine && this._playerId) {
+                    this.engine.send({ cmd: 'stream_play', player: this._playerId });
+                }
+                this._setStatus('live');
                 return;
             }
 
@@ -448,4 +464,9 @@ class StreamProxy extends EventEmitter {
     }
 }
 
-module.exports = { StreamProxy };
+module.exports = {
+    StreamProxy,
+    PCM_BYTES_PER_SECOND,
+    normalizePrebufferSeconds,
+    ringBufferSecondsForPrebuffer,
+};

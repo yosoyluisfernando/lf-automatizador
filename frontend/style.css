@@ -234,6 +234,18 @@ input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: sl
 .reports-events-timeline .event-timeline-item { min-width: 0; }
 .reports-log { padding-top: 10px; }
 
+/* --- Overlay de configuración de reportes (estilos dark) --- */
+#report-settings-overlay input[type="number"],
+#report-settings-overlay select {
+    background: #111; border: 1px solid #444; color: #fff;
+    padding: 5px 6px; border-radius: 4px; font-size: 13px;
+    font-family: 'Segoe UI', sans-serif; outline: none;
+}
+#report-settings-overlay input[type="number"]:focus,
+#report-settings-overlay select:focus { border-color: #00a8ff; }
+#report-settings-overlay input[type="checkbox"] { accent-color: #00a8ff; }
+#report-settings-overlay select { cursor: pointer; }
+
 .rotation-modal-content { width: 820px; max-width: calc(100vw - 60px); max-height: calc(100vh - 50px); display: flex; flex-direction: column; overflow: hidden; }
 .rotation-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.8fr); gap: 14px; margin-top: 15px; }
 .rotation-panel { background: #191b20; border: 1px solid #333941; border-radius: 6px; padding: 12px; min-width: 0; min-height: 0; }

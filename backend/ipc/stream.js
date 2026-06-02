@@ -21,7 +21,7 @@
  * identificar qué proxy controlar cuando hay múltiples decks simultáneos.
  */
 
-const { StreamProxy } = require('../stream_proxy');
+const { StreamProxy, normalizePrebufferSeconds } = require('../stream_proxy');
 
 module.exports = function registerStreamIpc(context) {
     const { ipcMain, ffmpegPath, writeLog, rustAudioEngine } = context;
@@ -66,11 +66,12 @@ module.exports = function registerStreamIpc(context) {
     // ─────────────────────────────────────────────────────────────────────────
     // stream-url-start — iniciar retransmisión de un stream
     // ─────────────────────────────────────────────────────────────────────────
-    ipcMain.handle('stream-url-start', async (_event, { url, playerId, displayName, maxRetries } = {}) => {
+    ipcMain.handle('stream-url-start', async (_event, { url, playerId, displayName, maxRetries, prebufferSeconds } = {}) => {
         if (!url || typeof url !== 'string' || !playerId || typeof playerId !== 'string') {
             return { success: false, error: 'Parámetros inválidos: se requieren url y playerId.' };
         }
         const resolvedMaxRetries = (maxRetries != null && Number.isFinite(Number(maxRetries))) ? Number(maxRetries) : 3;
+        const resolvedPrebufferSeconds = normalizePrebufferSeconds(prebufferSeconds);
 
         // Si ya hay un stream activo en ese playerId, detenerlo primero.
         const previousStreamId = activeStreamByPlayer.get(playerId);
@@ -120,7 +121,7 @@ module.exports = function registerStreamIpc(context) {
         // y son descartados silenciosamente.
         setImmediate(() => {
             if (activeStreams.has(streamId) && activeStreamByPlayer.get(playerId) === streamId) {
-                proxy.start(url.trim(), playerId, resolvedMaxRetries);
+                proxy.start(url.trim(), playerId, resolvedMaxRetries, resolvedPrebufferSeconds);
             }
         });
 

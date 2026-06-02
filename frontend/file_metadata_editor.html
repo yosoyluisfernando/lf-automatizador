@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar archivo y metadatos</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { margin:0; padding:16px; background:#1a1a1c; color:#ddd; font-family:'Segoe UI',sans-serif; box-sizing:border-box; }
+        fieldset { border:1px solid #444; border-radius:5px; padding:14px; background:#222225; }
+        legend { color:#00a8ff; font-weight:bold; }
+        .row { display:flex; gap:8px; align-items:center; margin:10px 0; }
+        .row label { width:100px; font-size:12px; color:#aaa; }
+        input { flex:1; background:#111; color:#fff; border:1px solid #444; border-radius:3px; padding:7px; }
+        .ext { color:#999; min-width:40px; }
+        .actions { display:flex; justify-content:space-between; gap:8px; margin-top:16px; }
+        button { border:1px solid #555; border-radius:3px; padding:8px 12px; color:#fff; background:#333; cursor:pointer; }
+        #btn-save { background:#168f53; } #btn-advanced { background:#1674a8; }
+        #status { min-height:18px; color:#f39c12; font-size:12px; margin-top:8px; }
+    </style>
+</head>
+<body>
+    <fieldset>
+        <legend>Editar archivo y metadatos</legend>
+        <div class="row"><label>Archivo:</label><input id="file-name"><span class="ext" id="file-extension"></span></div>
+        <div class="row"><label>Titulo:</label><input id="meta-title"></div>
+        <div class="row"><label>Artista:</label><input id="meta-artist"></div>
+        <div class="row"><label>Album:</label><input id="meta-album"></div>
+        <div class="row"><label>Genero:</label><input id="meta-genre"></div>
+        <div class="row"><label>Año:</label><input id="meta-year"></div>
+        <div id="status"></div>
+    </fieldset>
+    <div class="actions">
+        <button id="btn-advanced">Editor avanzado...</button>
+        <span style="flex:1"></span>
+        <button id="btn-cancel">Cancelar</button>
+        <button id="btn-save">Guardar</button>
+    </div>
+    <script src="file_metadata_editor.js"></script>
+</body>
+</html>
