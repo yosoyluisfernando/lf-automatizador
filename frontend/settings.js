@@ -1209,3 +1209,17 @@ document.addEventListener('wheel', (e) => {
         input.dispatchEvent(new Event('change', { bubbles: true }));
     }
 }, { passive: false });
+
+const urlParams = new URLSearchParams(window.location.search);
+const initialTab = urlParams.get('tab');
+if (initialTab) {
+    setTimeout(() => {
+        const tabEl = document.querySelector(`[data-target="${initialTab}"]`);
+        if (tabEl) tabEl.click();
+    }, 50);
+}
+
+ipcRenderer.on('switch-tab', (e, targetTab) => {
+    const tabEl = document.querySelector(`[data-target="${targetTab}"]`);
+    if (tabEl) tabEl.click();
+});
