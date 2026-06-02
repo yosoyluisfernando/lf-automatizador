@@ -1,5 +1,5 @@
 @echo off
-title LF Automatizador v0.9.12-beta.4
+title LF Automatizador v0.9.12-beta.5
 cd /d "%~dp0"
 
 echo Iniciando LF Automatizador v0.9.11...
