@@ -50,16 +50,17 @@ test('recent music lookup supports anti-repeat and prune removes expired rows', 
     assert.deepStrictEqual(db.prepare('SELECT file_path FROM playback_history').all(), [{ file_path: '/music/recent.mp3' }]);
 });
 
-test('settings expose separate report and physical-history controls', () => {
+test('incident report exposes separate visual and physical-history controls behind a settings button', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'settings.html'), 'utf8');
-    const js = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'settings.js'), 'utf8');
-    assert.match(html, /id="type-report"/);
-    assert.match(html, /id="type-history"/);
-    assert.match(html, /id="history-retention-days"[^>]*min="1"[^>]*max="366"/);
-    assert.match(html, /id="report-retention-unit"/);
-    assert.match(html, /id="report-persist-on-restart"/);
-    assert.match(js, /historyRetentionDays/);
-    assert.match(js, /historyMusicEnabled/);
+    const reportsHtml = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'reportes.html'), 'utf8');
+    const reportsJs = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'reportes.js'), 'utf8');
+    assert.doesNotMatch(html, /id="history-retention-days"/);
+    assert.match(reportsHtml, /id="btn-report-settings"/);
+    assert.match(reportsHtml, /id="history-retention-days"[^>]*min="1"[^>]*max="366"/);
+    assert.match(reportsHtml, /id="report-retention-unit"/);
+    assert.match(reportsHtml, /id="report-persist-on-restart"/);
+    assert.match(reportsJs, /historyRetentionDays/);
+    assert.match(reportsJs, /historyMusicEnabled/);
 });
 
 test('renderer records physical playback history and breaks an exhausted random-folder rule', () => {

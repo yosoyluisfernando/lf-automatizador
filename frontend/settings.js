@@ -131,9 +131,6 @@ function loadTypeDetails(id) {
     document.getElementById('type-color').value = t.color;
     document.getElementById('type-color').disabled = t.readonly;
     document.getElementById('type-amp').value = t.amp;
-    document.getElementById('type-report').checked = t.report;
-    document.getElementById('type-history').checked = t.history === true;
-    document.getElementById('type-history').disabled = t.voice === true;
     document.getElementById('type-voice').checked = t.voice;
     const delBtn = document.getElementById('btn-del-type');
     if (delBtn) {
@@ -185,8 +182,6 @@ function saveCurrentTypeState() {
                 t.color = document.getElementById('type-color').value;
             }
             t.amp = parseFloat(document.getElementById('type-amp').value) || 0;
-            t.report = document.getElementById('type-report').checked;
-            t.history = document.getElementById('type-history').checked;
             t.voice = document.getElementById('type-voice').checked;
             t.fadeinActive = document.getElementById('chk-fadein').checked;
             t.fadein = parseFloat(document.getElementById('num-fadein').value) || 0;
@@ -696,13 +691,6 @@ document.getElementById('btn-cw-export').addEventListener('click', async () => {
 
 document.getElementById('num-duck-vol').value = generalPrefs.duckingVolume ?? 80;
 document.getElementById('num-duck-fade').value = generalPrefs.duckingFade || 0.3;
-document.getElementById('history-music-enabled').checked = generalPrefs.historyMusicEnabled !== false;
-document.getElementById('report-music-enabled').checked = generalPrefs.reportMusicEnabled !== false;
-document.getElementById('history-retention-days').value = generalPrefs.historyRetentionDays || 30;
-document.getElementById('music-random-protection-days').value = generalPrefs.musicRandomProtectionDays || 1;
-document.getElementById('report-persist-on-restart').checked = generalPrefs.reportPersistOnRestart !== false;
-document.getElementById('report-retention-value').value = generalPrefs.reportRetentionValue || 7;
-document.getElementById('report-retention-unit').value = generalPrefs.reportRetentionUnit === 'hours' ? 'hours' : 'days';
 
 // Comportamiento de clic en playlist
 const selDblClick = document.getElementById('sel-dbl-click-action');
@@ -790,13 +778,6 @@ function saveAll() {
     
     generalPrefs.duckingVolume = parseInt(document.getElementById('num-duck-vol').value) || 80;
     generalPrefs.duckingFade = parseFloat(document.getElementById('num-duck-fade').value) || 0.3;
-    generalPrefs.historyMusicEnabled = document.getElementById('history-music-enabled').checked;
-    generalPrefs.reportMusicEnabled = document.getElementById('report-music-enabled').checked;
-    generalPrefs.historyRetentionDays = parseInt(document.getElementById('history-retention-days').value, 10) || 30;
-    generalPrefs.musicRandomProtectionDays = parseInt(document.getElementById('music-random-protection-days').value, 10) || 1;
-    generalPrefs.reportPersistOnRestart = document.getElementById('report-persist-on-restart').checked;
-    generalPrefs.reportRetentionValue = parseInt(document.getElementById('report-retention-value').value, 10) || 7;
-    generalPrefs.reportRetentionUnit = document.getElementById('report-retention-unit').value === 'hours' ? 'hours' : 'days';
     if (selDblClick) generalPrefs.dblClickAction = selDblClick.value;
     if (selCtrlDblClick) generalPrefs.ctrlDblClickAction = selCtrlDblClick.value;
     if (selKeyboardShortcutScope) generalPrefs.keyboardShortcutScope = selKeyboardShortcutScope.value || 'contextual';

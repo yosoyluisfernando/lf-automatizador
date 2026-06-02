@@ -51,3 +51,18 @@ test('playlist exposes physical-file editing and native reveal controls', () => 
     assert.match(reportsJs, /file:show-in-folder/);
     assert.match(reportsJs, /Mostrar en carpeta/);
 });
+
+test('playlist metadata action opens a compact editor separate from the advanced track editor', () => {
+    const render = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'render.js'), 'utf8');
+    const uiIpc = fs.readFileSync(path.join(__dirname, '..', 'backend', 'ipc', 'ui.js'), 'utf8');
+    const compactHtml = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'file_metadata_editor.html'), 'utf8');
+    const compactJs = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'file_metadata_editor.js'), 'utf8');
+
+    assert.match(render, /pm-edit-name[\s\S]*open-file-metadata-editor/);
+    assert.match(uiIpc, /open-file-metadata-editor/);
+    assert.match(compactHtml, /Editar archivo y metadatos/);
+    assert.doesNotMatch(compactHtml, /meta-remix/);
+    assert.match(compactJs, /open-audio-editor/);
+    assert.match(compactJs, /lib-rename-track-file/);
+    assert.match(compactJs, /lib-save-db-track/);
+});

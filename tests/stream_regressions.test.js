@@ -392,7 +392,7 @@ test('StreamProxy ignores PCM that arrives after stop', () => {
 });
 
 test('StreamProxy waits for the configured prebuffer and tells Rust its proportional capacity', () => {
-    const { proxy, processes, commands } = makeProxyHarness();
+    const { proxy, processes, commands, sends } = makeProxyHarness();
     proxy.start('https://example.invalid/radio', 'stream-live', 3, 5);
     processes[0].stdout.emit('data', Buffer.alloc((PCM_BYTES_PER_SECOND * 5) - 1));
 
@@ -409,7 +409,14 @@ test('StreamProxy waits for the configured prebuffer and tells Rust its proporti
         gain: 1.0,
         ringBufferSeconds: 7,
     }]);
+    assert.strictEqual(sends.at(-1)?.cmd, 'stream_play');
     proxy.stop();
+});
+
+test('Rust prepares a URL stream paused and only plays after Node primes the ring buffer', () => {
+    const source = fs.readFileSync(path.join(rootDir, 'audio-engine-rust', 'src', 'main.rs'), 'utf8');
+    assert.match(source, /"stream_start"[\s\S]*player\.pause\(\)/);
+    assert.match(source, /"stream_play"\s*=>[\s\S]*player\.play\(\)/);
 });
 
 test('StreamProxy ignores close from an obsolete FFmpeg process', () => {

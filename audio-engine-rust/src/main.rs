@@ -4972,6 +4972,7 @@ fn main() {
                 };
 
                 player.set_volume(gain.clamp(0.0, 2.0));
+                player.pause();
 
                 let runtime = state.players.entry(player_id.clone()).or_default();
                 if let Some(old_player) = runtime.player.take() {
@@ -5006,6 +5007,16 @@ fn main() {
                     now_ms()
                 );
                 let _ = io::stdout().flush();
+            }
+
+            "stream_play" => {
+                if let Some(runtime) = state.players.get_mut(&player_id) {
+                    if let Some(player) = runtime.player.as_ref() {
+                        player.play();
+                        runtime.state.status = "playing".to_string();
+                    }
+                }
+                continue 'main_loop;
             }
 
             "stream_chunk" => {

@@ -5,6 +5,7 @@ module.exports = function(context) {
         lastVuLevels, buildVuPayload, scheduleVuBroadcast, broadcastVuLevels, auxCueSources,
         resolveLevel, resolveDb, resolveStereoPair, resolveStereoDbPair
     } = context;
+    let fileMetadataEditorWindow = null;
 
     ipcMain.handle('dialog:askClearLibrary', async () => { const res = await dialog.showMessageBox(context.libraryWindow || context.mainWindow, { type: 'question', buttons: ['Guardar Lista', 'No Guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar Lista de Trabajo', message: '¿Desea guardar esta lista de trabajo antes de limpiarla?', noLink: true }); return res.response; });
     ipcMain.handle('dialog:openLibraryList', async () => { const res = await dialog.showOpenDialog(context.libraryWindow || context.mainWindow, { title: 'Abrir Lista de Trabajo', properties: ['openFile'], filters: [{ name: 'LF Library File', extensions: ['lflib'] }] }); return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; });
@@ -121,6 +122,30 @@ module.exports = function(context) {
         });
         context.reportsWindow.loadFile('frontend/reportes.html');
         context.reportsWindow.on('closed', () => { context.reportsWindow = null; });
+    });
+
+    ipcMain.on('open-file-metadata-editor', (event, filePath) => {
+        if (fileMetadataEditorWindow && !fileMetadataEditorWindow.isDestroyed()) {
+            fileMetadataEditorWindow.focus();
+            fileMetadataEditorWindow.webContents.send('load-file-metadata', filePath);
+            return;
+        }
+        fileMetadataEditorWindow = new BrowserWindow({
+            icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, '..', '..', 'assets', 'icons', 'editor.png')),
+            width: 560, height: 470, minWidth: 520, minHeight: 430,
+            title: 'Editar archivo y metadatos',
+            autoHideMenuBar: true,
+            webPreferences: { nodeIntegration: true, contextIsolation: false }
+        });
+        fileMetadataEditorWindow.loadFile('frontend/file_metadata_editor.html');
+        fileMetadataEditorWindow.webContents.on('did-finish-load', () => {
+            fileMetadataEditorWindow.webContents.send('load-file-metadata', filePath);
+        });
+        fileMetadataEditorWindow.on('closed', () => {
+            fileMetadataEditorWindow = null;
+            if (context.mainWindow) context.mainWindow.webContents.send('refresh-manual-cues');
+            if (context.libraryWindow) context.libraryWindow.webContents.send('refresh-manual-cues');
+        });
     });
 
     ipcMain.on('incident-sync-broadcast', (event, snapshot) => {

@@ -6111,7 +6111,7 @@ document.getElementById('pm-edit-name').addEventListener('click', () => {
         alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
         return;
     }
-    ipcRenderer.send('open-audio-editor', filePath);
+    ipcRenderer.send('open-file-metadata-editor', filePath);
 });
 
 document.getElementById('pm-show-folder').addEventListener('click', async () => {

@@ -344,15 +344,13 @@ class StreamProxy extends EventEmitter {
                         }).catch(() => {});
                     } catch (_) {}
                 }
-                // Pequeña pausa para que Rust procese stream_start antes de recibir chunks
-                clearTimeout(this._startupTimer);
-                this._startupTimer = setTimeout(() => {
-                    this._startupTimer = null;
-                    if (!this._stopping && this._process === proc) {
-                        this._flushBuffer();
-                        this._setStatus('live'); // ahora sí: tenemos audio estable
-                    }
-                }, 120);
+                // Rust prepara el player pausado. El orden del pipe stdin garantiza
+                // que stream_play llegue despues de todos los chunks precargados.
+                this._flushBuffer();
+                if (this.engine && this._playerId) {
+                    this.engine.send({ cmd: 'stream_play', player: this._playerId });
+                }
+                this._setStatus('live');
                 return;
             }
 
