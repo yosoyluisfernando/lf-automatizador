@@ -1,6 +1,0 @@
-
-> lf-automatizador@0.9.12 start
-> electron .
-
-
-ERROR: no se encontr¢ el proceso "20548".

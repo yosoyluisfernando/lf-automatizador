@@ -2345,7 +2345,30 @@ function createApplicationMenu() {
         {
             label: 'Ayuda',
             submenu: [
-                { label: 'Manual de Usuario (Próximamente)', enabled: false }
+                { label: '📖 Manual de Usuario (Próximamente)', enabled: false },
+                { type: 'separator' },
+                { label: '🎯 Guía de Primer Uso', click: () => { require('electron').shell.openPath(require('path').join(__dirname, 'Documentación', 'guia_primer_uso.jpg')).catch(()=>{}); } },
+                { type: 'separator' },
+                { label: '⌨️ Atajos de Teclado', click: () => { ipcMain.emit('open-settings', null, 'tab-shortcuts'); }},
+                { label: 'ℹ️ Acerca de LF Automatizador', click: () => {
+                    if (aboutWindow) { aboutWindow.focus(); return; }
+                    aboutWindow = new BrowserWindow({
+                        icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+                        width: 460,
+                        height: 580,
+                        minWidth: 460,
+                        minHeight: 580,
+                        maxWidth: 460,
+                        maxHeight: 580,
+                        title: 'Acerca de LF Automatizador',
+                        autoHideMenuBar: true,
+                        resizable: false,
+                        maximizable: false,
+                        webPreferences: { nodeIntegration: true, contextIsolation: false }
+                    });
+                    aboutWindow.loadFile('frontend/about.html', { query: { version: APP_VERSION } });
+                    aboutWindow.on('closed', () => { aboutWindow = null; });
+                }}
             ]
         }
     ];
