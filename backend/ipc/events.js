@@ -57,15 +57,103 @@ module.exports = function(context) {
 
     ipcMain.handle('db-get-events', () => {
         try {
-            return db.prepare("SELECT * FROM events").all().map(r => ({ id: r.id, name: r.name, group: r.group_id, sourceType: r.source_type, filePath: r.file_path, primaryTime: r.primary_time, otherHours: safeJsonParse(r.other_hours), dayMode: r.day_mode, specificDays: safeJsonParse(r.specific_days), targetWeeks: safeJsonParse(r.target_weeks), validityStart: r.validity_start, validityEnd: r.validity_end, action: r.action, execution: r.execution, priority: r.priority || 'normal', colorText: r.color_text, colorBg: r.color_bg, requirePlaying: r.require_playing === 1, maxDelayActive: r.max_delay_active === 1, maxDelayMinutes: r.max_delay_minutes, maxDelaySeconds: r.max_delay_seconds, maxDelayTime: r.max_delay_time, maxDelayAction: r.max_delay_action, cyclicActive: r.cyclic_active === 1, cyclicInterval: r.cyclic_interval, cyclicUnit: r.cyclic_unit, cyclicLimit: r.cyclic_limit, lastFired: r.last_fired }));
+            return db.prepare("SELECT * FROM events").all().map(r => ({
+                id: r.id, name: r.name, group: r.group_id, sourceType: r.source_type, filePath: r.file_path,
+                primaryTime: r.primary_time, otherHours: safeJsonParse(r.other_hours), dayMode: r.day_mode,
+                specificDays: safeJsonParse(r.specific_days), targetWeeks: safeJsonParse(r.target_weeks),
+                validityStart: r.validity_start, validityEnd: r.validity_end, action: r.action,
+                execution: r.execution, priority: r.priority || 'normal', colorText: r.color_text, colorBg: r.color_bg,
+                requirePlaying: r.require_playing === 1, maxDelayActive: r.max_delay_active === 1,
+                maxDelayMinutes: r.max_delay_minutes, maxDelaySeconds: r.max_delay_seconds,
+                maxDelayTime: r.max_delay_time, maxDelayAction: r.max_delay_action,
+                cyclicActive: r.cyclic_active === 1, cyclicInterval: r.cyclic_interval,
+                cyclicUnit: r.cyclic_unit, cyclicLimit: r.cyclic_limit, lastFired: r.last_fired,
+                // Campos de stream_url
+                streamUrl:            r.stream_url            || '',
+                streamStopSeconds:    Number(r.stream_stop_seconds)   || 0,
+                streamConnectTimeout: Number(r.stream_connect_timeout) || 10,
+                streamMaxRetries:     Number(r.stream_max_retries)     || 3,
+                streamMetadataMode:   r.stream_metadata_mode   || 'icy',
+                streamCustomMetadata: r.stream_custom_metadata || '',
+                // Campos de locución y pisador
+                locutionType:         r.locution_type          || 'time',
+                eventDuckingVolume:   Number(r.event_ducking_volume) || 20,
+                eventDuckingFade:     Number(r.event_ducking_fade)   || 500
+            }));
         } catch(e) { return []; }
     });
 
     ipcMain.on('save-event', (e, savedEvent) => {
         try {
             const parseNum = (val) => (val !== '' && val !== null && val !== undefined && !isNaN(val)) ? parseFloat(val) : null;
-            const stmt = db.prepare(`INSERT INTO events (id, name, group_id, source_type, file_path, primary_time, other_hours, day_mode, specific_days, target_weeks, validity_start, validity_end, action, execution, priority, color_text, color_bg, require_playing, max_delay_active, max_delay_minutes, max_delay_seconds, max_delay_time, max_delay_action, cyclic_active, cyclic_interval, cyclic_unit, cyclic_limit, last_fired) VALUES (@id, @name, @group, @sourceType, @filePath, @primaryTime, @otherHours, @dayMode, @specificDays, @targetWeeks, @validityStart, @validityEnd, @action, @execution, @priority, @colorText, @colorBg, @requirePlaying, @maxDelayActive, @maxDelayMinutes, @maxDelaySeconds, @maxDelayTime, @maxDelayAction, @cyclicActive, @cyclicInterval, @cyclicUnit, @cyclicLimit, @lastFired) ON CONFLICT(id) DO UPDATE SET name=@name, group_id=@group, source_type=@sourceType, file_path=@filePath, primary_time=@primaryTime, other_hours=@otherHours, day_mode=@dayMode, specific_days=@specificDays, target_weeks=@targetWeeks, validity_start=@validityStart, validity_end=@validityEnd, action=@action, execution=@execution, priority=@priority, color_text=@colorText, color_bg=@colorBg, require_playing=@requirePlaying, max_delay_active=@maxDelayActive, max_delay_minutes=@maxDelayMinutes, max_delay_seconds=@maxDelaySeconds, max_delay_time=@maxDelayTime, max_delay_action=@maxDelayAction, cyclic_active=@cyclicActive, cyclic_interval=@cyclicInterval, cyclic_unit=@cyclicUnit, cyclic_limit=@cyclicLimit, last_fired=@lastFired`);
-            stmt.run({ id: savedEvent.id, name: savedEvent.name, group: savedEvent.group, sourceType: savedEvent.sourceType, filePath: savedEvent.filePath, primaryTime: savedEvent.primaryTime, otherHours: JSON.stringify(savedEvent.otherHours||[]), dayMode: savedEvent.dayMode, specificDays: JSON.stringify(savedEvent.specificDays||[]), targetWeeks: JSON.stringify(savedEvent.targetWeeks||[]), validityStart: savedEvent.validityStart || null, validityEnd: savedEvent.validityEnd || null, action: savedEvent.action, execution: savedEvent.execution, priority: savedEvent.priority || 'normal', colorText: savedEvent.colorText, colorBg: savedEvent.colorBg, requirePlaying: savedEvent.requirePlaying ? 1 : 0, maxDelayActive: savedEvent.maxDelayActive ? 1 : 0, maxDelayMinutes: parseNum(savedEvent.maxDelayMinutes) || 0, maxDelaySeconds: parseNum(savedEvent.maxDelaySeconds) || 0, maxDelayTime: parseNum(savedEvent.maxDelayTime) || 0, maxDelayAction: savedEvent.maxDelayAction, cyclicActive: savedEvent.cyclicActive ? 1 : 0, cyclicInterval: parseNum(savedEvent.cyclicInterval) || 0, cyclicUnit: savedEvent.cyclicUnit, cyclicLimit: parseNum(savedEvent.cyclicLimit) || 0, lastFired: savedEvent.lastFired || null });
+            const stmt = db.prepare(`
+                INSERT INTO events (
+                    id, name, group_id, source_type, file_path, primary_time, other_hours, day_mode,
+                    specific_days, target_weeks, validity_start, validity_end, action, execution, priority,
+                    color_text, color_bg, require_playing, max_delay_active, max_delay_minutes, max_delay_seconds,
+                    max_delay_time, max_delay_action, cyclic_active, cyclic_interval, cyclic_unit, cyclic_limit,
+                    last_fired,
+                    stream_url, stream_stop_seconds, stream_connect_timeout, stream_max_retries,
+                    stream_metadata_mode, stream_custom_metadata,
+                    locution_type, event_ducking_volume, event_ducking_fade
+                ) VALUES (
+                    @id, @name, @group, @sourceType, @filePath, @primaryTime, @otherHours, @dayMode,
+                    @specificDays, @targetWeeks, @validityStart, @validityEnd, @action, @execution, @priority,
+                    @colorText, @colorBg, @requirePlaying, @maxDelayActive, @maxDelayMinutes, @maxDelaySeconds,
+                    @maxDelayTime, @maxDelayAction, @cyclicActive, @cyclicInterval, @cyclicUnit, @cyclicLimit,
+                    @lastFired,
+                    @streamUrl, @streamStopSeconds, @streamConnectTimeout, @streamMaxRetries,
+                    @streamMetadataMode, @streamCustomMetadata,
+                    @locutionType, @eventDuckingVolume, @eventDuckingFade
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name=@name, group_id=@group, source_type=@sourceType, file_path=@filePath,
+                    primary_time=@primaryTime, other_hours=@otherHours, day_mode=@dayMode,
+                    specific_days=@specificDays, target_weeks=@targetWeeks, validity_start=@validityStart,
+                    validity_end=@validityEnd, action=@action, execution=@execution, priority=@priority,
+                    color_text=@colorText, color_bg=@colorBg, require_playing=@requirePlaying,
+                    max_delay_active=@maxDelayActive, max_delay_minutes=@maxDelayMinutes,
+                    max_delay_seconds=@maxDelaySeconds, max_delay_time=@maxDelayTime,
+                    max_delay_action=@maxDelayAction, cyclic_active=@cyclicActive,
+                    cyclic_interval=@cyclicInterval, cyclic_unit=@cyclicUnit, cyclic_limit=@cyclicLimit,
+                    last_fired=@lastFired,
+                    stream_url=@streamUrl, stream_stop_seconds=@streamStopSeconds,
+                    stream_connect_timeout=@streamConnectTimeout, stream_max_retries=@streamMaxRetries,
+                    stream_metadata_mode=@streamMetadataMode, stream_custom_metadata=@streamCustomMetadata,
+                    locution_type=@locutionType, event_ducking_volume=@eventDuckingVolume,
+                    event_ducking_fade=@eventDuckingFade
+            `);
+            stmt.run({
+                id: savedEvent.id, name: savedEvent.name, group: savedEvent.group,
+                sourceType: savedEvent.sourceType, filePath: savedEvent.filePath,
+                primaryTime: savedEvent.primaryTime, otherHours: JSON.stringify(savedEvent.otherHours||[]),
+                dayMode: savedEvent.dayMode, specificDays: JSON.stringify(savedEvent.specificDays||[]),
+                targetWeeks: JSON.stringify(savedEvent.targetWeeks||[]),
+                validityStart: savedEvent.validityStart || null, validityEnd: savedEvent.validityEnd || null,
+                action: savedEvent.action, execution: savedEvent.execution, priority: savedEvent.priority || 'normal',
+                colorText: savedEvent.colorText, colorBg: savedEvent.colorBg,
+                requirePlaying: savedEvent.requirePlaying ? 1 : 0,
+                maxDelayActive: savedEvent.maxDelayActive ? 1 : 0,
+                maxDelayMinutes: parseNum(savedEvent.maxDelayMinutes) || 0,
+                maxDelaySeconds: parseNum(savedEvent.maxDelaySeconds) || 0,
+                maxDelayTime: parseNum(savedEvent.maxDelayTime) || 0,
+                maxDelayAction: savedEvent.maxDelayAction,
+                cyclicActive: savedEvent.cyclicActive ? 1 : 0,
+                cyclicInterval: parseNum(savedEvent.cyclicInterval) || 0,
+                cyclicUnit: savedEvent.cyclicUnit, cyclicLimit: parseNum(savedEvent.cyclicLimit) || 0,
+                lastFired: savedEvent.lastFired || null,
+                // Campos stream_url
+                streamUrl:            savedEvent.streamUrl            || null,
+                streamStopSeconds:    parseNum(savedEvent.streamStopSeconds)    || 0,
+                streamConnectTimeout: parseNum(savedEvent.streamConnectTimeout) || 10,
+                streamMaxRetries:     parseNum(savedEvent.streamMaxRetries)     || 3,
+                streamMetadataMode:   savedEvent.streamMetadataMode   || 'icy',
+                streamCustomMetadata: savedEvent.streamCustomMetadata || null,
+                // Campos de locución y pisador
+                locutionType:         savedEvent.locutionType        || 'time',
+                eventDuckingVolume:   parseNum(savedEvent.eventDuckingVolume) ?? 20,
+                eventDuckingFade:     parseNum(savedEvent.eventDuckingFade)   ?? 500
+            });
             notifyEventsChanged(savedEvent);
             if (context.eventEditorWindow && !context.eventEditorWindow.isDestroyed()) context.eventEditorWindow.close();
         } catch (err) { writeLog("Error guardando evento: " + err); }

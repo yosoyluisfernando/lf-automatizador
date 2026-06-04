@@ -26,10 +26,14 @@ const {
     normalizeRulePathKey
 } = require('./pisador_rules');
 const { prepareOverlaySession } = require('./pisador_runtime');
+const randomFolderSource = require('./random_folder_source');
+const musicSeparation = require('./music_separation_rules');
+const { askIncludeSubfolders } = require('./random_subfolder_dialog');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
 const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manager');
 const { DEFAULT_SHORTCUTS } = require('./command_registry');
+const { runAutoPlayOnStart } = require('./autostart_runtime');
 const shortcutManager = new ShortcutManager();
 
 
@@ -91,7 +95,6 @@ const RUST_MIRROR_SEEK_DEBOUNCE_MS = 2000;
 const RUST_OWNER_POSITION_JUMP_GRACE_MS = 3500;
 const PREANALYSIS_BATCH_DELAY_MS = 900;
 const RANDOM_WARM_LOOKAHEAD_ROWS = 12;
-const RANDOM_FOLDER_CACHE_TTL_MS = 60000;
 const TIME_UI_FRAME_INTERVAL_MS = 50;
 const VU_IPC_INTERVAL_MS = 20;
 const VU_DIAGNOSTICS_IPC_INTERVAL_MS = 1000;
@@ -351,7 +354,66 @@ function clearPlayerPlaybackMeta(player) {
     playerPlaybackMeta.delete(player);
 }
 
-let uiPrefs = loadConfig(uiPrefsPath, { controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82] });
+let uiPrefs = loadConfig(uiPrefsPath, { 
+    controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82],
+    controlsOrder: ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'],
+    controlsHidden: [],
+    modesOrder: ['btn-mode-looplist', 'btn-mode-remove', 'btn-mode-repeat'],
+    modesHidden: [],
+    widgetsOrder: ['btn-reloj', 'temp-widget', 'hum-widget'],
+    playlistColumnsOrder: ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro'],
+    playlistColumnsHidden: [],
+    playlistFitToWindow: false
+});
+
+function applyUILayout(prefs) {
+    if (!prefs) return;
+    const allControls = ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'];
+    const allModes = ['btn-mode-looplist', 'btn-mode-remove', 'btn-mode-repeat'];
+    const allWidgets = ['btn-reloj', 'temp-widget', 'hum-widget'];
+
+    const applyGroup = (allIds, orderArr, hiddenArr) => {
+        if (!orderArr || !hiddenArr) return;
+        allIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const index = orderArr.indexOf(id);
+            el.style.order = index >= 0 ? index : 99;
+            if (hiddenArr.includes(id)) {
+                el.style.display = 'none';
+            } else {
+                el.style.display = '';
+            }
+        });
+    };
+
+    applyGroup(allControls, prefs.controlsOrder, prefs.controlsHidden);
+    applyGroup(allModes, prefs.modesOrder, prefs.modesHidden);
+    
+    // For widgets, sync with uiPrefs.temp and uiPrefs.hum
+    const widgetsHidden = [];
+    if (!prefs.temp) widgetsHidden.push('temp-widget');
+    if (!prefs.hum) widgetsHidden.push('hum-widget');
+    applyGroup(allWidgets, prefs.widgetsOrder, widgetsHidden);
+
+    if (prefs.controlsPos) {
+        const controlsBar = document.querySelector('.controls-bar');
+        const mainContent = document.querySelector('.main-content');
+        if (controlsBar && mainContent) {
+            // Restore default flex-direction just in case
+            mainContent.style.flexDirection = 'column';
+            
+            if (prefs.controlsPos === 'bottom') {
+                controlsBar.style.order = '99';
+            } else {
+                controlsBar.style.order = '-1';
+            }
+        }
+    }
+
+    rebuildPlaylistColumns(prefs);
+}
+
 let fxPrefs = loadConfig(fxPrefsPath, { preamp: 0, pan: 0, mono: false, eq_bands: [0, 0, 0, 0, 0, 0, 0, 0], eq_on: false, comp_on: false, lim_on: false, order: ['eq', 'comp', 'limiter'], custom_presets: {}, active_preset: 'def_Plano (Reset)' });
 let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', keyboardShortcutScope: 'contextual', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
 generalPrefs.modeRepeatTrack = false;
@@ -552,9 +614,8 @@ function normalizePlaylistColumnWidths(widths) {
     });
 }
 
-function ensurePlaylistColGroup() {
+function ensurePlaylistColGroup(prefs = uiPrefs) {
     if (!playlistTable) return null;
-
 
     let colGroup = playlistTable.querySelector('colgroup');
     if (!colGroup) {
@@ -562,10 +623,12 @@ function ensurePlaylistColGroup() {
         playlistTable.insertBefore(colGroup, playlistTable.firstChild);
     }
 
-    while (colGroup.children.length < PLAYLIST_COLUMN_DEFAULT_WIDTHS.length) {
+    const visibleCols = (prefs.playlistColumnsOrder || ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro']).filter(c => !(prefs.playlistColumnsHidden || []).includes(c));
+
+    while (colGroup.children.length < visibleCols.length) {
         colGroup.appendChild(document.createElement('col'));
     }
-    while (colGroup.children.length > PLAYLIST_COLUMN_DEFAULT_WIDTHS.length) {
+    while (colGroup.children.length > visibleCols.length) {
         colGroup.removeChild(colGroup.lastElementChild);
     }
     return colGroup;
@@ -575,25 +638,60 @@ function getPlaylistHeaderCells() {
     return Array.from(playlistTable?.querySelectorAll('thead th') || []);
 }
 
-function applyPlaylistColumnWidths() {
+function applyPlaylistColumnWidths(prefs = uiPrefs) {
     if (!playlistTable) return;
-    playlistColumnWidths = normalizePlaylistColumnWidths(playlistColumnWidths.length ? playlistColumnWidths : uiPrefs.playlistColumnWidths);
-    uiPrefs.playlistColumnWidths = [...playlistColumnWidths];
+    playlistColumnWidths = normalizePlaylistColumnWidths(playlistColumnWidths.length ? playlistColumnWidths : prefs.playlistColumnWidths);
+    prefs.playlistColumnWidths = [...playlistColumnWidths];
 
-    const colGroup = ensurePlaylistColGroup();
+    const colGroup = ensurePlaylistColGroup(prefs);
+    const visibleCols = (prefs.playlistColumnsOrder || ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro']).filter(c => !(prefs.playlistColumnsHidden || []).includes(c));
+    const widthMap = { 'col-hora': 0, 'col-titulo': 1, 'col-duracion': 2, 'col-intro': 3, 'col-outro': 4 };
+
     if (colGroup) {
-        Array.from(colGroup.children).forEach((col, index) => {
-            col.style.width = `${playlistColumnWidths[index]}px`;
+        Array.from(colGroup.children).forEach((col, visibleIndex) => {
+            const logicalColId = visibleCols[visibleIndex];
+            const logicalIndex = widthMap[logicalColId];
+            if (prefs.playlistFitToWindow && logicalColId === 'col-titulo') {
+                col.style.width = 'auto';
+            } else {
+                col.style.width = `${playlistColumnWidths[logicalIndex]}px`;
+            }
         });
     }
 
-    getPlaylistHeaderCells().forEach((th, index) => {
-        th.style.width = `${playlistColumnWidths[index]}px`;
-        th.style.minWidth = `${playlistColumnWidths[index]}px`;
+    getPlaylistHeaderCells().forEach((th, visibleIndex) => {
+        const logicalColId = visibleCols[visibleIndex];
+        const logicalIndex = widthMap[logicalColId];
+        if (prefs.playlistFitToWindow && logicalColId === 'col-titulo') {
+            th.style.width = 'auto';
+            th.style.minWidth = 'auto';
+        } else {
+            th.style.width = `${playlistColumnWidths[logicalIndex]}px`;
+            th.style.minWidth = `${playlistColumnWidths[logicalIndex]}px`;
+        }
     });
 
-    const totalWidth = playlistColumnWidths.reduce((sum, value) => sum + value, 0);
-    playlistTable.style.minWidth = `${totalWidth}px`;
+    const playlistContainer = document.getElementById('playlist-container');
+    if (prefs.playlistFitToWindow) {
+        playlistTable.style.width = '100%';
+        playlistTable.style.minWidth = '100%';
+        playlistTable.style.maxWidth = '100%';
+        playlistTable.style.tableLayout = 'fixed';
+        if (playlistContainer) playlistContainer.style.overflowX = 'hidden';
+    } else {
+        const totalWidth = playlistColumnWidths.reduce((sum, value, logicalIndex) => {
+            const colId = Object.keys(widthMap).find(key => widthMap[key] === logicalIndex);
+            if (!(prefs.playlistColumnsHidden || []).includes(colId)) {
+                return sum + value;
+            }
+            return sum;
+        }, 0);
+        playlistTable.style.width = `${totalWidth}px`;
+        playlistTable.style.minWidth = `${totalWidth}px`;
+        playlistTable.style.maxWidth = `${totalWidth}px`;
+        playlistTable.style.tableLayout = 'fixed';
+        if (playlistContainer) playlistContainer.style.overflowX = 'auto';
+    }
 }
 
 function persistPlaylistColumnWidths() {
@@ -629,19 +727,66 @@ function startPlaylistColumnResize(event, colIndex) {
     window.addEventListener('mouseup', onMouseUp);
 }
 
-function initPlaylistColumnResizers() {
+function initPlaylistColumnResizers(prefs = uiPrefs) {
     if (!playlistTable) return;
-    applyPlaylistColumnWidths();
-    getPlaylistHeaderCells().forEach((th, index) => {
+    applyPlaylistColumnWidths(prefs);
+    
+    const visibleCols = (prefs.playlistColumnsOrder || ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro']).filter(c => !(prefs.playlistColumnsHidden || []).includes(c));
+    const widthMap = { 'col-hora': 0, 'col-titulo': 1, 'col-duracion': 2, 'col-intro': 3, 'col-outro': 4 };
+
+    getPlaylistHeaderCells().forEach((th, visibleIndex) => {
         th.classList.add('playlist-col-header');
+        
+        const logicalColId = visibleCols[visibleIndex];
+        const logicalIndex = widthMap[logicalColId];
+
+        if (prefs.playlistFitToWindow && logicalColId === 'col-titulo') {
+            const existingResizer = th.querySelector('.playlist-col-resizer');
+            if (existingResizer) existingResizer.remove();
+            return;
+        }
+
         let resizer = th.querySelector('.playlist-col-resizer');
         if (!resizer) {
             resizer = document.createElement('span');
             resizer.className = 'playlist-col-resizer';
             th.appendChild(resizer);
         }
-        resizer.onmousedown = (event) => startPlaylistColumnResize(event, index);
+        resizer.onmousedown = (event) => startPlaylistColumnResize(event, logicalIndex);
     });
+}
+
+function rebuildPlaylistColumns(prefs = uiPrefs) {
+    if (!playlistTable) return;
+    
+    const visibleCols = (prefs.playlistColumnsOrder || ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro']).filter(c => !(prefs.playlistColumnsHidden || []).includes(c));
+    const headersData = { 'col-hora': 'Hora', 'col-titulo': 'Título', 'col-duracion': 'Duración', 'col-intro': 'Intro', 'col-outro': 'Outro' };
+
+    const theadTr = playlistTable.querySelector('thead tr');
+    if (theadTr) {
+        theadTr.innerHTML = '';
+        visibleCols.forEach(colId => {
+            const th = document.createElement('th');
+            th.textContent = headersData[colId];
+            theadTr.appendChild(th);
+        });
+    }
+    
+    const allRows = playlistTable.querySelectorAll('tbody tr');
+    allRows.forEach(tr => {
+        let rowHtml = '';
+        visibleCols.forEach(colId => {
+            if (colId === 'col-hora') rowHtml += tr.dataset.cellHtmlHora || '<td class="col-hora"></td>';
+            if (colId === 'col-titulo') rowHtml += tr.dataset.cellHtmlTitulo || '<td class="col-titulo"></td>';
+            if (colId === 'col-duracion') rowHtml += tr.dataset.cellHtmlDuracion || '<td class="col-duracion"></td>';
+            if (colId === 'col-intro') rowHtml += tr.dataset.cellHtmlIntro || '<td class="col-intro"></td>';
+            if (colId === 'col-outro') rowHtml += tr.dataset.cellHtmlOutro || '<td class="col-outro"></td>';
+        });
+        tr.innerHTML = rowHtml;
+    });
+
+    applyPlaylistColumnWidths(prefs);
+    initPlaylistColumnResizers(prefs);
 }
 
 function getRowLocation(row) {
@@ -682,7 +827,8 @@ function serializePlaylistRow(row) {
         ruta: row.dataset.ruta,
         duracion: parseInt(row.dataset.duracion, 10) || 0,
         type: row.dataset.type || 'normal',
-        titulo: row.dataset.pureName ? (row.dataset.pureName + (row.dataset.ext || '')) : row.children[1].innerText,
+        recursive: row.dataset.recursive === 'true',
+        titulo: row.dataset.pureName ? (row.dataset.pureName + (row.dataset.ext || '')) : row.querySelector(".col-titulo").innerText,
         customMix: row.dataset.customMix || null,
         temp: row.dataset.temp === 'true',
         noteText: row.dataset.noteText || null,
@@ -850,9 +996,9 @@ function normalizeTimeLocutionRow(row) {
     row.dataset.ext = '';
     row.style.color = '#2ecc71';
     row.style.fontStyle = 'italic';
-    if (row.children?.[1]) row.children[1].innerText = ICON_CLOCK_LABEL;
-    if (row.children?.[3]) row.children[3].innerText = '0.0';
-    if (row.children?.[4]) row.children[4].innerText = '0.0';
+    if (row.children?.[1]) row.querySelector(".col-titulo").innerText = ICON_CLOCK_LABEL;
+    if (row.children?.[3]) row.querySelector(".col-intro").innerText = '0.0';
+    if (row.children?.[4]) row.querySelector(".col-outro").innerText = '0.0';
     return true;
 }
 
@@ -1434,6 +1580,18 @@ function publishRustNowPlaying(text, extra = {}) {
 let lastRustTransportPublishAt = 0;
 let lastRustTransportSignature = '';
 const rustPlaylistMirrorState = new Map();
+
+// ── Ducking del programa (BGM) ───────────────────────────────────────────────
+// El "duck" (atenuar la música mientras suena un pisador / locución / cartwall)
+// se modela como un FACTOR multiplicativo global que el pipeline de gains hacia
+// los decks Rust aplica en CADA push (ver getRustPlaylistMirrorGain). Antes el
+// duck se escribía directo sobre el gain del deck y el siguiente ciclo de
+// syncRustPlaylistControlPlane lo pisaba con el gain "intended" del track,
+// devolviendo el BGM a volumen completo a los pocos cientos de ms mientras el
+// pisador seguía sonando. Al vivir como factor en el único punto por el que
+// pasan todos los gains, el reconcile ya no compite: mantiene la atenuación.
+let programDuckFactor = 1;        // 1 = sin duck; <1 = BGM atenuado
+let activeDuckParams = null;      // { vol, fadeSecs } capturados al iniciar el duck
 const rustPlaylistOwnerHealth = {
     active: false,
     failures: 0,
@@ -2121,7 +2279,12 @@ function commandRustPlaylist(type, payload = {}) {
 function getRustPlaylistMirrorGain(playerState = {}) {
     const gain = Number(playerState.gain);
     if (!isRustPlaylistOwnerEnabled()) return 0;
-    return Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1;
+    const base = Number.isFinite(gain) ? Math.max(0, Math.min(2, gain)) : 1;
+    // El duck del programa se aplica AQUÍ, el único punto por el que pasan todos
+    // los gains espejados a los decks Rust (reconcile periódico, sync forzado al
+    // arrancar una pista, etc.). Así cualquier deck —incluido uno que entra por
+    // crossfade mientras hay un pisador— queda atenuado y no vuelve a subir solo.
+    return Math.max(0, Math.min(2, base * programDuckFactor));
 }
 
 function shouldMirrorRustProgramToMonitor() {
@@ -2987,6 +3150,7 @@ async function loadDatabasesFromSQLite() {
         eventsMasterDB = Array.isArray(events) ? events : [];
         eventGroupsDB = Array.isArray(groups) ? groups : [];
         if (eventGroupsDB.length === 0) { eventGroupsDB = [{ id: 'g_general', name: 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }]; }
+        prePopulateEmittedToday();
         renderEventsList();
         updateEventCountdowns();
     } catch (err) { }
@@ -3044,8 +3208,28 @@ async function restoreSessionState() {
                     const rowType = item.type || 'normal';
                     const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'note' ? (item.noteText || item.titulo || '') : item.titulo);
                     lastInsertedRow = createPlaylistRow(item.ruta, rowName, parseInt(item.duracion, 10) || 0, rowType, lastInsertedRow, 'bottom', targetTbody);
+                    if (lastInsertedRow && rowType === 'random' && (item.recursive === true || item.recursive === 'true')) lastInsertedRow.dataset.recursive = 'true';
                     if (lastInsertedRow && rowType === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) lastInsertedRow.dataset.targetTab = parseInt(item.targetTab, 10);
                     if (lastInsertedRow && rowType === 'note' && item.noteText) lastInsertedRow.dataset.noteText = item.noteText;
+                    if (lastInsertedRow && rowType === 'execute_event') { lastInsertedRow.dataset.eventId = item.eventId || item.ruta || ''; lastInsertedRow.dataset.eventName = item.eventName || item.titulo || ''; }
+                    if (lastInsertedRow && rowType === 'stream_url') {
+                        if (item.stopPolicy) lastInsertedRow.dataset.stopPolicy = item.stopPolicy;
+                        if (item.stopSeconds != null) lastInsertedRow.dataset.stopSeconds = String(parseInt(item.stopSeconds, 10) || 0);
+                        if (item.connectTimeoutSec != null) lastInsertedRow.dataset.connectTimeoutSec = String(parseInt(item.connectTimeoutSec, 10) || 5);
+                        if (item.maxRetries != null) lastInsertedRow.dataset.maxRetries = String(normalizeStreamRetries(item.maxRetries));
+                        if (item.metadataMode) lastInsertedRow.dataset.metadataMode = item.metadataMode;
+                        if (item.customMetadata) lastInsertedRow.dataset.customMetadata = item.customMetadata;
+                        // Recalcular la celda de duraci\u00f3n: createPlaylistRow la genera con '\u221e'
+                        // por defecto; hay que actualizarla con el stopPolicy real.
+                        const _secs = parseInt(lastInsertedRow.dataset.stopSeconds, 10) || 0;
+                        const _hasTimer = lastInsertedRow.dataset.stopPolicy === 'timer' && _secs > 0;
+                        const _durCell = lastInsertedRow.querySelector('.col-duracion');
+                        if (_durCell) {
+                            _durCell.innerText = _hasTimer
+                                ? `${Math.floor(_secs/3600).toString().padStart(2,'0')}:${Math.floor((_secs%3600)/60).toString().padStart(2,'0')}:${(_secs%60).toString().padStart(2,'0')}`
+                                : '\u221e';
+                        }
+                    }
                     if (!lastInsertedRow) return;
                     if (item.rowId) lastInsertedRow.dataset.rowId = item.rowId;
                     if (item.customMix) lastInsertedRow.dataset.customMix = item.customMix;
@@ -3080,7 +3264,7 @@ async function restoreSessionState() {
             lastSelectedRowIndex = resumeRows.indexOf(resumeRow);
             anchorRowIndex = lastSelectedRowIndex;
             queuedNextRow = resumeRow;
-            const resumeName = (resumeRow.dataset.pureName || resumeRow.children[1].innerText || '').replace(/^(?:\u23f3|⏳)\s*/, '');
+            const resumeName = (resumeRow.dataset.pureName || resumeRow.querySelector(".col-titulo").innerText || '').replace(/^(?:\u23f3|⏳)\s*/, '');
             setIncidentStatus('session', 'Restaurada', 'ok');
             recordIncident(`[SESION] Lista restaurada. Lista para retomar con: ${resumeName}`, { category: 'session', level: 'success' });
         } else if (queuedRow) {
@@ -3126,15 +3310,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (chkEventsManual) chkEventsManual.checked = generalPrefs.eventsManualOnly === true;
     applyEventsUIState();
 
-    if (uiPrefs.controlsPos === 'bottom') {
-        const mainContent = document.querySelector('.main-content');
-        const controlsBar = document.querySelector('.controls-bar');
-        const playlistFooter = document.querySelector('.playlist-footer');
-        if (mainContent && controlsBar && playlistFooter) mainContent.insertBefore(controlsBar, playlistFooter);
-    }
+    applyUILayout(uiPrefs);
 
-    document.querySelectorAll('#temperatura, .temperatura, #temp, .temp, #txt-temperatura, #lbl-temp, #clima-temp, #weather-temp, #txt-temp, #temp-widget').forEach(el => el.style.display = uiPrefs.temp ? '' : 'none');
-    document.querySelectorAll('#humedad, .humedad, #hum, .hum, #txt-humedad, #lbl-hum, #clima-hum, #weather-hum, #txt-hum, #hum-widget').forEach(el => el.style.display = uiPrefs.hum ? '' : 'none');
+    ipcRenderer.on('preview-ui-layout', (e, previewData) => {
+        applyUILayout(previewData);
+    });
+
+    ipcRenderer.on('revert-ui-layout', () => {
+        applyUILayout(uiPrefs);
+    });
+
 
     const tabsEl = document.querySelector('.tabs');
     if (tabsEl && tabsEl.parentElement) tabsEl.parentElement.style.display = uiPrefs.leftPanel ? '' : 'none';
@@ -3287,7 +3472,19 @@ document.addEventListener("DOMContentLoaded", () => {
         syncCartwallResizerVisibility();
     }
 
-    loadDatabasesFromSQLite().finally(() => { restoreSessionState(); });
+    loadDatabasesFromSQLite().finally(() => {
+        restoreSessionState().finally(() => {
+            // Auto-play opcional: una vez restaurada la sesión/playlist, si el
+            // operador lo activó, arrancamos con el MISMO mecanismo del botón Play.
+            runAutoPlayOnStart({
+                generalPrefs,
+                hasPlayableRows: () => !!(tbodys[pgmTab] && tbodys[pgmTab].children.length > 0),
+                resumeCurrentPlayback,
+                ipcRenderer,
+                logSystem
+            });
+        });
+    });
     if (uiPrefs.cartwall) scheduleCartwallWarmup(true);
 });
 
@@ -3355,9 +3552,9 @@ ipcRenderer.on('refresh-manual-cues', async () => {
             tr.dataset.pureName = newTitle;
             let displayedName = window.showPlaylistExtensions ? (newTitle + tr.dataset.ext) : newTitle;
             if (tr.dataset.temp === 'true') displayedName = ICON_TEMP_PREFIX + displayedName;
-            tr.children[1].innerText = displayedName;
-            tr.children[3].innerText = mc.intro ? parseFloat(mc.intro).toFixed(1) : '0.0';
-            tr.children[4].innerText = mc.outro ? parseFloat(mc.outro).toFixed(1) : '0.0';
+            tr.querySelector(".col-titulo").innerText = displayedName;
+            tr.querySelector(".col-intro").innerText = mc.intro ? parseFloat(mc.intro).toFixed(1) : '0.0';
+            tr.querySelector(".col-outro").innerText = mc.outro ? parseFloat(mc.outro).toFixed(1) : '0.0';
         }
     });
 });
@@ -3366,7 +3563,7 @@ ipcRenderer.on('toggle-extensions', (e, show) => {
     window.showPlaylistExtensions = show;
     uiPrefs.ext = show; saveConfig(uiPrefsPath, uiPrefs);
     document.querySelectorAll('.playlist-table tr').forEach(tr => {
-        const td = tr.children[1];
+        const td = tr.querySelector(".col-titulo");
         if (td) { td.innerText = show ? ((tr.dataset.pureName || '') + (tr.dataset.ext || '')) : (tr.dataset.pureName || td.innerText); }
     });
 });
@@ -3509,9 +3706,13 @@ function armRustTimeLocutionWatchdog(row, durationSeconds) {
 
 function stopActiveRustTimeLocution() {
     clearRustTimeLocutionWatchdog();
-    const playerId = rustTimeLocutionContext?.playerId || 'time-locucion';
+    const ctx = rustTimeLocutionContext;
+    const playerId = ctx?.playerId || 'time-locucion';
     if (playerId) commandRustControlPlane('stop', { player: playerId }).catch(() => {});
+    if (ctx?._duckingTimer) clearTimeout(ctx._duckingTimer);
     rustTimeLocutionContext = null;
+    // Si la locución estaba activa y tenía ducking aplicado, restaurarlo ahora.
+    if (ctx?.kind === 'button') endProgramOverlayDucking();
 }
 
 let isTrackReady = false;
@@ -3521,7 +3722,6 @@ let lastVuIpcSentAt = 0;
 let lastVuDiagnosticsIpcSentAt = 0;
 let playbackGuard = { lastAdvanceAt: 0, lastTimeValue: 0, cooldownUntil: 0, activeToken: '' };
 let randomBagsCache = {};
-const randomFolderFileCache = new Map();
 let ignoredEventTriggers = [];
 const EVENT_PREFLIGHT_WINDOW_SECONDS = 15 * 60;
 const EVENT_PREFLIGHT_RECHECK_MS = 30000;
@@ -3581,6 +3781,19 @@ function isSupportedAudioName(fileName) {
 
 async function inspectEventSource(filePath, sourceType) {
     try {
+        if (sourceType === 'locution') {
+            const locType = (filePath || '').replace('locution:', '') || 'time';
+            const labels = { time: 'Hora', temperature: 'Temperatura', humidity: 'Humedad' };
+            return { ok: true, message: 'Locución configurada', summary: labels[locType] || locType };
+        }
+        if (sourceType === 'stream_url') {
+            const url = filePath || '';
+            if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+                return { ok: false, message: 'URL de emisora inválida (debe comenzar con http:// o https://)', summary: 'sin URL' };
+            }
+            const host = url.split('/')[2] || url;
+            return { ok: true, message: 'Emisora de radio configurada', summary: host };
+        }
         if (sourceType === 'commercial') {
             const blocks = await ipcRenderer.invoke('commercial-get-blocks');
             const block = Array.isArray(blocks) ? blocks.find(item => item.id === filePath) : null;
@@ -3655,58 +3868,32 @@ function shuffleArray(array) {
     for (let i = array.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[array[i], array[j]] = [array[j], array[i]]; } return array;
 }
 
-function getCachedRandomFolderFiles(folderPath) {
-    const cached = randomFolderFileCache.get(folderPath);
-    if (!cached || !Array.isArray(cached.files)) return null;
-    if ((Date.now() - cached.loadedAt) > RANDOM_FOLDER_CACHE_TTL_MS) return null;
-    return cached.files;
+// La lectura de carpeta (plana/recursiva), el cacheo y las rutas relativas se
+// delegan a random_folder_source.js. Aqui solo quedan envoltorios que conservan
+// las firmas usadas en el resto del renderer mas el flag `recursive`.
+function warmRandomFolder(folderPath, recursive = false) {
+    return randomFolderSource.warmRandomFolder(folderPath, recursive);
 }
 
-async function warmRandomFolder(folderPath) {
-    if (!folderPath) return [];
-    const cached = getCachedRandomFolderFiles(folderPath);
-    if (cached) return cached;
-    const existing = randomFolderFileCache.get(folderPath);
-    if (existing?.promise) return existing.promise;
-    const promise = fs.promises.readdir(folderPath, { withFileTypes: true })
-        .then(entries => entries
-            .filter(entry => entry.isFile() && isSupportedAudioName(entry.name))
-            .map(entry => entry.name)
-            .sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' })))
-        .then(files => {
-            randomFolderFileCache.set(folderPath, { files, loadedAt: Date.now(), promise: null });
-            return files;
-        })
-        .catch(() => {
-            randomFolderFileCache.delete(folderPath);
-            return [];
-        });
-    randomFolderFileCache.set(folderPath, { files: null, loadedAt: 0, promise });
-    return promise;
+function getRandomFolderFilesFast(folderPath, recursive = false) {
+    return randomFolderSource.getRandomFolderFilesFast(folderPath, recursive);
 }
 
-function getRandomFolderFilesFast(folderPath) {
-    const cached = getCachedRandomFolderFiles(folderPath);
-    if (cached) return cached;
-    try {
-        const files = fs.readdirSync(folderPath)
-            .filter(isSupportedAudioName)
-            .sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
-        randomFolderFileCache.set(folderPath, { files, loadedAt: Date.now(), promise: null });
-        return files;
-    } catch (err) {
-        return [];
+// Clave de bolsa compuesta: una misma carpeta no comparte bolsa entre el modo
+// plano y el recursivo.
+function randomBagKey(folderPath, recursive) {
+    return `${recursive ? 'R' : 'F'}|${folderPath}`;
+}
+
+function takeRandomFolderFile(folderPath, recursive = false) {
+    const rels = getRandomFolderFilesFast(folderPath, recursive);
+    if (rels.length === 0) return null;
+    const key = randomBagKey(folderPath, recursive);
+    if (!randomBagsCache[key] || randomBagsCache[key].length === 0) {
+        randomBagsCache[key] = shuffleArray([...rels]);
     }
-}
-
-function takeRandomFolderFile(folderPath) {
-    const files = getRandomFolderFilesFast(folderPath);
-    if (files.length === 0) return null;
-    if (!randomBagsCache[folderPath] || randomBagsCache[folderPath].length === 0) {
-        randomBagsCache[folderPath] = shuffleArray([...files]);
-    }
-    const nextFile = randomBagsCache[folderPath].pop();
-    return nextFile ? path.join(folderPath, nextFile) : null;
+    const nextRel = randomBagsCache[key].pop();
+    return nextRel ? randomFolderSource.resolveAbsolute(folderPath, nextRel) : null;
 }
 
 function getCachedTrackDurationSeconds(filePath, fallback = 180) {
@@ -3746,41 +3933,120 @@ async function warmTrackFromLibraryAndFile(filePath, row = null) {
     return filePath;
 }
 
-const recentMusicHistoryPaths = new Set();
-let recentMusicHistoryLoadedAt = 0;
 let lastRecordedPlaybackHistoryToken = '';
 
-async function refreshRecentMusicHistoryPaths(force = false) {
-    if (!force && Date.now() - recentMusicHistoryLoadedAt < 5000) return recentMusicHistoryPaths;
-    try {
-        const result = await ipcRenderer.invoke('playback-history-recent-paths', {
-            category: 'music',
-            value: generalPrefs.musicRandomProtectionValue || 1,
-            unit: generalPrefs.musicRandomProtectionUnit || 'days'
-        });
-        if (result?.success) {
-            recentMusicHistoryPaths.clear();
-            (result.paths || []).forEach(filePath => recentMusicHistoryPaths.add(filePath));
-            recentMusicHistoryLoadedAt = Date.now();
-        }
-    } catch (err) { }
-    return recentMusicHistoryPaths;
+// Reproducciones recientes "optimistas": el historial fisico se consulta con un
+// cache corto (5s); este mapa refleja de inmediato lo que se acaba de poner al
+// aire para no reelegirlo antes del proximo refresco.
+const optimisticRecentPlays = new Map(); // absPath -> ms
+
+function markOptimisticPlay(filePath) {
+    if (filePath) optimisticRecentPlays.set(filePath, Date.now());
 }
 
-async function takeRandomFolderFileAvoidingRecentMusic(folderPath) {
-    const files = getRandomFolderFilesFast(folderPath);
-    if (files.length === 0) return null;
-    await refreshRecentMusicHistoryPaths();
-    const eligible = files.filter(fileName => !recentMusicHistoryPaths.has(path.join(folderPath, fileName)));
-    if (eligible.length === 0) {
-        recordIncident('[HISTORIAL] La carpeta aleatoria agoto las canciones no repetidas. Se libero temporalmente la regla para continuar al aire.', { category: 'air', level: 'warn' });
-        return takeRandomFolderFile(folderPath);
+// Cache corto de consultas al historial fisico, parametrizado por ventana (horas).
+const RECENT_QUERY_TTL_MS = 5000;
+const recentSongsCache = new Map();   // hours -> { at, map: Map(absPath->lastPlayedMs) }
+const recentArtistsCache = new Map(); // hours -> { at, set: Set(normArtist) }
+
+async function getRecentSongPlays(hours) {
+    const cached = recentSongsCache.get(hours);
+    if (cached && Date.now() - cached.at < RECENT_QUERY_TTL_MS) return cached.map;
+    const map = new Map();
+    try {
+        const res = await ipcRenderer.invoke('playback-history-recent-songs', { category: 'music', value: hours, unit: 'hours' });
+        if (res?.success) (res.songs || []).forEach(row => {
+            const t = Date.parse(row.lastPlayed);
+            if (Number.isFinite(t)) map.set(row.filePath, t);
+        });
+    } catch (err) { }
+    recentSongsCache.set(hours, { at: Date.now(), map });
+    return map;
+}
+
+async function getRecentArtists(hours) {
+    const cached = recentArtistsCache.get(hours);
+    if (cached && Date.now() - cached.at < RECENT_QUERY_TTL_MS) return cached.set;
+    const set = new Set();
+    try {
+        const res = await ipcRenderer.invoke('playback-history-recent-artists', { category: 'music', value: hours, unit: 'hours' });
+        if (res?.success) (res.artists || []).forEach(row => {
+            const a = musicSeparation.normalizeArtist(row.artist);
+            if (a) set.add(a);
+        });
+    } catch (err) { }
+    recentArtistsCache.set(hours, { at: Date.now(), set });
+    return set;
+}
+
+// Ultima reproduccion conocida (historial fisico + optimista) en ms; 0 si nunca.
+function combinedLastPlayedMs(absPath, recentSongMap) {
+    return Math.max(recentSongMap.get(absPath) || 0, optimisticRecentPlays.get(absPath) || 0);
+}
+
+// Bolsa por carpeta+modo: agota el pool antes de repetir, intersectando con lo elegible.
+function drawFromBag(folderPath, recursive, poolRels) {
+    const key = randomBagKey(folderPath, recursive);
+    const poolSet = new Set(poolRels);
+    const currentBag = (randomBagsCache[key] || []).filter(rel => poolSet.has(rel));
+    randomBagsCache[key] = currentBag.length > 0 ? currentBag : shuffleArray([...poolRels]);
+    const nextRel = randomBagsCache[key].pop();
+    return nextRel ? randomFolderSource.resolveAbsolute(folderPath, nextRel) : null;
+}
+
+// N2: cuando todas estan dentro de la ventana, suena la que sono hace mas tiempo.
+function pickLeastRecentlyPlayed(folderPath, rels, recentSongMap) {
+    const toAbs = rel => randomFolderSource.resolveAbsolute(folderPath, rel);
+    let best = null;
+    let bestTime = Infinity;
+    for (const rel of rels) {
+        const t = combinedLastPlayedMs(toAbs(rel), recentSongMap) || -Infinity;
+        if (t < bestTime) { bestTime = t; best = rel; }
     }
-    const eligibleSet = new Set(eligible);
-    const currentBag = (randomBagsCache[folderPath] || []).filter(fileName => eligibleSet.has(fileName));
-    randomBagsCache[folderPath] = currentBag.length > 0 ? currentBag : shuffleArray([...eligible]);
-    const nextFile = randomBagsCache[folderPath].pop();
-    return nextFile ? path.join(folderPath, nextFile) : null;
+    return best ? toAbs(best) : null;
+}
+
+// Seleccion con escalera de relajacion por carpeta:
+//  N0: separacion de cancion + artista.   N1: solo cancion (artista relajado).
+//  N2: forzar "la menos reciente" (cancion relajada). Nunca queda en silencio.
+async function takeRandomFolderFileAvoidingRecentMusic(folderPath, recursive = false) {
+    const rels = getRandomFolderFilesFast(folderPath, recursive);
+    if (rels.length === 0) return null;
+    const toAbs = rel => randomFolderSource.resolveAbsolute(folderPath, rel);
+    const rules = musicSeparation.getEffectiveRules(folderPath, generalPrefs);
+
+    const now = Date.now();
+    const songWindowMs = rules.songHours * 3600 * 1000;
+    const recentSongMap = await getRecentSongPlays(rules.songHours);
+
+    const songEligible = rels.filter(rel => {
+        const last = combinedLastPlayedMs(toAbs(rel), recentSongMap);
+        return !(last > 0 && (now - last) < songWindowMs);
+    });
+
+    if (songEligible.length === 0) {
+        recordIncident('[HISTORIAL] La carpeta aleatoria agoto las canciones no repetidas. Se libero temporalmente la regla para continuar al aire.', { category: 'air', level: 'warn' });
+        return pickLeastRecentlyPlayed(folderPath, rels, recentSongMap);
+    }
+
+    let pool = songEligible;
+    if (rules.artistEnabled) {
+        const recentArtists = await getRecentArtists(rules.artistHours);
+        if (recentArtists.size > 0) {
+            await ensureDbTracksLoaded(songEligible.map(toAbs));
+            const artistEligible = songEligible.filter(rel => {
+                const artist = musicSeparation.normalizeArtist((manualCuesDB[toAbs(rel)] || {}).customArtist);
+                return !artist || !recentArtists.has(artist);
+            });
+            if (artistEligible.length > 0) {
+                pool = artistEligible;
+            } else {
+                recordIncident('[HISTORIAL] Separacion por artista relajada temporalmente: las canciones disponibles comparten un artista reciente.', { category: 'air', level: 'warn' });
+            }
+        }
+    }
+
+    return drawFromBag(folderPath, recursive, pool);
 }
 
 async function resolveRandomRow(row) {
@@ -3789,12 +4055,13 @@ async function resolveRandomRow(row) {
         return row.dataset.resolvedRandomPath;
     }
     const folderPath = row.dataset.ruta;
-    const filePath = await takeRandomFolderFileAvoidingRecentMusic(folderPath);
+    const recursive = row.dataset.recursive === 'true';
+    const filePath = await takeRandomFolderFileAvoidingRecentMusic(folderPath, recursive);
     if (!filePath) return null;
     row.dataset.resolvedRandomPath = filePath;
     row.dataset.resolvedRandomName = path.basename(filePath);
     row.dataset.resolvedRandomDuration = getCachedTrackDurationSeconds(filePath, row.dataset.duracion);
-    warmRandomFolder(folderPath);
+    warmRandomFolder(folderPath, recursive);
     return filePath;
 }
 
@@ -3810,7 +4077,7 @@ function warmUpcomingRows(startRow) {
     while (row && checked < RANDOM_WARM_LOOKAHEAD_ROWS) {
         const targetRow = row;
         if (row.dataset.type === 'random') {
-            warmRandomFolder(row.dataset.ruta).then(() => {
+            warmRandomFolder(row.dataset.ruta, row.dataset.recursive === 'true').then(() => {
                 if (document.body.contains(targetRow) && targetRow !== currentPlayingRow) hydrateRandomRowFromLibrary(targetRow);
             });
         } else if (row.dataset.type !== 'time') {
@@ -3842,6 +4109,11 @@ ipcRenderer.on('refresh-events', async (e, savedEvent) => {
     eventRuntimeQueue.clear();
     eventPreflightPromises.clear();
     eventsMasterDB.forEach(ev => { ev.checkedForThisCycle = false; });
+    // Actualizar referencias en emittedEventsToday con los nuevos objetos del DB
+    emittedEventsToday = emittedEventsToday.map(em => {
+        const updated = eventsMasterDB.find(ev => ev.id === em.ev.id);
+        return updated ? { ...em, ev: updated } : em;
+    });
     renderEventsList(); updateEventCountdowns();
 });
 
@@ -3864,7 +4136,8 @@ const masterCheckbox = document.getElementById('chk-events-master'); if (masterC
 const manualCheckbox = document.getElementById('chk-events-manual'); if (manualCheckbox) { manualCheckbox.addEventListener('change', (e) => { generalPrefs.eventsManualOnly = e.target.checked; saveConfig(generalPrefsPath, generalPrefs); applyEventsUIState(); recordIncident(e.target.checked ? '[EVENTOS] Modo manual activado.' : '[EVENTOS] Modo automatico restaurado.', { category: 'events', level: e.target.checked ? 'warn' : 'success' }); }); }
 const eventPreHoldCheckbox = document.getElementById('chk-event-prehold');
 const eventPreHoldSecondsInput = document.getElementById('event-prehold-seconds');
-if (eventPreHoldCheckbox) eventPreHoldCheckbox.checked = generalPrefs.eventPreHoldActive !== false;
+generalPrefs.eventPreHoldActive = false;
+if (eventPreHoldCheckbox) eventPreHoldCheckbox.checked = false;
 if (eventPreHoldSecondsInput) eventPreHoldSecondsInput.value = getEventPreHoldSeconds();
 if (eventPreHoldCheckbox) eventPreHoldCheckbox.addEventListener('change', (e) => { generalPrefs.eventPreHoldActive = e.target.checked; if (!e.target.checked) clearEventPreHold(); saveConfig(generalPrefsPath, generalPrefs); });
 if (eventPreHoldSecondsInput) eventPreHoldSecondsInput.addEventListener('change', (e) => { generalPrefs.eventPreHoldSeconds = Math.max(1, Math.min(120, parseInt(e.target.value, 10) || 20)); e.target.value = generalPrefs.eventPreHoldSeconds; saveConfig(generalPrefsPath, generalPrefs); });
@@ -3881,6 +4154,8 @@ function hideAllMenus() {
         if (eventsListMenu) { eventsListMenu.style.display = 'none'; }
         if (eimMenu) { eimMenu.style.display = 'none'; }
         if (groupContextMenu) { groupContextMenu.style.display = 'none'; }
+        const efm = document.getElementById('events-filter-menu');
+        if (efm) { efm.style.display = 'none'; }
 
         const cwcm = document.getElementById('cw-context-menu');
         if (cwcm) cwcm.style.display = 'none';
@@ -4006,7 +4281,8 @@ async function handleSavePlaylist() {
         const rows = Array.from(playlistBody.children);
         const pData = rows.map(r => ({
             ruta: r.dataset.ruta, duracion: r.dataset.duracion, type: r.dataset.type,
-            titulo: r.dataset.pureName ? (r.dataset.pureName + r.dataset.ext) : r.children[1].innerText,
+            recursive: r.dataset.recursive === 'true',
+            titulo: r.dataset.pureName ? (r.dataset.pureName + r.dataset.ext) : r.querySelector(".col-titulo").innerText,
             customMix: r.dataset.customMix || null,
             temp: r.dataset.temp === 'true',
             noteText: r.dataset.noteText || null,
@@ -4075,6 +4351,7 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                     const rowType = item.type || 'normal';
                     const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'note' ? (item.noteText || item.titulo || '') : (rowType === 'execute_event' ? (item.eventName || item.titulo || '') : item.titulo));
                     lastInsertedRow = createPlaylistRow(item.ruta, rowName, parseInt(item.duracion, 10) || 0, rowType, lastInsertedRow, 'bottom', targetTbody);
+                    if (lastInsertedRow && rowType === 'random' && (item.recursive === true || item.recursive === 'true')) lastInsertedRow.dataset.recursive = 'true';
                     if (lastInsertedRow && rowType === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) lastInsertedRow.dataset.targetTab = parseInt(item.targetTab, 10);
                     if (lastInsertedRow && rowType === 'note' && item.noteText) lastInsertedRow.dataset.noteText = item.noteText;
                     if (lastInsertedRow && rowType === 'execute_event') { lastInsertedRow.dataset.eventId = item.eventId || item.ruta || ''; lastInsertedRow.dataset.eventName = item.eventName || item.titulo || ''; }
@@ -4089,8 +4366,8 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                         // Recalcular la celda de duración (se generó con el default '∞' antes de conocer stopPolicy).
                         const _secs = parseInt(lastInsertedRow.dataset.stopSeconds, 10) || 0;
                         const _hasTimer = lastInsertedRow.dataset.stopPolicy === 'timer' && _secs > 0;
-                        if (lastInsertedRow.children[2]) {
-                            lastInsertedRow.children[2].innerText = _hasTimer
+                        if (lastInsertedRow.querySelector(".col-duracion")) {
+                            lastInsertedRow.querySelector(".col-duracion").innerText = _hasTimer
                                 ? `${Math.floor(_secs/3600).toString().padStart(2,'0')}:${Math.floor((_secs%3600)/60).toString().padStart(2,'0')}:${(_secs%60).toString().padStart(2,'0')}`
                                 : '∞';
                         }
@@ -4135,6 +4412,7 @@ function normalizePlaylistItem(item = {}) {
         ruta,
         type,
         titulo,
+        recursive: item.recursive === true || item.recursive === 'true' || item.Recursive === true || item.Recursive === 'true',
         duracion: item.duracion ?? item.Duracion ?? item.duration ?? item.Duration ?? item.dur ?? 0,
         customMix: item.customMix ?? item.CustomMix ?? item.mix ?? item.Mix ?? null,
         temp: item.temp === true || item.Temp === true || item.temporary === true || item.Temporary === true,
@@ -4250,9 +4528,9 @@ ipcRenderer.on('menu-toggle-temp', () => {
     document.querySelectorAll('.selected-row').forEach(tr => {
         let isTemp = tr.dataset.temp === 'true';
         tr.dataset.temp = isTemp ? 'false' : 'true';
-        let currentName = tr.dataset.pureName || tr.children[1].innerText;
-        if (isTemp && /^(?:\u23f3|⏳)\s/.test(currentName)) { tr.dataset.pureName = currentName.replace(/^(?:\u23f3|⏳)\s*/, ''); tr.children[1].innerText = tr.dataset.pureName; }
-        else if (!isTemp && !/^(?:\u23f3|⏳)\s/.test(currentName)) { tr.dataset.pureName = ICON_TEMP_PREFIX + currentName; tr.children[1].innerText = ICON_TEMP_PREFIX + currentName; }
+        let currentName = tr.dataset.pureName || tr.querySelector(".col-titulo").innerText;
+        if (isTemp && /^(?:\u23f3|⏳)\s/.test(currentName)) { tr.dataset.pureName = currentName.replace(/^(?:\u23f3|⏳)\s*/, ''); tr.querySelector(".col-titulo").innerText = tr.dataset.pureName; }
+        else if (!isTemp && !/^(?:\u23f3|⏳)\s/.test(currentName)) { tr.dataset.pureName = ICON_TEMP_PREFIX + currentName; tr.querySelector(".col-titulo").innerText = ICON_TEMP_PREFIX + currentName; }
     });
 });
 ipcRenderer.on('menu-delete-selected', () => {
@@ -4454,7 +4732,7 @@ function insertSpecialRow(type, targetTab = null, noteText = '') {
         row.dataset.eventName = noteText?.name || noteText?.eventName || payloadName || '';
         row.dataset.ruta = row.dataset.eventId;
         row.dataset.pureName = formatSpecialPlaylistTitle('execute_event', null, row.dataset.eventName);
-        row.children[1].innerText = row.dataset.pureName;
+        row.querySelector(".col-titulo").innerText = row.dataset.pureName;
     }
     if (row && !isPlaylistNoteRow(row) && !queuedNextRow && !currentPlayingRow) setQueuedNextManual(row);
     calcularHorasPlaylist();
@@ -4653,11 +4931,82 @@ async function runEventPreflight(ev, entry, reason = 'auto') {
         }
         refreshEventsIncidentStatus();
         renderEventTimeline(true);
+        // ── Precarga de duración para pisadores (action === 'ducking') ──────
+        // Si el evento es un pisador y la fuente es válida, calculamos la duración
+        // del audio AHORA (durante el preflight) para que al dispararse el timer
+        // duro ya esté listo sin esperar la respuesta async de Rust.
+        if (inspection.ok && ev.action === 'ducking') {
+            try {
+                entry.duckingDurationMs = await precomputeDuckingDuration(ev);
+            } catch (_) {
+                entry.duckingDurationMs = 0;
+            }
+        }
         return inspection;
     })().finally(() => eventPreflightPromises.delete(entry.key));
 
     eventPreflightPromises.set(entry.key, promise);
     return promise;
+}
+
+/**
+ * Calcula la duración total (en ms) del audio que reproducirá un pisador de
+ * evento antes de que éste dispare. Se llama desde runEventPreflight para
+ * pre-calentar la información y no tener que esperarla en tiempo real.
+ *
+ * Para locución horaria: suma la duración de HRS + MIN.
+ * Para temperatura/humedad: dura el archivo de la lectura actual.
+ * Para archivo: dura el archivo configurado.
+ *
+ * Devuelve 0 si no se puede calcular (archivo no encontrado, sin datos de clima, etc.).
+ */
+async function precomputeDuckingDuration(ev) {
+    if (!ev || ev.action !== 'ducking') return 0;
+
+    if (ev.sourceType === 'locution') {
+        const locType = ev.locutionType || (ev.filePath || '').replace('locution:', '') || 'time';
+
+        if (locType === 'time') {
+            const folder = generalPrefs.timeFolder;
+            if (!folder || !fs.existsSync(folder)) return 0;
+            const files = resolveTimeLocutionFiles(folder);
+            if (files.length === 0) return 0;
+            // Pre-calentar caché de Rust para ambos archivos.
+            commandRustControlPlane('cacheDuration', { paths: files, cacheDir: mainWaveformCacheDir }).catch(() => {});
+            let totalMs = 0;
+            for (const f of files) {
+                const sec = await getAudioDuration(f).catch(() => 0);
+                totalMs += (sec || 0) * 1000;
+            }
+            return Math.round(totalMs);
+        }
+
+        if (locType === 'temperature' || locType === 'humidity') {
+            try {
+                const value = await ensureClimateWeatherValue(locType);
+                if (!Number.isFinite(value)) return 0;
+                const folder = resolveClimateLocutionFolder(locType);
+                if (!folder) return 0;
+                const filePath = findClimateLocutionFile(folder, locType, value);
+                if (!filePath) return 0;
+                commandRustControlPlane('cacheDuration', { paths: [filePath], cacheDir: mainWaveformCacheDir }).catch(() => {});
+                const sec = await getAudioDuration(filePath).catch(() => 0);
+                return Math.round((sec || 0) * 1000);
+            } catch (_) { return 0; }
+        }
+
+        return 0;
+    }
+
+    if (ev.sourceType === 'file') {
+        const filePath = ev.filePath || '';
+        if (!filePath || !fs.existsSync(filePath)) return 0;
+        commandRustControlPlane('cacheDuration', { paths: [filePath], cacheDir: mainWaveformCacheDir }).catch(() => {});
+        const sec = await getAudioDuration(filePath).catch(() => 0);
+        return Math.round((sec || 0) * 1000);
+    }
+
+    return 0;
 }
 
 function buildUpcomingEventTimeline(limit = EVENT_TIMELINE_LIMIT) {
@@ -4745,14 +5094,222 @@ function applyEventWarningColors(liElement, secondsRemaining, customColor, force
     else { liElement.style.backgroundColor = baseColor; }
 }
 
+let eventsFilterMode = generalPrefs.eventsFilterMode || 'all';
+let eventsSortByNext = generalPrefs.eventsSortByNext || false;
+// Separar los ya emitidos en el apartado "Emitidos hoy". Solo aplica a las vistas
+// de HOY (Hoy / próximas Xh); en "Todos" y en otros días siempre se ven todos.
+let eventsShowEmitted = generalPrefs.eventsShowEmitted !== false;
+let emittedEventsToday = [];
+let emittedPhaseSeconds = 0;
+let emittedShowSono = true;
+let lastMidnightCheck = new Date().toDateString();
+
+function applyEventsFilterMenuStyles() {
+    document.querySelectorAll('#events-filter-menu .context-item').forEach(el => {
+        if (el.id !== 'ef-sort-next' && el.id !== 'ef-show-emitted') el.style.fontWeight = 'normal';
+    });
+    const activeFilterEl = document.getElementById(eventsFilterMode === 'all' ? 'ef-all' : (eventsFilterMode === 'today' ? 'ef-today' : (eventsFilterMode === '3h' ? 'ef-3h' : (eventsFilterMode === '6h' ? 'ef-6h' : (eventsFilterMode === '12h' ? 'ef-12h' : null)))));
+    if (activeFilterEl) activeFilterEl.style.fontWeight = 'bold';
+    
+    document.querySelectorAll('#events-filter-days button').forEach(b => b.classList.remove('events-filter-day-active'));
+    if (eventsFilterMode.startsWith('day_')) {
+        const dayBtn = document.querySelector(`#events-filter-days button[data-day="${eventsFilterMode.split('_')[1]}"]`);
+        if (dayBtn) dayBtn.classList.add('events-filter-day-active');
+    }
+
+    const sortNextEl = document.getElementById('ef-sort-next');
+    if (sortNextEl) {
+        sortNextEl.innerHTML = eventsSortByNext ? '☑ Próximo a emitir primero' : '🔳 Próximo a emitir primero';
+        sortNextEl.style.fontWeight = eventsSortByNext ? 'bold' : 'normal';
+    }
+
+    // El toggle de "Emitidos hoy" solo tiene efecto en vistas de hoy; en "Todos" y
+    // en otros días se atenúa para dejar claro que ahí no aplica.
+    const showEmittedEl = document.getElementById('ef-show-emitted');
+    if (showEmittedEl) {
+        const emittedApplies = eventsFilterMode !== 'all' && !eventsFilterMode.startsWith('day_');
+        showEmittedEl.innerHTML = eventsShowEmitted ? '☑ Separar emitidos hoy' : '🔳 Separar emitidos hoy';
+        showEmittedEl.style.fontWeight = (eventsShowEmitted && emittedApplies) ? 'bold' : 'normal';
+        showEmittedEl.style.opacity = emittedApplies ? '' : '0.4';
+    }
+}
+
+function handleEventFilterClick(e) {
+    if (!e.target.classList.contains('context-item') && !e.target.classList.contains('mini-btn')) return;
+    
+    const id = e.target.id;
+    if (id === 'ef-sort-next') {
+        eventsSortByNext = !eventsSortByNext;
+        generalPrefs.eventsSortByNext = eventsSortByNext;
+        saveConfig(generalPrefsPath, generalPrefs);
+        applyEventsFilterMenuStyles();
+        renderEventsList();
+        return;
+    }
+    if (id === 'ef-show-emitted') {
+        eventsShowEmitted = !eventsShowEmitted;
+        generalPrefs.eventsShowEmitted = eventsShowEmitted;
+        saveConfig(generalPrefsPath, generalPrefs);
+        applyEventsFilterMenuStyles();
+        renderEventsList();
+        return;
+    }
+
+    hideAllMenus();
+    if (id === 'ef-all') eventsFilterMode = 'all';
+    else if (id === 'ef-today') eventsFilterMode = 'today';
+    else if (id === 'ef-3h') eventsFilterMode = '3h';
+    else if (id === 'ef-6h') eventsFilterMode = '6h';
+    else if (id === 'ef-12h') eventsFilterMode = '12h';
+    else if (e.target.dataset.day) {
+        eventsFilterMode = 'day_' + e.target.dataset.day;
+    }
+    
+    generalPrefs.eventsFilterMode = eventsFilterMode;
+    saveConfig(generalPrefsPath, generalPrefs);
+
+    applyEventsFilterMenuStyles();
+    renderEventsList();
+}
+
+document.getElementById('events-filter-menu')?.addEventListener('click', handleEventFilterClick);
+document.getElementById('btn-events-filter')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideAllMenus();
+    const menu = document.getElementById('events-filter-menu');
+    
+    applyEventsFilterMenuStyles();
+    if (!eventsFilterMode.startsWith('day_')) {
+        const todayDay = new Date().getDay();
+        document.querySelectorAll('#events-filter-days button').forEach(b => {
+            if (parseInt(b.dataset.day) === todayDay) {
+                b.style.color = '#00a8ff';
+                b.style.fontWeight = 'bold';
+            } else {
+                b.style.color = '';
+                b.style.fontWeight = '';
+            }
+        });
+    }
+
+    showContextMenu(menu, e.pageX - 120, e.pageY - 150);
+    applyMenuLogic();
+});
+
+function isEventMatchesFilter(ev, mode) {
+    if (mode === 'all') return true;
+    const occurrence = getNextAbsoluteOccurrence(ev, false);
+    if (!occurrence) return false;
+    
+    const now = new Date();
+    if (mode === 'today') {
+        return occurrence.date.toDateString() === now.toDateString();
+    } else if (mode === '3h') {
+        const diffMs = occurrence.date - now;
+        return diffMs >= 0 && diffMs <= 3 * 3600 * 1000;
+    } else if (mode === '6h') {
+        const diffMs = occurrence.date - now;
+        return diffMs >= 0 && diffMs <= 6 * 3600 * 1000;
+    } else if (mode === '12h') {
+        const diffMs = occurrence.date - now;
+        return diffMs >= 0 && diffMs <= 12 * 3600 * 1000;
+    } else if (mode.startsWith('day_')) {
+        const targetDay = parseInt(mode.split('_')[1]);
+        return occurrence.date.getDay() === targetDay;
+    }
+    return true;
+}
+
+function renderEmittedEvents() {
+    const container = document.getElementById('events-emitted-container');
+    if (container) container.style.display = 'none';
+}
+
+function prePopulateEmittedToday() {
+    const now = new Date();
+    const alreadyIds = new Set(emittedEventsToday.map(e => e.ev.id));
+    eventsMasterDB.forEach(ev => {
+        if (alreadyIds.has(ev.id)) return;
+        const times = getExpandedEventTimes(ev);
+        for (const tStr of times) {
+            const [h, m, s] = tStr.split(':').map(Number);
+            const d = new Date(now); d.setHours(h, m, s, 0);
+            // Solo reconstruir como "emitido hoy" lo que REALMENTE se disparó. El
+            // registro fiable es ev.lastFired (lo setea el disparo real, ver el
+            // loop de chequeo de eventos). Antes se marcaba como emitido CUALQUIER
+            // evento cuya hora del día ya hubiera pasado, aunque nunca hubiese
+            // sonado — eso hacía desaparecer de la lista (y de la ejecución) a los
+            // eventos recién creados con una hora anterior a la actual.
+            if (d < now && isDateValidForEvent(d, ev) && ev.lastFired === getEventFireId(ev, tStr, d)) {
+                const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                emittedEventsToday.push({ ev, emittedAt: d, text: `Sonó a las ${timeStr}` });
+                alreadyIds.add(ev.id);
+                break;
+            }
+        }
+    });
+    emittedEventsToday.sort((a, b) => b.emittedAt - a.emittedAt);
+}
+
+// Devuelve true si el evento todavía tiene una ocurrencia pendiente HOY (después
+// del momento actual). Usado para que un evento cíclico / con varias horas que ya
+// sonó una vez siga apareciendo en la lista principal para sus próximas ocurrencias.
+function hasOccurrenceRemainingToday(ev) {
+    const occ = getNextAbsoluteOccurrence(ev, false);
+    if (!occ) return false;
+    return occ.date.toDateString() === new Date().toDateString();
+}
+
 function renderEventsList() {
     const ul = document.getElementById('events-list'); ul.innerHTML = ''; let groupedEvents = {}; eventGroupsDB.forEach(g => groupedEvents[g.id] = { meta: g, events: [] });
     if (!groupedEvents['g_general']) groupedEvents['g_general'] = { meta: { id: 'g_general', name: 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }, events: [] };
-    eventsMasterDB.sort((a, b) => a.primaryTime.localeCompare(b.primaryTime));
-    eventsMasterDB.forEach(ev => { let gid = ev.group || 'g_general'; if (!groupedEvents[gid]) { const match = eventGroupsDB.find(g => g.name === gid); if (match) { gid = match.id; ev.group = gid; } else { gid = 'g_general'; } } groupedEvents[gid].events.push(ev); });
 
-    Object.values(groupedEvents).forEach(groupObj => {
-        if (groupObj.events.length === 0) return; const isCollapsed = collapsedGroups.has(groupObj.meta.id);
+    // El apartado "Emitidos hoy" (separar los ya disparados) solo aplica a las
+    // vistas de HOY (Hoy / próximas Xh) y solo si el toggle está activo. En "Todos"
+    // y en las vistas de otros días NO se separa: se ven TODOS los eventos del día
+    // con normalidad, aunque se repitan en otros días.
+    const separateEmitted = eventsShowEmitted
+        && eventsFilterMode !== 'all'
+        && !eventsFilterMode.startsWith('day_');
+
+    const emittedIds = new Set(emittedEventsToday.map(e => e.ev.id));
+    // Un evento se mueve AL HISTORIAL solo cuando cumple las tres condiciones:
+    //   1. separateEmitted activo (vista de hoy con el toggle encendido)
+    //   2. ya sonó al menos una vez hoy (está en emittedIds)
+    //   3. NO tiene más ocurrencias pendientes hoy
+    // Si el evento ya sonó pero se repite más tarde hoy, se muestra en AMBOS
+    // sitios: queda en el historial Y sigue en la lista principal.
+    let filteredEvents = eventsMasterDB.filter(ev =>
+        isEventMatchesFilter(ev, eventsFilterMode) &&
+        (!separateEmitted || !emittedIds.has(ev.id) || hasOccurrenceRemainingToday(ev))
+    );
+
+    if (eventsSortByNext) {
+        filteredEvents.sort((a, b) => {
+            const timeA = formatEventTimeLeft(a).seconds;
+            const timeB = formatEventTimeLeft(b).seconds;
+            const validA = timeA >= 0 ? timeA : Infinity;
+            const validB = timeB >= 0 ? timeB : Infinity;
+            return validA - validB;
+        });
+    } else {
+        filteredEvents.sort((a, b) => a.primaryTime.localeCompare(b.primaryTime));
+    }
+    
+    renderEmittedEvents();
+
+    filteredEvents.forEach(ev => { let gid = ev.group || 'g_general'; if (!groupedEvents[gid]) { const match = eventGroupsDB.find(g => g.name === gid); if (match) { gid = match.id; ev.group = gid; } else { gid = 'g_general'; } } groupedEvents[gid].events.push(ev); });
+
+    let groupsArray = Object.values(groupedEvents).filter(g => g.events.length > 0);
+    if (eventsSortByNext) {
+        groupsArray.sort((a, b) => {
+            const getNearest = (events) => Math.min(...events.map(ev => { const s = formatEventTimeLeft(ev).seconds; return s >= 0 ? s : Infinity; }));
+            return getNearest(a.events) - getNearest(b.events);
+        });
+    }
+
+    groupsArray.forEach(groupObj => {
+        const isCollapsed = collapsedGroups.has(groupObj.meta.id);
         const headerLi = document.createElement('li'); headerLi.className = `event-group-header ${isCollapsed ? 'group-collapsed' : ''}`;
         headerLi.style.backgroundColor = groupObj.meta.colorBg; headerLi.style.color = groupObj.meta.colorText;
         headerLi.innerHTML = `<span style="flex:1;">${groupObj.meta.name}</span> <span class="event-group-icon" style="transition: transform 0.2s; color: inherit; transform: ${isCollapsed ? 'rotate(-90deg)' : 'rotate(0)'};">&#9662;</span>`;
@@ -4781,6 +5338,47 @@ function renderEventsList() {
             });
         }
     });
+
+    // "Emitidos hoy" solo se separa en vistas de hoy con el toggle activo.
+    if (separateEmitted) {
+    const EMITTED_GID = 'g_emitted_today';
+    const isCollapsedEmitted = collapsedGroups.has(EMITTED_GID);
+    const headerEmitted = document.createElement('li');
+    headerEmitted.className = `event-group-header ${isCollapsedEmitted ? 'group-collapsed' : ''}`;
+    headerEmitted.style.backgroundColor = '#1c1c22'; headerEmitted.style.color = '#666';
+    headerEmitted.innerHTML = `<span style="flex:1;">Emitidos hoy</span> <span class="event-group-icon" style="transition: transform 0.2s; color: inherit; transform: ${isCollapsedEmitted ? 'rotate(-90deg)' : 'rotate(0)'};">&#9662;</span>`;
+    headerEmitted.style.display = 'flex'; headerEmitted.style.justifyContent = 'space-between'; headerEmitted.style.alignItems = 'center'; headerEmitted.style.cursor = 'pointer';
+    headerEmitted.onclick = () => { if (collapsedGroups.has(EMITTED_GID)) collapsedGroups.delete(EMITTED_GID); else collapsedGroups.add(EMITTED_GID); renderEventsList(); };
+    ul.appendChild(headerEmitted);
+    if (!isCollapsedEmitted) {
+        if (emittedEventsToday.length === 0) {
+            const liEmpty = document.createElement('li');
+            liEmpty.className = 'event-item event-item-emitted';
+            liEmpty.style.justifyContent = 'center'; liEmpty.style.color = '#555'; liEmpty.style.fontSize = '11px'; liEmpty.style.fontStyle = 'italic';
+            liEmpty.innerHTML = `<div class="evt-info" style="text-align:center;">Ningún evento emitido aún hoy</div>`;
+            ul.appendChild(liEmpty);
+        } else {
+            emittedEventsToday.forEach(em => {
+                const ev = em.ev;
+                const li = document.createElement('li');
+                li.className = 'event-item event-item-emitted';
+                li.dataset.id = ev.id;
+                if (ev.id === selectedEventId) li.classList.add('selected');
+                li.innerHTML = `<div class="evt-time">${ev.primaryTime.substring(0, 5)}</div><div class="evt-info"><span class="evt-name">${ev.name}</span></div><div class="evt-countdown">${em.text}</div>`;
+                li.onclick = (e) => { e.stopPropagation(); hideAllMenus(); selectedEventId = ev.id; updateSelectedEventControls(); document.querySelectorAll('.event-item').forEach(el => el.classList.remove('selected')); li.classList.add('selected'); };
+                li.ondblclick = (e) => { e.stopPropagation(); const current = eventsMasterDB.find(ev2 => ev2.id === ev.id) || ev; current.hasError = false; current.errorLoggedFor = null; ipcRenderer.send('open-event-editor', current); };
+                li.oncontextmenu = (e) => {
+                    e.preventDefault(); e.stopPropagation(); selectedEventId = ev.id; updateSelectedEventControls(); document.querySelectorAll('.event-item').forEach(el => el.classList.remove('selected')); li.classList.add('selected');
+                    const btnIgnore = document.getElementById('eim-ignore'); const absoluteTarget = getNextAbsoluteOccurrence(ev, true);
+                    if (absoluteTarget) { const dateStr = absoluteTarget.date.toDateString(); const ignoreKey = `${ev.id}_${absoluteTarget.timeStr}_${dateStr}`; if (ignoredEventTriggers.includes(ignoreKey)) { btnIgnore.innerHTML = `&#9654; No ignorar este evento`; btnIgnore.style.color = '#2ecc71'; } else { btnIgnore.innerHTML = `&#9940; Ignorar este evento`; btnIgnore.style.color = ''; } }
+                    showContextMenu(document.getElementById('event-item-menu'), e.pageX, e.pageY);
+                };
+                ul.appendChild(li);
+            });
+        }
+    }
+    } // fin if (separateEmitted)
+
     updateSelectedEventControls();
     renderEventTimeline(true);
 }
@@ -4798,6 +5396,14 @@ function updateTabAppearance(globalHasError, nearestHealthy, nearestSecs, recent
 function updateEventCountdowns() {
     const isTabVisible = document.getElementById('content-eventos').style.display !== 'none'; const chkManual = document.getElementById('chk-events-manual'); const chkMaster = document.getElementById('chk-events-master'); const isManualOnly = chkManual ? chkManual.checked : false; const isMasterActive = chkMaster ? chkMaster.checked : true;
     let globalHasError = false; let nearestHealthy = null; let nearestSecs = Infinity; let recentEmergency = false; const nowMs = Date.now();
+    emittedPhaseSeconds++; if (emittedPhaseSeconds >= 5) { emittedPhaseSeconds = 0; emittedShowSono = !emittedShowSono; }
+
+    const currentDayStr = new Date(nowMs).toDateString();
+    if (lastMidnightCheck !== currentDayStr) {
+        lastMidnightCheck = currentDayStr;
+        emittedEventsToday = [];
+        renderEventsList();
+    }
 
     eventsMasterDB.forEach(ev => {
         const timeData = formatEventTimeLeft(ev);
@@ -4823,7 +5429,8 @@ function updateEventCountdowns() {
         if (isTabVisible) {
             const li = document.querySelector(`.event-item[data-id="${ev.id}"]`);
             if (li && queueEntry) li.dataset.queueStatus = queueEntry.status;
-            if (li) { li.querySelector('.evt-countdown').innerText = timeData.text; let displayName = ev.name; if (ev.hasError) { li.style.backgroundColor = '#e01283'; li.classList.remove('evt-flash-red', 'evt-flash-red-hard'); displayName = `[${ICON_WARNING_LABEL}] ${ev.name}`; } else { const isQueuedWithDelay = isEventQueuedWithMaxDelay(ev.id); applyEventWarningColors(li, timeData.seconds, ev.colorBg, isQueuedWithDelay); } li.querySelector('.evt-name').innerText = displayName; }
+            if (li) { const isEmittedLi = li.classList.contains('event-item-emitted'); let countdownText = timeData.text; if (isEmittedLi && emittedShowSono) { const entry = emittedEventsToday.find(e => e.ev.id === ev.id); if (entry) countdownText = entry.text; } li.querySelector('.evt-countdown').innerText = countdownText; let displayName = ev.name; if (ev.hasError) { li.style.backgroundColor = '#e01283'; li.classList.remove('evt-flash-red', 'evt-flash-red-hard'); displayName = `[${ICON_WARNING_LABEL}] ${ev.name}`; } else { const isQueuedWithDelay = isEventQueuedWithMaxDelay(ev.id); applyEventWarningColors(li, timeData.seconds, ev.colorBg, isQueuedWithDelay); } li.querySelector('.evt-name').innerText = displayName; }
+
         }
     });
     updateTabAppearance(globalHasError, nearestHealthy, nearestSecs, recentEmergency, isManualOnly, isMasterActive);
@@ -4855,7 +5462,13 @@ async function queueEventForEmission(ev, options = {}) {
     }
 
     setEventQueueStatus(entry, 'dispatching', 'ENVIO', options.playlistCommand ? 'Ejecucion desde playlist' : (options.manual ? 'Ejecucion manual' : 'Disparo automatico'));
-    const executed = await executeEvent(ev, { queueKey: entry.key, scheduledTime: entry.timeStr, manual: !!options.manual, playlistCommand: options.playlistCommand === true });
+    const executed = await executeEvent(ev, {
+        queueKey: entry.key,
+        scheduledTime: entry.timeStr,
+        manual: !!options.manual,
+        playlistCommand: options.playlistCommand === true,
+        duckingDurationMs: entry.duckingDurationMs || 0,   // pre-calculado en preflight
+    });
     if (!executed) {
         setEventQueueStatus(entry, 'blocked', 'ERROR', 'No se pudo cargar en playlist');
         recordIncident(`[EVENTOS] ${ev.name}: no se pudo cargar en la playlist.`, { category: 'events', level: 'error' });
@@ -4863,6 +5476,12 @@ async function queueEventForEmission(ev, options = {}) {
         return false;
     }
     recordIncident(`[EVENTOS] ${ev.name}: enviado a emision${options.manual ? ' manual' : ''}.`, { category: 'events', level: 'success' });
+    
+    const timeNow = new Date();
+    const timeStr = `${timeNow.getHours().toString().padStart(2, '0')}:${timeNow.getMinutes().toString().padStart(2, '0')}`;
+    emittedEventsToday.unshift({ ev: ev, emittedAt: timeNow, text: `Sonó a las ${timeStr}` });
+    renderEventsList();
+    
     renderEventTimeline(true);
     return true;
 }
@@ -4873,7 +5492,7 @@ document.getElementById('btn-events-mod').addEventListener('click', () => { cons
 document.getElementById('eim-exec').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) queueEventForEmission(ev, { manual: true }); hideAllMenus(); });
 document.getElementById('eim-ignore').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { const absoluteTarget = getNextAbsoluteOccurrence(ev, true); if (absoluteTarget) { const dateStr = absoluteTarget.date.toDateString(); const ignoreKey = `${ev.id}_${absoluteTarget.timeStr}_${dateStr}`; if (ignoredEventTriggers.includes(ignoreKey)) { ignoredEventTriggers = ignoredEventTriggers.filter(k => k !== ignoreKey); } else { ignoredEventTriggers.push(ignoreKey); if (ev.hasError) { ev.hasError = false; ev.errorLoggedFor = null; } } updateEventCountdowns(); } } hideAllMenus(); });
 document.getElementById('eim-mod').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { ev.hasError = false; ev.errorLoggedFor = null; ipcRenderer.send('open-event-editor', ev); } hideAllMenus(); });
-document.getElementById('eim-del').addEventListener('click', async () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { hideAllMenus(); const confirm = await ipcRenderer.invoke('dialog:confirm', `Seguro que deseas eliminar el evento "${ev.name}"? Esta accion no se puede deshacer.`); if (confirm) { eventsMasterDB = eventsMasterDB.filter(e => e.id !== selectedEventId); selectedEventId = null; updateSelectedEventControls(); saveEventsDB(); renderEventsList(); } } });
+document.getElementById('eim-del').addEventListener('click', async () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { hideAllMenus(); const confirm = await ipcRenderer.invoke('dialog:confirm', `Seguro que deseas eliminar el evento "${ev.name}"? Esta accion no se puede deshacer.`); if (confirm) { eventsMasterDB = eventsMasterDB.filter(e => e.id !== selectedEventId); emittedEventsToday = emittedEventsToday.filter(e => e.ev.id !== selectedEventId); selectedEventId = null; updateSelectedEventControls(); saveEventsDB(); renderEventsList(); } } });
 document.getElementById('em-calendar').addEventListener('click', () => { ipcRenderer.send('open-calendar'); hideAllMenus(); });
 document.getElementById('btn-events-list').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -5088,7 +5707,85 @@ function markEventQueueAfterInsert(eventObj, runtimeOptions, firstInsertedRow, m
 
 async function executeEvent(eventObj, runtimeOptions = {}) {
     let pistas = [];
-    if (eventObj.sourceType === 'commercial') {
+
+    // ── Pisador / Superposición (action === 'ducking') ────────────────────
+    // Suena encima del BGM sin modificar la playlist.
+    // El BGM baja al volumen configurado (eventDuckingVolume) con el fade
+    // configurado (eventDuckingFade ms) y sube de vuelta cuando termina el audio.
+    if (eventObj.action === 'ducking') {
+        // Aplicar los valores del evento a las prefs globales ANTES de llamar a
+        // cualquier función que ejecute applyDucking(), que los lee en ese momento.
+        const prevDuckVol  = generalPrefs.duckingVolume;
+        const prevDuckFade = generalPrefs.duckingFade;
+        generalPrefs.duckingVolume = Number(eventObj.eventDuckingVolume ?? 20);
+        generalPrefs.duckingFade   = Number(eventObj.eventDuckingFade  ?? 500) / 1000;
+
+        try {
+            if (eventObj.sourceType === 'locution') {
+                // Las funciones de locución gestionan internamente el ducking. Les
+                // pasamos el fundido del evento para que la locución suene RECIÉN
+                // cuando el BGM terminó de bajar, igual que un pisador de archivo.
+                const locType = eventObj.locutionType || (eventObj.filePath || '').replace('locution:', '') || 'time';
+                const locFadeMs = Math.max(0, Number(eventObj.eventDuckingFade ?? 500));
+                if (locType === 'time') playTimeLocution(locFadeMs);
+                else                   playClimateLocution(locType, locFadeMs);
+
+            } else {
+                // ── Archivo de audio (MP3, WAV, FLAC, …) como pisador ──
+                const filePath = eventObj.filePath || '';
+                if (!filePath || !fs.existsSync(filePath)) return false;
+
+                // ID único para este pisador en el motor Rust.
+                const playerId = `event-pisador-${eventObj.id || Date.now()}`;
+
+                // Registrar el runtime: llama internamente beginProgramOverlayDucking()
+                // → applyDucking(), que arranca el FUNDIDO del BGM hacia abajo AHORA.
+                // NO llamar beginProgramOverlayDucking() aquí también o activePisadores
+                // quedaría en 2 y el ducking nunca terminaría.
+                registerRustOverlayRuntime({
+                    playerId,
+                    path: filePath,
+                    type: 'event-pisador',
+                    affectsProgram: true,
+                });
+
+                // Espera profesional: precargar y reproducir RECIÉN cuando el BGM
+                // terminó de bajar (mismo fundido configurado en el evento).
+                const fadeMs = Math.max(0, Number(eventObj.eventDuckingFade ?? 500));
+                const loadResult = await playOverlayAfterDuckFade(playerId, filePath, fadeMs, runtimeOptions.duckingDurationMs || 0);
+                if (!loadResult?.ok) {
+                    finishRustOverlayRuntime(playerId);
+                    logSystem(`[PISADOR] No se pudo reproducir "${path.basename(filePath)}": ${loadResult?.error || 'sin detalle'}`);
+                    return false;
+                }
+                logSystem(`[PISADOR] "${path.basename(filePath)}" (suena al completarse el fundido de ${fadeMs} ms)`);
+            }
+        } finally {
+            // Restaurar los prefs globales. El duck ya capturó su volumen/fundido
+            // en activeDuckParams (dentro de applyDucking), así que su fin usará
+            // esos valores aunque acá se restaure lo global: no hay carrera. El
+            // pequeño retardo solo cubre la rama de locución, cuyo applyDucking
+            // corre tras varios await internos.
+            setTimeout(() => {
+                generalPrefs.duckingVolume = prevDuckVol;
+                generalPrefs.duckingFade   = prevDuckFade;
+            }, 150);
+        }
+        return true;
+    }
+
+    // ── Locuciones en modo playlist ───────────────────────────────────────
+    if (eventObj.sourceType === 'locution') {
+        const locType = eventObj.locutionType || (eventObj.filePath || '').replace('locution:', '') || 'time';
+        if (locType === 'time') {
+            pistas.push({ ruta: 'time_locution', nombre: ICON_CLOCK_LABEL, duracion: 5, type: 'time', temp: false });
+        } else if (locType === 'temperature') {
+            pistas.push({ ruta: 'temperature_locution', nombre: ICON_TEMPERATURE_LABEL, duracion: 5, type: 'temperature', temp: false });
+        } else if (locType === 'humidity') {
+            pistas.push({ ruta: 'humidity_locution', nombre: ICON_HUMIDITY_LABEL, duracion: 5, type: 'humidity', temp: false });
+        }
+        // Continúa al flujo normal de inserción en playlist
+    } else if (eventObj.sourceType === 'commercial') {
         try {
             const blocks = await ipcRenderer.invoke('commercial-get-blocks');
             const block = Array.isArray(blocks) ? blocks.find(item => item.id === eventObj.filePath) : null;
@@ -5103,6 +5800,26 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
                     temp: item.temp !== false
                 }));
         } catch (e) { return false; }
+    } else if (eventObj.sourceType === 'stream_url') {
+        // Emisora de radio en vivo
+        const streamUrl = eventObj.streamUrl || eventObj.filePath || '';
+        if (!streamUrl || (!streamUrl.startsWith('http://') && !streamUrl.startsWith('https://'))) {
+            recordIncident(`[EVENTOS] URL de emisora inválida: "${streamUrl}"`, { category: 'events', level: 'error', autoAction: false });
+            return false;
+        }
+        pistas.push({
+            ruta:              streamUrl,
+            nombre:            eventObj.name || streamUrl,
+            duracion:          0,
+            type:              'stream_url',
+            temp:              false,
+            // Parámetros del stream propagados al dataset de la fila
+            _streamStopSeconds:    Number(eventObj.streamStopSeconds)    || 0,
+            _streamConnectTimeout: Number(eventObj.streamConnectTimeout) || 10,
+            _streamMaxRetries:     Number(eventObj.streamMaxRetries)     || 3,
+            _streamMetadataMode:   eventObj.streamMetadataMode   || 'icy',
+            _streamCustomMetadata: eventObj.streamCustomMetadata || ''
+        });
     } else if (eventObj.sourceType === 'folder') {
         try {
             const finalPath = takeRandomFolderFile(eventObj.filePath);
@@ -5149,6 +5866,21 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
         if (runtimeOptions.queueKey) tr.dataset.eventQueueKey = runtimeOptions.queueKey;
         if (runtimeOptions.scheduledTime) tr.dataset.eventScheduledTime = runtimeOptions.scheduledTime;
         if (action === 'temp' || p.temp) tr.dataset.temp = 'true';
+        // Aplicar parámetros de stream_url cuando la pista proviene de un evento de emisora
+        if (p.type === 'stream_url' && p._streamStopSeconds > 0) {
+            tr.dataset.stopPolicy       = 'timer';
+            tr.dataset.stopSeconds      = String(p._streamStopSeconds);
+            tr.dataset.connectTimeoutSec = String(p._streamConnectTimeout);
+            tr.dataset.maxRetries       = String(p._streamMaxRetries);
+            tr.dataset.metadataMode     = p._streamMetadataMode || 'icy';
+            tr.dataset.customMetadata   = p._streamCustomMetadata || '';
+            // Recalcular celda de duración (createPlaylistRow la genera con '∞' por defecto)
+            const _s = p._streamStopSeconds;
+            const _durCell = tr.querySelector('.col-duracion');
+            if (_durCell) {
+                _durCell.innerText = `${Math.floor(_s/3600).toString().padStart(2,'0')}:${Math.floor((_s%3600)/60).toString().padStart(2,'0')}:${(_s%60).toString().padStart(2,'0')}`;
+            }
+        }
         if (maxDelayActive) {
             tr.dataset.batchId = batchId; tr.dataset.queuedAt = Date.now(); const maxDelayMinutes = parseInt(eventObj.maxDelayMinutes, 10); const maxDelaySeconds = parseInt(eventObj.maxDelaySeconds, 10); let maxDelayMs = 0;
             if (Number.isFinite(maxDelayMinutes) || Number.isFinite(maxDelaySeconds)) { const normalizedMinutes = Number.isFinite(maxDelayMinutes) ? Math.max(0, maxDelayMinutes) : 0; const normalizedSeconds = Number.isFinite(maxDelaySeconds) ? Math.min(59, Math.max(0, maxDelaySeconds)) : 0; maxDelayMs = ((normalizedMinutes * 60) + normalizedSeconds) * 1000; } else { maxDelayMs = (parseInt(eventObj.maxDelayTime) || 0) * 60000; }
@@ -5580,10 +6312,30 @@ async function handleDroppedItem(itemPath, insertTarget = null, position = 'bott
     } catch (err) { }
     return lastInsertedRow;
 }
+// Decide si una carpeta aleatoria debe leerse recursivamente, segun la politica
+// global 'ask' | 'always' | 'never'. Con 'ask' muestra el dialogo; si el usuario
+// marca "No volver a preguntar", la decision pasa a ser el predeterminado global
+// (sincroniza Reportes y la ventana de Reglas via settings-updated).
+async function resolveRandomFolderRecursion(folderPath) {
+    const policy = generalPrefs.randomIncludeSubfolders || 'ask';
+    if (policy === 'always') return true;
+    if (policy === 'never') return false;
+    const { recursive, remember } = await askIncludeSubfolders(path.basename(folderPath));
+    if (remember) {
+        generalPrefs.randomIncludeSubfolders = recursive ? 'always' : 'never';
+        saveConfig(generalPrefsPath, generalPrefs);
+        ipcRenderer.send('settings-updated', {});
+    }
+    return recursive;
+}
+
 async function addRandomFolderToPlaylist(folderPath, insertTarget = null, position = 'bottom', targetTbody = null) {
-    warmRandomFolder(folderPath);
+    const recursive = await resolveRandomFolderRecursion(folderPath);
+    warmRandomFolder(folderPath, recursive);
     const filename = `[Aleatorio] ${path.basename(folderPath)}`;
-    return createPlaylistRow(folderPath, filename, 180, 'random', insertTarget, position, targetTbody);
+    const row = createPlaylistRow(folderPath, filename, 180, 'random', insertTarget, position, targetTbody);
+    if (row) row.dataset.recursive = recursive ? 'true' : 'false';
+    return row;
 }
 
 async function addTrackToPlaylist(filePath, type = 'normal', insertTarget = null, position = 'bottom', targetTbody = null) {
@@ -5730,7 +6482,23 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         if (!String(displayedName).startsWith('📡')) displayedName = '📡 ' + displayedName;
         tr.dataset.pureName = displayedName;
     }
-    tr.innerHTML = '<td>--:--:--</td><td style="font-weight:bold;">' + displayedName + '</td><td>' + duracionStr + '</td><td>' + introTxt + '</td><td>' + outroTxt + '</td>';
+    tr.dataset.cellHtmlHora = '<td class="col-hora">--:--:--</td>';
+    tr.dataset.cellHtmlTitulo = '<td class="col-titulo" style="font-weight:bold;">' + displayedName + '</td>';
+    tr.dataset.cellHtmlDuracion = '<td class="col-duracion">' + duracionStr + '</td>';
+    tr.dataset.cellHtmlIntro = '<td class="col-intro">' + introTxt + '</td>';
+    tr.dataset.cellHtmlOutro = '<td class="col-outro">' + outroTxt + '</td>';
+
+    let rowHtml = '';
+    const visibleCols = (uiPrefs.playlistColumnsOrder || ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro']).filter(c => !(uiPrefs.playlistColumnsHidden || []).includes(c));
+    visibleCols.forEach(colId => {
+        if (colId === 'col-hora') rowHtml += tr.dataset.cellHtmlHora;
+        if (colId === 'col-titulo') rowHtml += tr.dataset.cellHtmlTitulo;
+        if (colId === 'col-duracion') rowHtml += tr.dataset.cellHtmlDuracion;
+        if (colId === 'col-intro') rowHtml += tr.dataset.cellHtmlIntro;
+        if (colId === 'col-outro') rowHtml += tr.dataset.cellHtmlOutro;
+    });
+    tr.innerHTML = rowHtml;
+
     normalizeTimeLocutionRow(tr);
 
     if (insertTarget) {
@@ -5779,7 +6547,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
     };
     tr.ondragend = () => { clearPlaylistDragState(); draggedTableRow = null; };
 
-    const titleCell = tr.children[1]; titleCell.draggable = true;
+    const titleCell = tr.querySelector(".col-titulo"); titleCell.draggable = true;
     titleCell.ondragstart = (e) => {
         if (!tr.classList.contains('selected-row')) {
             document.querySelectorAll('.playlist-table tr').forEach(el => el.classList.remove('selected-row'));
@@ -5811,7 +6579,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             if (newNote !== null) {
                 tr.dataset.noteText = newNote.trim();
                 tr.dataset.pureName = formatSpecialPlaylistTitle('note', null, tr.dataset.noteText);
-                tr.children[1].innerText = tr.dataset.pureName;
+                tr.querySelector(".col-titulo").innerText = tr.dataset.pureName;
                 saveSessionSnapshot();
             }
             return;
@@ -6064,7 +6832,7 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
         stopSeconds:      parseInt(tr.dataset.stopSeconds, 10) || 0,
         connectTimeoutSec: parseInt(tr.dataset.connectTimeoutSec, 10) || 5,
         maxRetries:       normalizeStreamRetries(tr.dataset.maxRetries),
-        prebufferSeconds: Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5)),
+        prebufferSeconds: Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 3)),
         metadataMode:     tr.dataset.metadataMode || 'icy',
         customMetadata:   tr.dataset.customMetadata || '',
     };
@@ -6083,14 +6851,14 @@ document.getElementById('pm-stream-edit').addEventListener('click', () => {
             tr.dataset.prebufferSeconds = String(updated.prebufferSeconds);
             tr.dataset.metadataMode     = updated.metadataMode || 'icy';
             tr.dataset.customMetadata   = updated.customMetadata || '';
-            if (tr.children[1]) tr.children[1].innerText = newName;
+            if (tr.querySelector(".col-titulo")) tr.querySelector(".col-titulo").innerText = newName;
             // Recalcular duración mostrada
             if (updated.stopPolicy === 'timer' && updated.stopSeconds > 0) {
                 const s = updated.stopSeconds;
                 const durStr = `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
-                if (tr.children[2]) tr.children[2].innerText = durStr;
+                if (tr.querySelector(".col-duracion")) tr.querySelector(".col-duracion").innerText = durStr;
             } else {
-                if (tr.children[2]) tr.children[2].innerText = '∞';
+                if (tr.querySelector(".col-duracion")) tr.querySelector(".col-duracion").innerText = '∞';
             }
             calcularHorasPlaylist();
             saveSessionSnapshot();
@@ -6144,12 +6912,11 @@ ipcRenderer.on('track-file-renamed', (event, { oldPath, newPath } = {}) => {
         if ((row.dataset.type || 'normal') === 'normal' && row.dataset.ruta === oldPath) row.dataset.ruta = newPath;
         if (row.dataset.resolvedRandomPath === oldPath) row.dataset.resolvedRandomPath = newPath;
     });
-    Object.keys(randomBagsCache).forEach(folder => {
-        randomBagsCache[folder] = (randomBagsCache[folder] || []).map(filePath => filePath === oldPath ? newPath : filePath);
-    });
-    randomFolderFileCache.forEach(entry => {
-        if (Array.isArray(entry?.files)) entry.files = entry.files.map(filePath => filePath === oldPath ? newPath : filePath);
-    });
+    // El listado de carpeta aleatoria guarda rutas relativas; un renombrado
+    // cambia el basename, asi que invalidamos el cache de la carpeta afectada y
+    // descartamos las bolsas para que se recalculen en la proxima seleccion.
+    try { randomFolderSource.invalidate(path.dirname(oldPath)); } catch (err) {}
+    randomBagsCache = {};
     if (currentPhysicalTrackPath === oldPath) currentPhysicalTrackPath = newPath;
     saveSessionSnapshot();
 });
@@ -6162,8 +6929,8 @@ document.getElementById('pm-transition-edit').addEventListener('click', () => {
     // al editor para que reconstruya visualmente la edición previa.
     const savedMix = parseFloat(rightClickedRow.dataset.customMix);
     const data = {
-        trackA: rightClickedRow.dataset.ruta, nameA: rightClickedRow.dataset.pureName || rightClickedRow.children[1].innerText,
-        trackB: nextRow.dataset.ruta, nameB: nextRow.dataset.pureName || nextRow.children[1].innerText,
+        trackA: rightClickedRow.dataset.ruta, nameA: rightClickedRow.dataset.pureName || rightClickedRow.querySelector(".col-titulo").innerText,
+        trackB: nextRow.dataset.ruta, nameB: nextRow.dataset.pureName || nextRow.querySelector(".col-titulo").innerText,
         // savedMixPoint: segundo dentro de A donde la pista B debe arrancar.
         savedMixPoint: Number.isFinite(savedMix) ? savedMix : null
     };
@@ -6183,9 +6950,9 @@ document.getElementById('pm-jingle-edit').addEventListener('click', () => {
     const prevCustomMix = parseFloat(prevRow.dataset.customMix);
     const jingleCustomMix = parseFloat(rightClickedRow.dataset.customMix);
     const data = {
-        trackA: prevRow.dataset.ruta, nameA: prevRow.dataset.pureName || prevRow.children[1].innerText,
-        jingle: rightClickedRow.dataset.ruta, nameJingle: rightClickedRow.dataset.pureName || rightClickedRow.children[1].innerText,
-        trackB: nextRow.dataset.ruta, nameB: nextRow.dataset.pureName || nextRow.children[1].innerText,
+        trackA: prevRow.dataset.ruta, nameA: prevRow.dataset.pureName || prevRow.querySelector(".col-titulo").innerText,
+        jingle: rightClickedRow.dataset.ruta, nameJingle: rightClickedRow.dataset.pureName || rightClickedRow.querySelector(".col-titulo").innerText,
+        trackB: nextRow.dataset.ruta, nameB: nextRow.dataset.pureName || nextRow.querySelector(".col-titulo").innerText,
         // mixPointA: segundo dentro de A donde el jingle debe arrancar (si fue guardado antes).
         savedMixPointA: Number.isFinite(prevCustomMix) ? prevCustomMix : null,
         // mixPointJ: segundo dentro del jingle donde la pista B debe arrancar.
@@ -6203,13 +6970,13 @@ document.getElementById('pm-toggle-temp').addEventListener('click', () => {
     document.querySelectorAll('.selected-row').forEach(tr => {
         let isTemp = tr.dataset.temp === 'true';
         tr.dataset.temp = isTemp ? 'false' : 'true';
-        let currentName = tr.dataset.pureName || tr.children[1].innerText;
+        let currentName = tr.dataset.pureName || tr.querySelector(".col-titulo").innerText;
         if (isTemp && /^(?:\u23f3|⏳)\s/.test(currentName)) {
             tr.dataset.pureName = currentName.replace(/^(?:\u23f3|⏳)\s*/, '');
-            tr.children[1].innerText = tr.dataset.pureName;
+            tr.querySelector(".col-titulo").innerText = tr.dataset.pureName;
         } else if (!isTemp && !/^(?:\u23f3|⏳)\s/.test(currentName)) {
             tr.dataset.pureName = ICON_TEMP_PREFIX + currentName;
-            tr.children[1].innerText = ICON_TEMP_PREFIX + currentName;
+            tr.querySelector(".col-titulo").innerText = ICON_TEMP_PREFIX + currentName;
         }
     });
     hideAllMenus();
@@ -6951,7 +7718,7 @@ function updateNextTrackVisuals() {
         if (txtSiguiente) txtSiguiente.style.color = "";
         if (visualNextRow) {
             visualNextRow.classList.add('row-next');
-            let pureName = visualNextRow.dataset.pureName || visualNextRow.children[1].innerText;
+            let pureName = visualNextRow.dataset.pureName || visualNextRow.querySelector(".col-titulo").innerText;
 
             const nextTabIdx = tbodys.indexOf(visualNextRow.closest('tbody'));
             let prefix = "";
@@ -7034,11 +7801,11 @@ function _calcTbodyHours(tbodyIndex, updateUI = false) {
 
     let totalRemainingSeconds = 0;
     for (let i = startIndex; i < rows.length; i++) {
-        if (rows[i].dataset.type === 'note') { rows[i].children[0].innerText = '--:--:--'; continue; }
+        if (rows[i].dataset.type === 'note') { rows[i].querySelector(".col-hora").innerText = '--:--:--'; continue; }
         let h = timeObj.getHours().toString().padStart(2, '0');
         let m = timeObj.getMinutes().toString().padStart(2, '0');
         let s = timeObj.getSeconds().toString().padStart(2, '0');
-        rows[i].children[0].innerText = `${h}:${m}:${s}`;
+        rows[i].querySelector(".col-hora").innerText = `${h}:${m}:${s}`;
         let dur = parseInt(rows[i].dataset.duracion) || 0;
         timeObj.setSeconds(timeObj.getSeconds() + dur);
         totalRemainingSeconds += dur;
@@ -8177,6 +8944,11 @@ async function syncRustRouteContract({ force = false } = {}) {
                 }
             } catch (err) { }
         }
+        // Si el motor no pudo enumerar dispositivos todavía, no enviar rutas:
+        // main.js aplica la configuración guardada en respuesta al evento `ready`
+        // del motor, que garantiza que WASAPI ya está listo. Sobrescribir con
+        // 'default' aquí causaría que se pierda esa configuración de arranque.
+        if (!rustDevices?.outputs?.length) return;
         const plan = buildRustRouteSyncPlan(rustDevices || {}, browserOutputs);
         lastRustRouteOutputs.clear();
         plan.forEach(route => {
@@ -8753,7 +9525,6 @@ let lastOverlayEvalElapsed = 0;
 let activePisadores = 0;
 const overlayDropInstances = new Set();
 let lastOverlayTriggerInfo = null;
-const rustPlaylistPreDuckingGains = new Map();
 const rustOverlayRuntimes = new Map();
 
 // Cache de duraciones concretas resueltas por sesion. El planner selecciona
@@ -8803,11 +9574,12 @@ function registerTrackPlaybackOnce(row, filePath, title) {
         recordIncident(`${ICON_AIR_PREFIX} ${title}`, { category: 'air', level: 'success', filePath });
     }
     if (!descriptor.history) return;
-    if (descriptor.category === 'music') recentMusicHistoryPaths.add(filePath);
+    if (descriptor.category === 'music') markOptimisticPlay(filePath);
     ipcRenderer.invoke('playback-history-record', {
         filePath,
         title,
         category: descriptor.category,
+        artist: (manualCuesDB[filePath] || {}).customArtist || '',
         sourceFolder: row?.dataset?.type === 'random' ? row.dataset.ruta : '',
         retentionDays: generalPrefs.historyRetentionDays || 30
     }).catch(() => {});
@@ -8912,33 +9684,55 @@ async function warmPisadorSourcesForTrack(filePath) {
     }
 }
 
+// Decks BGM (pl1-4) actualmente vivos, con su gain INTENDED (sin duck) leído de
+// buildMixDiagnostics — la única fuente de verdad del gain de programa. Es lo que
+// usamos como punto de partida/llegada de los fundidos de duck.
+function liveProgramDeckGains() {
+    const mix = buildMixDiagnostics();
+    return (Array.isArray(mix.players) ? mix.players : [])
+        .filter(player => player?.id && player.path && (player.active || player.loaded || player.isFading))
+        .map(player => ({
+            id: player.id,
+            intended: Math.max(0, Math.min(2, Number(player.gain) || 0))
+        }));
+}
+
 function applyRustPlaylistDucking() {
     if (!isRustPlaylistOwnerActive()) return;
-    const duckGain = Math.max(0, Math.min(1, (parseInt(generalPrefs.duckingVolume, 10) || 20) / 100));
-    rustPlaylistMirrorState.forEach((state, playerId) => {
-        if (!state?.owner || state.status === 'stopped') return;
-        if (!rustPlaylistPreDuckingGains.has(playerId)) {
-            rustPlaylistPreDuckingGains.set(playerId, Number.isFinite(Number(state.gain)) ? Number(state.gain) : 1);
-        }
-        const baseGain = rustPlaylistPreDuckingGains.get(playerId) ?? 1;
-        const duckedGain = Math.max(0, Math.min(2, baseGain * duckGain));
-        commandRustPlaylist('setGain', { player: playerId, gain: duckedGain }).catch(() => { });
-        setRustPlaylistMirrorGain(playerId, duckedGain);
+    const vol = activeDuckParams?.vol ?? Math.max(0, Math.min(100, parseInt(generalPrefs.duckingVolume, 10) || 20));
+    const fadeSecs = Math.max(0.05, Number(activeDuckParams?.fadeSecs ?? parseFloat(generalPrefs.duckingFade)) || 0.3);
+    const fromFactor = programDuckFactor;
+    const targetFactor = Math.max(0, Math.min(1, vol / 100));
+    // Fijar el factor ANTES de fundir: a partir de aquí getRustPlaylistMirrorGain
+    // devuelve el gain ya atenuado, así el reconcile mantiene el duck en vez de
+    // pisarlo. El fundido real lo hace el motor Rust (comando 'fade'), no un
+    // stepping desde JS, para que no haya clic.
+    programDuckFactor = targetFactor;
+    liveProgramDeckGains().forEach(({ id, intended }) => {
+        scheduleRustPlaylistGainRamp(id, intended * fromFactor, intended * targetFactor, fadeSecs);
     });
 }
 
 function removeRustPlaylistDucking() {
-    if (!rustPlaylistPreDuckingGains.size) return;
-    rustPlaylistPreDuckingGains.forEach((gain, playerId) => {
-        commandRustPlaylist('setGain', { player: playerId, gain }).catch(() => { });
-        setRustPlaylistMirrorGain(playerId, gain);
+    if (programDuckFactor === 1) return;
+    const fadeSecs = Math.max(0.05, Number(activeDuckParams?.fadeSecs ?? parseFloat(generalPrefs.duckingFade)) || 0.3);
+    const fromFactor = programDuckFactor;
+    programDuckFactor = 1;
+    // Volver a subir el BGM a su gain intended con el mismo fundido. El reconcile
+    // ya no aplica factor (=1), así que el deck queda estable a volumen completo.
+    liveProgramDeckGains().forEach(({ id, intended }) => {
+        scheduleRustPlaylistGainRamp(id, intended * fromFactor, intended, fadeSecs);
     });
-    rustPlaylistPreDuckingGains.clear();
 }
 
 function applyDucking() {
-    const fadeSecs = Math.max(0.1, parseFloat(generalPrefs.duckingFade) || 1.0);
+    // Capturar los valores vigentes (un evento pisador los deja en generalPrefs
+    // justo antes de disparar el duck). Quedan guardados en activeDuckParams para
+    // que el fin del duck use el MISMO volumen/fundido aunque generalPrefs ya se
+    // haya restaurado a los valores globales (no dependemos de timings frágiles).
+    const fadeSecs = Math.max(0.05, parseFloat(generalPrefs.duckingFade) || 0.3);
     const duckVol = Math.max(0, Math.min(100, parseInt(generalPrefs.duckingVolume) || 20));
+    activeDuckParams = { vol: duckVol, fadeSecs };
     if (!isRustExclusiveAudioMode()) {
         duckingNode.gain.cancelScheduledValues(audioCtx.currentTime);
         duckingNode.gain.setValueAtTime(duckingNode.gain.value, audioCtx.currentTime);
@@ -8947,13 +9741,14 @@ function applyDucking() {
     applyRustPlaylistDucking();
 }
 function removeDucking() {
-    const fadeSecs = Math.max(0.1, parseFloat(generalPrefs.duckingFade) || 1.0);
+    const fadeSecs = Math.max(0.05, Number(activeDuckParams?.fadeSecs ?? parseFloat(generalPrefs.duckingFade)) || 0.3);
     if (!isRustExclusiveAudioMode()) {
         duckingNode.gain.cancelScheduledValues(audioCtx.currentTime);
         duckingNode.gain.setValueAtTime(duckingNode.gain.value, audioCtx.currentTime);
         duckingNode.gain.linearRampToValueAtTime(1.0, audioCtx.currentTime + fadeSecs);
     }
     removeRustPlaylistDucking();
+    activeDuckParams = null;
 }
 
 function shouldRustOwnJingleBus() {
@@ -8975,6 +9770,7 @@ function endProgramOverlayDucking() {
 
 function registerRustOverlayRuntime(runtime = {}) {
     if (!runtime.playerId) return;
+    runtime._registeredAt = Date.now();
     rustOverlayRuntimes.set(runtime.playerId, runtime);
     if (runtime.affectsProgram !== false) beginProgramOverlayDucking();
 }
@@ -8982,18 +9778,106 @@ function registerRustOverlayRuntime(runtime = {}) {
 function finishRustOverlayRuntime(playerId = '') {
     const runtime = rustOverlayRuntimes.get(playerId);
     if (!runtime) return;
+    // Cancelar el timer duro antes de borrar el runtime para que no dispare de nuevo.
+    if (runtime._endTimer) { clearTimeout(runtime._endTimer); runtime._endTimer = null; }
     rustOverlayRuntimes.delete(playerId);
     commandRustControlPlane('stop', { player: playerId }).catch(() => { });
     if (runtime.affectsProgram !== false) endProgramOverlayDucking();
     if (typeof runtime.onEnded === 'function') runtime.onEnded(runtime);
 }
 
+// Precarga un overlay en el bus jingle y lo reproduce RECIÉN cuando el fundido
+// del ducking (fadeMs) terminó — para que el pisador/locución suene con el BGM ya
+// abajo, no mientras todavía está bajando. El runtime debe estar ya registrado
+// (el ducking arranca en registerRustOverlayRuntime). Devuelve el loadResult para
+// que el caller libere el runtime si la precarga falló.
+async function playOverlayAfterDuckFade(playerId, filePath, fadeMs, precomputedDurMs = 0) {
+    const safeFade = Math.max(0, Number(fadeMs) || 0);
+    const duckStartAt = Date.now();
+    const rt0 = rustOverlayRuntimes.get(playerId);
+    // El reconcile no debe tocar ni dar por terminado el runtime mientras el BGM baja.
+    if (rt0) rt0._notBeforeMs = duckStartAt + safeFade;
+
+    // Precargar SIN reproducir (autoplay:false) mientras el BGM baja.
+    const loadResult = await commandRustControlPlane('load', {
+        player: playerId, path: filePath, bus: 'jingle', gain: 1,
+        autoplay: false, cacheDir: mainWaveformCacheDir
+    });
+    if (!loadResult?.ok) return loadResult || { ok: false };
+
+    const durMs = (Number(precomputedDurMs) || 0)
+        || loadResult.result?.message?.durationMs
+        || loadResult.result?.durationMs
+        || 0;
+
+    // Disparar la reproducción cuando el fundido haya terminado.
+    const remainingFade = Math.max(0, safeFade - (Date.now() - duckStartAt));
+    setTimeout(() => {
+        const rt = rustOverlayRuntimes.get(playerId);
+        if (!rt) return; // el ducking se canceló/terminó durante el fundido.
+        // Reanclar el inicio: la duración y el reconcile cuentan desde que suena.
+        rt._registeredAt = Date.now();
+        rt._notBeforeMs = 0;
+        if (rt._endTimer) { clearTimeout(rt._endTimer); rt._endTimer = null; }
+        if (durMs > 0) {
+            rt._durationMs = durMs;
+            rt._endTimer = setTimeout(() => finishRustOverlayRuntime(playerId), durMs + 500);
+        }
+        commandRustControlPlane('play', { player: playerId }).then(r => {
+            if (!r?.ok) finishRustOverlayRuntime(playerId);
+        }).catch(() => finishRustOverlayRuntime(playerId));
+    }, remainingFade);
+
+    return loadResult;
+}
+
 function reconcileRustOverlayRuntimeStatus(status = {}) {
     const rustPlayers = new Map((Array.isArray(status?.players) ? status.players : []).map(player => [player?.id, player]));
+    const now = Date.now();
     Array.from(rustOverlayRuntimes.keys()).forEach(playerId => {
+        const runtime = rustOverlayRuntimes.get(playerId);
         const rustPlayer = rustPlayers.get(playerId);
+
+        // 0. Espera de fundido: el pisador está precargado pero todavía no suena
+        //    (esperamos a que el BGM termine de bajar). No cachear duración, no
+        //    armar timers ni darlo por terminado: su tiempo real arranca al
+        //    reproducir, momento en que se limpia _notBeforeMs y se reancla.
+        if (runtime._notBeforeMs && now < runtime._notBeforeMs) return;
+
+        // 1. Cachear durationMs del status push lo antes posible (antes incluso del período
+        //    de gracia) para que la guardia y el timer funcionen aunque 'load' no devuelva duración.
+        if (rustPlayer?.durationMs > 0 && !runtime._durationMs) {
+            runtime._durationMs = rustPlayer.durationMs;
+        }
+
+        // 2. Con durationMs conocida, armar el timer duro si aún no está activo.
+        //    Es el árbitro definitivo: dispara finishRustOverlayRuntime exactamente
+        //    cuando el audio debe haber terminado (+500ms de margen de buffer DAC).
+        if (runtime._durationMs > 0 && !runtime._endTimer) {
+            const elapsed = now - (runtime._registeredAt || 0);
+            const remaining = Math.max(200, runtime._durationMs - elapsed + 500);
+            runtime._endTimer = setTimeout(() => finishRustOverlayRuntime(playerId), remaining);
+        }
+
+        // 3. Período de gracia: ignorar runtimes recién registrados (< 600ms) para evitar
+        //    que un status 'ended' rezagado de una reproducción anterior mate este ducking.
+        if (runtime?._registeredAt && now - runtime._registeredAt < 600) return;
         if (!rustPlayer) return;
+
+        // 4. Si el timer duro está activo, él es el árbitro — el reconcile no interfiere.
+        //    Solo actúa como fallback de emergencia si el timer no disparó pasados 2s extra.
         if (rustPlayer.status === 'ended' || rustPlayer.status === 'stopped') {
+            if (runtime._endTimer) {
+                const expectedMs = runtime._durationMs || 0;
+                const elapsed = now - (runtime._registeredAt || 0);
+                if (expectedMs === 0 || elapsed <= expectedMs + 2000) return; // timer se encarga
+                // Emergencia: timer no disparó y ya pasó demasiado tiempo → forzar limpieza
+                finishRustOverlayRuntime(playerId);
+                return;
+            }
+            // Sin timer: fallback basado en duración conocida
+            const expectedMs = runtime._durationMs || 0;
+            if (expectedMs > 0 && (now - runtime._registeredAt) < expectedMs - 200) return;
             finishRustOverlayRuntime(playerId);
         }
     });
@@ -9460,7 +10344,7 @@ ipcRenderer.on('analyzer-done', (e, payload) => {
                 tr.dataset.duracion = newDur;
                 const m = Math.floor(newDur / 60).toString().padStart(2, '0');
                 const s = (newDur % 60).toString().padStart(2, '0');
-                tr.children[2].innerText = `${m}:${s}`;
+                tr.querySelector(".col-duracion").innerText = `${m}:${s}`;
                 changed = true;
             }
         }
@@ -9515,7 +10399,7 @@ playerA.addEventListener('ended', () => handleEnded(playerA));
 playerB.addEventListener('ended', () => handleEnded(playerB));
 
 const btnReloj = document.getElementById('btn-reloj');
-if (btnReloj) { btnReloj.addEventListener('click', playTimeLocution); btnReloj.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); hideAllMenus(); addTimeLocutionToPlaylist(); }); }
+if (btnReloj) { btnReloj.addEventListener('click', () => playTimeLocution()); btnReloj.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); hideAllMenus(); addTimeLocutionToPlaylist(); }); }
 
 const tempWidget = document.getElementById('temp-widget');
 if (tempWidget) {
@@ -9691,7 +10575,7 @@ function warmupLocutionDurations() {
     }
 }
 
-async function playClimateLocution(kind) {
+async function playClimateLocution(kind, startDelayMs = 0) {
     if (!isClimateLocutionType(kind)) return;
     if (isJinglePlaying) {
         // Mismo salvavidas que en playTimeLocution: recuperarse de un flag
@@ -9730,6 +10614,22 @@ async function playClimateLocution(kind) {
         affectsProgram: true,
         onEnded: () => { isJinglePlaying = false; }
     });
+
+    // Disparada desde un evento con fundido (startDelayMs>0): el BGM baja y la
+    // locución suena recién al terminar el fundido, igual que un pisador de archivo.
+    if (startDelayMs > 0) {
+        const delayed = await playOverlayAfterDuckFade(playerId, filePath, startDelayMs, 0);
+        if (!delayed?.ok) {
+            finishRustOverlayRuntime(playerId);
+            isJinglePlaying = false;
+            logSystem(`[CLIMA] No se pudo reproducir locucion: ${delayed?.error || 'sin detalle'}`);
+            return;
+        }
+        ipcRenderer.send('update-metadata', `${getClimateLocutionLabel(kind)} ${Math.round(value)}`);
+        return;
+    }
+
+    // Disparada desde la botonera (sin retardo): reproducción inmediata.
     const result = await commandRustControlPlane('load', {
         player: playerId,
         path: filePath,
@@ -9744,6 +10644,11 @@ async function playClimateLocution(kind) {
         logSystem(`[CLIMA] No se pudo reproducir locucion: ${result?.error || 'sin detalle'}`);
         return;
     }
+    // Guardar la duración real del archivo para que reconcile pueda validar
+    // que el audio realmente terminó antes de restaurar el volumen.
+    const climaDurMs = result.result?.message?.durationMs || result.result?.durationMs || 0;
+    const climaRuntime = rustOverlayRuntimes.get(playerId);
+    if (climaRuntime && climaDurMs > 0) climaRuntime._durationMs = climaDurMs;
     ipcRenderer.send('update-metadata', `${getClimateLocutionLabel(kind)} ${Math.round(value)}`);
 }
 
@@ -9784,7 +10689,7 @@ function isJingleBusReallyActive() {
     }
 }
 
-function playTimeLocution() {
+function playTimeLocution(startDelayMs = 0) {
     if (isJinglePlaying) {
         // Salvavidas: si el flag quedó stuck pero Rust dice que nada
         // está sonando realmente en el bus jingle, liberamos el flag
@@ -9802,7 +10707,7 @@ function playTimeLocution() {
         // Ruta nueva: el motor Rust se encarga 100%. Electron solo entrega la
         // carpeta y espera el evento `timeLocutionEnded` (ver listener al final
         // de este archivo). No resolvemos archivos ni miramos el reloj acá.
-        playTimeLocutionViaRust();
+        playTimeLocutionViaRust(startDelayMs);
         ipcRenderer.send('update-metadata', ICON_CLOCK_LABEL);
         return;
     }
@@ -9829,12 +10734,18 @@ function normalizeStreamRetries(value) {
  * escucha el evento `timeLocutionEnded` (ver listener al final del archivo)
  * para liberar el ducking y el flag isJinglePlaying.
  */
-async function playTimeLocutionViaRust() {
+async function playTimeLocutionViaRust(startDelayMs = 0) {
     const folder = generalPrefs.timeFolder;
     if (!folder || !fs.existsSync(folder)) return;
     isJinglePlaying = true;
-    beginProgramOverlayDucking();
-    rustTimeLocutionContext = { kind: 'button', playerId: 'time-locucion' };
+    beginProgramOverlayDucking();   // el BGM empieza a bajar YA
+
+    // Dispara la locución de hora (comando timeLocution). Si viene de un evento con
+    // fundido (startDelayMs>0) se ejecuta RECIÉN al terminar el fundido, para que la
+    // hora suene con el BGM ya abajo. `startedAt` se fija acá (no antes), así el
+    // timer de fin cuenta desde la reproducción real.
+    const fire = async () => {
+    rustTimeLocutionContext = { kind: 'button', playerId: 'time-locucion', startedAt: Date.now(), totalDurationMs: 0 };
     const result = await commandRustControlPlane('timeLocution', {
         folder,
         bus: 'jingle',
@@ -9849,9 +10760,31 @@ async function playTimeLocutionViaRust() {
         return;
     }
     const durationMs = result.result?.message?.durationMs || result.result?.durationMs || 0;
+    if (!rustTimeLocutionContext) {
+        // timeLocutionEnded ya disparó durante el await (locución muy corta).
+        // El ducking ya fue gestionado en el handler; nada que hacer aquí.
+        return;
+    }
+    rustTimeLocutionContext.totalDurationMs = durationMs;
     if (durationMs > 0) {
         logSystem(`${ICON_AIR_PREFIX} ${ICON_CLOCK_LABEL} (Rust, ${(durationMs/1000).toFixed(1)}s)`);
+        // Timer duro: restaura el volumen exactamente cuando el audio debe terminar.
+        // Es el árbitro final; el handler de timeLocutionEnded solo lo cancela si
+        // confirma que la locución realmente terminó (remaining ≤ 300ms).
+        const alreadyElapsed = Date.now() - rustTimeLocutionContext.startedAt;
+        const waitMs = Math.max(300, durationMs - alreadyElapsed + 500);
+        rustTimeLocutionContext._duckingTimer = setTimeout(() => {
+            if (!rustTimeLocutionContext) return;
+            const saved = rustTimeLocutionContext;
+            rustTimeLocutionContext = null;
+            isJinglePlaying = false;
+            if (saved.kind === 'button') endProgramOverlayDucking();
+        }, waitMs);
     }
+    };
+
+    if (startDelayMs > 0) setTimeout(() => { fire(); }, startDelayMs);
+    else await fire();
 }
 
 const panelAire = document.getElementById('panel-aire');
@@ -10498,7 +11431,9 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
     }
     // Si había un stream activo y ahora se reproduce una pista normal, detenerlo.
     if (currentStreamId) {
-        stopActiveStream();
+        stopActiveStream({
+            fadeSeconds: generalPrefs.chk_mus_fadeout_next ? (Number(generalPrefs.num_mus_fadeout_next) || 0) : 0
+        });
         // El stream usaba el deck 'stream-live' (separado de los decks de
         // playlist pl1-pl4). La guarda que activó executeStreamUrlRow vía
         // sendRustOwnerStopAll no tiene sentido aquí: los decks de playlist ya
@@ -10965,7 +11900,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
             return;
         }
 
-        let rutaFisica = tr.dataset.ruta; let nombreMostrar = tr.dataset.pureName || tr.children[1].innerText;
+        let rutaFisica = tr.dataset.ruta; let nombreMostrar = tr.dataset.pureName || tr.querySelector(".col-titulo").innerText;
         nombreMostrar = nombreMostrar.replace(/^\[Aleatorio\]\s*/i, '').replace(/^\[Rotativa\]\s*/i, '').replace(/^(?:\u23f3|⏳)\s*/, '');
         if (type === 'random') {
             try {
@@ -11491,8 +12426,13 @@ async function executeEventCommandRow(commandRow) {
 /**
  * Detiene cualquier stream activo (tanto el proceso FFmpeg via IPC como el
  * timer de stop automático). Limpia `currentStreamId` y `streamStopTimer`.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.fadeSeconds=0]  Duración del fade-out antes de parar.
+ *   Si > 0 el motor Rust baja el volumen gradualmente antes de detener el player.
+ *   Si = 0 para de inmediato.
  */
-function stopActiveStream() {
+function stopActiveStream({ fadeSeconds = 0 } = {}) {
     if (streamStopTimer) { clearTimeout(streamStopTimer); streamStopTimer = null; }
     const connectTimeoutId = parseInt(currentPlayingRow?.dataset?._streamConnectTimeoutId, 10);
     if (connectTimeoutId) {
@@ -11500,8 +12440,14 @@ function stopActiveStream() {
         delete currentPlayingRow.dataset._streamConnectTimeoutId;
     }
     if (currentStreamId) {
-        ipcRenderer.invoke('stream-url-stop', { streamId: currentStreamId }).catch(() => {});
+        const streamId = currentStreamId;
         currentStreamId = null;
+        const safeFade = Math.max(0, Number(fadeSeconds) || 0);
+        if (safeFade > 0) {
+            ipcRenderer.invoke('stream-url-fade-stop', { streamId, fadeSeconds: safeFade }).catch(() => {});
+        } else {
+            ipcRenderer.invoke('stream-url-stop', { streamId }).catch(() => {});
+        }
     }
     currentStreamIcyTitle = '';
     streamLiveStartAt = 0;
@@ -11538,13 +12484,23 @@ function playNextAfterFailedStream(tr) {
 async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds = 0) {
     stopActiveStream();
 
+    // Replicar el comportamiento de playRow para pistas normales (línea 10939):
+    // si queuedNextRow apunta a esta misma fila (el stream fue el "siguiente"
+    // antes de empezar), resetear al siguiente natural. Si el usuario eligió
+    // manualmente una fila DISTINTA como siguiente, respetarla.
+    if (!queuedNextRow || queuedNextRow === tr) {
+        queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, generalPrefs.modeLoopPlaylist);
+    }
+    // Limpiar el flag manualNext del stream en sí (ya no es "siguiente", es el activo).
+    delete tr.dataset.manualNext;
+
     const url = tr.dataset.ruta || '';
     const displayName = (tr.dataset.pureName || '').replace(/^📡\s*/, '').trim() || url;
     const stopPolicy        = tr.dataset.stopPolicy || 'manual';
     const stopSeconds       = parseInt(tr.dataset.stopSeconds, 10) || 0;
     const connectTimeoutSec = Math.max(2, parseInt(tr.dataset.connectTimeoutSec, 10) || 10);
     const maxRetries        = normalizeStreamRetries(tr.dataset.maxRetries);
-    const prebufferSeconds  = Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 5));
+    const prebufferSeconds  = Math.min(15, Math.max(1, parseInt(tr.dataset.prebufferSeconds, 10) || 3));
     const metaMode          = tr.dataset.metadataMode || 'icy';
     const customMeta        = tr.dataset.customMetadata || displayName;
 
@@ -11641,7 +12597,9 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
         streamStopTimer = setTimeout(() => {
             if (currentPlayingRow !== tr) return;
             logSystem(`[STREAM] Tiempo agotado (${stopSeconds}s). Avanzando.`);
-            stopActiveStream();
+            stopActiveStream({
+                fadeSeconds: generalPrefs.chk_mus_fadeout_next ? (Number(generalPrefs.num_mus_fadeout_next) || 0) : 0
+            });
             tr.classList.remove('row-active');
             playNext(false); // playRow limpia currentPlayingRow al avanzar
         }, stopSeconds * 1000);
@@ -11728,7 +12686,9 @@ function stopAll() {
             : null);
     try { ipcRenderer.send('emergency-stop-playback'); } catch (err) { }
     // Detener stream de retransmisión si hay uno activo.
-    stopActiveStream();
+    stopActiveStream({
+        fadeSeconds: generalPrefs.chk_mus_fadeout_stop ? (Number(generalPrefs.num_mus_fadeout_stop) || 0) : 0
+    });
     // Asegurarse de detener también cualquier locución horaria activa en Rust.
     if (rustTimeLocutionContext) {
         stopActiveRustTimeLocution();
@@ -11923,7 +12883,10 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-window.addEventListener('keyup', (e) => { if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return; if (e.key === 'Alt') { e.preventDefault(); ipcRenderer.send('toggle-menu-bar'); } });
+window.addEventListener('keyup', (e) => { 
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return; 
+    if (e.key === 'Alt') { e.preventDefault(); ipcRenderer.send('toggle-menu-bar'); } 
+});
 
 document.getElementById('btn-open-encoder').addEventListener('click', () => { ipcRenderer.send('open-encoder'); });
 let liveMediaRecorder = null;
@@ -13508,7 +14471,7 @@ ipcRenderer.on('stream-icy-name', (_e, { streamId, name } = {}) => {
         const current = (currentPlayingRow.dataset.pureName || '').replace(/^📡\s*/, '').trim();
         if (!current || current === currentPlayingRow.dataset.ruta) {
             currentPlayingRow.dataset.pureName = '📡 ' + name;
-            if (currentPlayingRow.children[1]) currentPlayingRow.children[1].innerText = '📡 ' + name;
+            if (currentPlayingRow.querySelector(".col-titulo")) currentPlayingRow.querySelector(".col-titulo").innerText = '📡 ' + name;
         }
     }
 });
@@ -13538,7 +14501,6 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
     const secsField    = document.getElementById('add-stream-seconds-field');
     const timeoutField   = document.getElementById('add-stream-timeout');
     const retriesField   = document.getElementById('add-stream-retries');
-    const prebufferField = document.getElementById('add-stream-prebuffer');
     const metaModeSelect = document.getElementById('add-stream-meta-mode');
     const metaCustomInput = document.getElementById('add-stream-meta-custom');
     // Mostrar/ocultar campo personalizado según selección del dropdown
@@ -13568,7 +14530,6 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
         secsField.value    = secs % 60;
         if (timeoutField)   timeoutField.value   = prefill.connectTimeoutSec != null ? prefill.connectTimeoutSec : 5;
         if (retriesField)   retriesField.value   = prefill.maxRetries != null ? prefill.maxRetries : 3;
-        if (prebufferField) prebufferField.value = prefill.prebufferSeconds != null ? prefill.prebufferSeconds : 5;
         if (metaModeSelect) { metaModeSelect.value = prefill.metadataMode || 'icy'; }
         if (metaCustomInput) {
             metaCustomInput.value   = prefill.customMetadata || '';
@@ -13632,13 +14593,12 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
             : 0;
         const connectTimeoutSec = Math.max(2, parseInt(timeoutField?.value, 10) || 5);
         const maxRetries = normalizeStreamRetries(retriesField?.value);
-        const prebufferSeconds = Math.min(15, Math.max(1, parseInt(prebufferField?.value, 10) || 5));
         const metadataMode   = metaModeSelect?.value || 'icy';
         const customMetadata = (metadataMode === 'custom') ? (metaCustomInput?.value.trim() || displayName) : '';
 
         if (_editCallback) {
             // Modo edición: devolver valores al caller
-            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, prebufferSeconds, metadataMode, customMetadata });
+            _editCallback({ url, displayName, stopPolicy, stopSeconds, connectTimeoutSec, maxRetries, metadataMode, customMetadata });
             closeModal();
             return;
         }
@@ -13651,16 +14611,15 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
             newRow.dataset.stopSeconds      = String(stopSeconds);
             newRow.dataset.connectTimeoutSec = String(connectTimeoutSec);
             newRow.dataset.maxRetries       = String(maxRetries);
-            newRow.dataset.prebufferSeconds = String(prebufferSeconds);
             newRow.dataset.metadataMode     = metadataMode;
             newRow.dataset.customMetadata   = customMetadata;
             if (stopPolicy === 'timer' && stopSeconds > 0) {
                 const hh = Math.floor(stopSeconds / 3600).toString().padStart(2, '0');
                 const mm = Math.floor((stopSeconds % 3600) / 60).toString().padStart(2, '0');
                 const ss = (stopSeconds % 60).toString().padStart(2, '0');
-                if (newRow.children[2]) newRow.children[2].innerText = `${hh}:${mm}:${ss}`;
+                if (newRow.querySelector(".col-duracion")) newRow.querySelector(".col-duracion").innerText = `${hh}:${mm}:${ss}`;
             } else {
-                if (newRow.children[2]) newRow.children[2].innerText = '∞';
+                if (newRow.querySelector(".col-duracion")) newRow.querySelector(".col-duracion").innerText = '∞';
             }
         }
 
@@ -13861,10 +14820,31 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         }
 
         if (ctx.kind === 'button') {
-            // Locución lanzada desde la botonera de hora del bus jingle:
-            // simplemente liberamos los flags de ducking y "jingle sonando".
+            // Locución lanzada desde la botonera / evento de hora.
+            // timeLocutionEnded puede dispararse entre archivos (HRS → MIN) o al final real.
             isJinglePlaying = false;
-            endProgramOverlayDucking();
+            if (ctx._duckingTimer) {
+                // Hay un timer duro activo (playTimeLocutionViaRust lo estableció al recibir
+                // durationMs). Solo lo cancelamos y restauramos si estamos en el fin real
+                // (remaining ≤ 300ms). Si es un disparo entre archivos, dejamos el timer.
+                const elapsed   = Date.now() - (ctx.startedAt || 0);
+                const remaining = (ctx.totalDurationMs || 0) - elapsed;
+                if (remaining <= 300) {
+                    clearTimeout(ctx._duckingTimer);
+                    endProgramOverlayDucking();
+                }
+                // else: disparado entre archivos → el timer duro gestiona el fin
+            } else {
+                // Sin timer duro (durationMs era 0 o el await aún no retornó).
+                // Fallback: calcular remaining manualmente.
+                const elapsed   = Date.now() - (ctx.startedAt || 0);
+                const remaining = (ctx.totalDurationMs || 0) - elapsed;
+                if (remaining > 300) {
+                    setTimeout(() => endProgramOverlayDucking(), remaining + 200);
+                } else {
+                    endProgramOverlayDucking();
+                }
+            }
             return;
         }
 
@@ -14269,6 +15249,13 @@ function _buildShortcutMap(saved) {
         updateContextMenuShortcuts(_defMap);
     }
 
+    shortcutManager.registerKeyupHandlers({
+        'app.talk': () => {
+            const mode = generalPrefs.talkMode || 'hold';
+            if (mode === 'hold') deactivateTalk();
+        }
+    });
+
     shortcutManager.registerHandlers({
         'playlist.play':            () => resumeCurrentPlayback(),
         'playlist.stop':            () => stopAllWithRemovePlayed(),
@@ -14304,6 +15291,11 @@ function _buildShortcutMap(saved) {
         'app.open_calendar':        () => ipcRenderer.send('open-calendar'),
         'app.open_rotation':        () => openRotationModal(),
         'app.toggle_menu_bar':      () => ipcRenderer.send('toggle-menu-bar'),
+        'app.talk':                 () => {
+            const mode = generalPrefs.talkMode || 'hold';
+            if (mode === 'hold') activateTalk();
+            else toggleTalk();
+        },
         'insert.time_locution':     () => addTimeLocutionToPlaylist(),
         'insert.temperature':       () => addClimateLocutionToPlaylist('temperature'),
         'insert.humidity':          () => addClimateLocutionToPlaylist('humidity'),
@@ -14351,3 +15343,161 @@ ipcRenderer.on('dispatch-configured-shortcut', (e, actionId) => {
     shortcutManager.dispatch(actionId);
 });
 
+
+
+// ====== BOTON LOCUTOR / HABLAR (PTT) ======
+let isTalkActive = false;
+let talkAnimationRaf = null;
+let originalMasterVol = null;
+
+function tweenMasterVolume(startVol, targetVol, durationMs) {
+    return new Promise(resolve => {
+        if (talkAnimationRaf) cancelAnimationFrame(talkAnimationRaf);
+        const startTime = performance.now();
+        const slider = document.getElementById('master-volume');
+        
+        function step(time) {
+            const elapsed = time - startTime;
+            const progress = Math.min(elapsed / durationMs, 1.0);
+            
+            const val = startVol + (targetVol - startVol) * progress;
+            
+            if (slider) {
+                slider.value = val;
+                slider.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            
+            if (progress < 1.0) {
+                talkAnimationRaf = requestAnimationFrame(step);
+            } else {
+                talkAnimationRaf = null;
+                resolve();
+            }
+        }
+        talkAnimationRaf = requestAnimationFrame(step);
+    });
+}
+
+function activateTalk() {
+    if (isTalkActive) return;
+    isTalkActive = true;
+    const btnTalk = document.getElementById('btn-talk');
+    if (btnTalk) {
+        btnTalk.style.background = '#e74c3c';
+        btnTalk.style.borderColor = '#c0392b';
+    }
+    const slider = document.getElementById('master-volume');
+    if (slider) {
+        if (originalMasterVol === null) {
+            originalMasterVol = parseFloat(slider.value);
+        }
+        const targetVol = parseFloat(generalPrefs.talkTargetVol ?? 20);
+        const duration = parseInt(generalPrefs.talkFadeMs || 500);
+        tweenMasterVolume(parseFloat(slider.value), targetVol, duration);
+    }
+}
+
+function deactivateTalk() {
+    if (!isTalkActive) return;
+    isTalkActive = false;
+    const btnTalk = document.getElementById('btn-talk');
+    if (btnTalk) {
+        btnTalk.style.background = '';
+        btnTalk.style.borderColor = '';
+    }
+    const slider = document.getElementById('master-volume');
+    if (slider && originalMasterVol !== null) {
+        const currentVol = parseFloat(slider.value) || 0;
+        const duration = parseInt(generalPrefs.talkFadeMs || 500);
+        tweenMasterVolume(currentVol, originalMasterVol, duration).then(() => {
+            originalMasterVol = null;
+        });
+    }
+}
+
+function toggleTalk() {
+    if (isTalkActive) deactivateTalk();
+    else activateTalk();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Config defaults
+    if (generalPrefs.talkTargetVol === undefined) generalPrefs.talkTargetVol = 20;
+    if (generalPrefs.talkFadeMs === undefined) generalPrefs.talkFadeMs = 500;
+    if (generalPrefs.talkMode === undefined) generalPrefs.talkMode = 'hold';
+
+    const btnTalk = document.getElementById('btn-talk');
+    const configModal = document.getElementById('talk-config-modal');
+    const btnCancel = document.getElementById('btn-talk-config-cancel');
+    const btnSave = document.getElementById('btn-talk-config-save');
+    const inputVol = document.getElementById('talk-target-vol');
+    const inputVolLabel = document.getElementById('talk-target-vol-label');
+    const inputMs = document.getElementById('talk-fade-ms');
+    const selMode = document.getElementById('talk-mode-select');
+
+    if (btnTalk) {
+        btnTalk.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // Only left click
+            const mode = generalPrefs.talkMode || 'hold';
+            if (mode === 'hold') activateTalk();
+            else toggleTalk();
+        });
+        ['mouseup', 'mouseleave', 'touchend'].forEach(evt => {
+            btnTalk.addEventListener(evt, () => {
+                const mode = generalPrefs.talkMode || 'hold';
+                if (mode === 'hold') deactivateTalk();
+            });
+        });
+        btnTalk.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const mode = generalPrefs.talkMode || 'hold';
+            if (mode === 'hold') activateTalk();
+            else toggleTalk();
+        }, {passive: false});
+
+        // Context Menu
+        btnTalk.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof hideAllMenus === 'function') hideAllMenus();
+            
+            if (inputVol) {
+                inputVol.value = generalPrefs.talkTargetVol;
+                if (inputVolLabel) inputVolLabel.textContent = generalPrefs.talkTargetVol + '%';
+            }
+            if (inputMs) inputMs.value = generalPrefs.talkFadeMs;
+            if (selMode) selMode.value = generalPrefs.talkMode;
+            
+            if (configModal) configModal.style.display = 'flex';
+        });
+    }
+
+    if (inputVol) {
+        inputVol.addEventListener('input', (e) => {
+            if (inputVolLabel) inputVolLabel.textContent = e.target.value + '%';
+        });
+    }
+    
+    if (configModal) {
+        configModal.addEventListener('click', (e) => {
+            if (e.target === configModal) configModal.style.display = 'none';
+        });
+    }
+    if (btnCancel && configModal) {
+        btnCancel.addEventListener('click', () => {
+            configModal.style.display = 'none';
+        });
+    }
+    if (btnSave && configModal) {
+        btnSave.addEventListener('click', () => {
+            if (inputVol) generalPrefs.talkTargetVol = parseInt(inputVol.value);
+            if (inputMs) generalPrefs.talkFadeMs = parseInt(inputMs.value) || 500;
+            if (selMode) generalPrefs.talkMode = selMode.value;
+            
+            if (typeof saveConfig === 'function' && typeof generalPrefsPath !== 'undefined') {
+                saveConfig(generalPrefsPath, generalPrefs);
+            }
+            configModal.style.display = 'none';
+        });
+    }
+});

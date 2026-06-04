@@ -11,6 +11,7 @@
             <button class="settings-tab active" data-target="tab-fades">Excepciones Mezclar</button>
             <button class="settings-tab" data-target="tab-types">Tipos de Archivos</button>
             <button class="settings-tab" data-target="tab-audio">Salidas de Audio</button>
+            <button class="settings-tab" data-target="tab-interface">Sistema e Interfaz</button>
             <button class="settings-tab" data-target="tab-time">Hora y Clima</button>
             <button class="settings-tab" data-target="tab-ducking">Pisadores (Ducking)</button>
             <button class="settings-tab" data-target="tab-cartwall">Perfiles Cartwall</button>
@@ -236,6 +237,77 @@
                 </div>
             </div>
 
+            <div id="tab-interface" class="tab-pane">
+                <h3 class="tab-title">Sistema e Interfaz</h3>
+
+                <fieldset class="fieldset-dark" style="margin-bottom: 25px;">
+                    <legend>Sistema</legend>
+                    <p style="font-size: 12px; color: #888; margin-bottom: 12px;">Opciones de arranque automático. Todas están desactivadas por defecto; actívalas solo si tu equipo trabaja de forma desatendida (emisoras automáticas, reinicios tras cortes eléctricos, operación remota).</p>
+                    <div class="setting-row" style="margin-bottom: 10px;">
+                        <label style="flex: 1; cursor: pointer;">
+                            <input type="checkbox" id="chk-autostart-system" style="margin-right: 8px;">
+                            Iniciar al arrancar el sistema
+                        </label>
+                    </div>
+                    <div class="setting-row" style="margin-bottom: 10px;">
+                        <label style="flex: 1; cursor: pointer;">
+                            <input type="checkbox" id="chk-autoplay-onstart" style="margin-right: 8px;">
+                            Iniciar reproducción automáticamente al iniciar
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label style="flex: 1; cursor: pointer;">
+                            <input type="checkbox" id="chk-encoder-on-autoplay" style="margin-right: 8px;">
+                            Iniciar el encoder al comenzar la reproducción automática
+                        </label>
+                    </div>
+                    <p style="font-size: 11px; color: #777; margin-top: 8px;">El encoder conectará únicamente los servidores que hayas marcado como "Auto-conectar al iniciar" en la ventana del Emisor.</p>
+                    <p id="hint-autostart-dev" style="display: none; font-size: 11px; color: #e0a040; margin-top: 8px;"></p>
+                </fieldset>
+
+                <h4 style="margin: 0 0 10px 0; color: #ccc; font-weight: 600;">Personalización de Interfaz</h4>
+                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Arrastra los elementos para cambiar su orden, o desmárcalos para ocultarlos. Los cambios se reflejarán en la ventana principal inmediatamente a modo de vista previa.</p>
+
+                <div class="setting-row" style="margin-bottom: 15px;">
+                    <label style="width: 250px;">Posición general de los controles:</label>
+                    <select id="sel-controls-pos" class="dark-select" style="flex: 1;">
+                        <option value="top">Arriba</option>
+                        <option value="bottom">Abajo</option>
+                    </select>
+                </div>
+
+                <div style="display: flex; gap: 20px;">
+                    <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
+                        <fieldset class="fieldset-dark">
+                            <legend>Controles de Reproducción</legend>
+                            <ul id="list-controls-order" class="dark-list draggable-list"></ul>
+                        </fieldset>
+                        <fieldset class="fieldset-dark" style="margin-bottom: 0;">
+                            <legend>Columnas de Playlist</legend>
+                            <ul id="list-playlist-order" class="dark-list draggable-list"></ul>
+                        </fieldset>
+                    </div>
+
+                    <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
+                        <fieldset class="fieldset-dark">
+                            <legend>Modos de Reproducción</legend>
+                            <ul id="list-modes-order" class="dark-list draggable-list"></ul>
+                        </fieldset>
+                        <fieldset class="fieldset-dark" style="margin-bottom: 0;">
+                            <legend>Hora y Clima</legend>
+                            <ul id="list-widgets-order" class="dark-list draggable-list"></ul>
+                        </fieldset>
+                        
+                        <div class="setting-row" style="margin-top: 5px;">
+                            <label style="flex: 1; cursor: pointer; color: #aaa;">
+                                <input type="checkbox" id="chk-fit-to-window" style="margin-right: 8px;">
+                                Ajustar columnas a la ventana
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="tab-time" class="tab-pane">
                 <h3 class="tab-title">Hora y Clima</h3>
                 
@@ -306,6 +378,7 @@
                         <label style="width: 250px;">Tiempo de fundido al subir/bajar (Fade):</label>
                         <input type="number" id="num-duck-fade" class="dark-number" step="0.1" min="0.1" value="1.0"> seg
                     </div>
+
                 </div>
             </div>
 

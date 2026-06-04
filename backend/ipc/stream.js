@@ -143,6 +143,53 @@ module.exports = function registerStreamIpc(context) {
     });
 
     // ─────────────────────────────────────────────────────────────────────────
+    // stream-url-fade-stop — fade-out en Rust + stop limpio
+    //
+    // Detiene FFmpeg inmediatamente (deja de enviar chunks) y manda un comando
+    // `fade` al motor Rust para bajar el volumen gradualmente. Después de que
+    // termina el fade, envía `stream_stop` para liberar el ring buffer.
+    // Esto evita que el audio del buffer siga sonando a volumen completo.
+    // ─────────────────────────────────────────────────────────────────────────
+    ipcMain.handle('stream-url-fade-stop', async (_event, { streamId, fadeSeconds } = {}) => {
+        const proxy = activeStreams.get(streamId);
+        if (!proxy) return { success: false, error: `Stream '${streamId}' no encontrado.` };
+
+        const safeFadeMs = Math.max(0, Number(fadeSeconds) || 0) * 1000;
+        const playerId = proxy.playerId || 'stream-live';
+
+        // Detener FFmpeg de inmediato (sin mandar stream_stop a Rust aún).
+        proxy.stopFfmpegOnly();
+
+        if (safeFadeMs > 30) {
+            // Fade-out en Rust: el volumen baja gradualmente y el player
+            // se detiene solo al terminar el fade (stopAfter: true).
+            rustAudioEngine.command({
+                cmd: 'fade',
+                player: playerId,
+                fromGain: 1.0,
+                toGain: 0.0001,
+                durationMs: Math.round(safeFadeMs),
+                stopAfter: true
+            }).catch(() => {});
+
+            // Limpiar el ring buffer y el mapa de streams tras el fade.
+            const cleanupTimer = setTimeout(() => {
+                rustAudioEngine.send({ cmd: 'stream_stop', player: playerId });
+                activeStreams.delete(streamId);
+                releasePlayerReservation(streamId);
+            }, safeFadeMs + 300);
+            if (cleanupTimer.unref) cleanupTimer.unref();
+        } else {
+            // Sin fade apreciable: parada inmediata.
+            rustAudioEngine.send({ cmd: 'stream_stop', player: playerId });
+            activeStreams.delete(streamId);
+            releasePlayerReservation(streamId);
+        }
+
+        return { success: true };
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
     // stream-url-stop-player — detener el stream de un player específico
     // (útil cuando el frontend sabe el playerId pero no el streamId)
     // ─────────────────────────────────────────────────────────────────────────

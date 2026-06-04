@@ -1,9 +1,16 @@
 'use strict';
 
-function normalizeRetentionDays(value = 30) {
+// Piso de memoria fisica aprobado: 30 dias. Las reglas de separacion (cancion y
+// artista) leen de esta misma tabla, asi que el almacenamiento debe cubrir
+// holgadamente cualquier ventana de separacion (tope 48h) y dejar margen para
+// funciones futuras (estadisticas/reportes historicos).
+const MIN_RETENTION_DAYS = 30;
+const MAX_RETENTION_DAYS = 366;
+
+function normalizeRetentionDays(value = MIN_RETENTION_DAYS) {
     const parsed = parseInt(value, 10);
-    if (!Number.isFinite(parsed)) return 30;
-    return Math.max(1, Math.min(366, parsed));
+    if (!Number.isFinite(parsed)) return MIN_RETENTION_DAYS;
+    return Math.max(MIN_RETENTION_DAYS, Math.min(MAX_RETENTION_DAYS, parsed));
 }
 
 function cutoffIso(amount, unit = 'days', now = new Date().toISOString()) {
@@ -12,7 +19,7 @@ function cutoffIso(amount, unit = 'days', now = new Date().toISOString()) {
     const safeAmount = Math.max(1, Math.min(366, parseInt(amount, 10) || 1));
     const ms = unit === 'hours'
         ? safeAmount * 60 * 60 * 1000
-        : normalizeRetentionDays(safeAmount) * 24 * 60 * 60 * 1000;
+        : safeAmount * 24 * 60 * 60 * 1000;
     return new Date(safeStamp.getTime() - ms).toISOString();
 }
 
@@ -37,14 +44,24 @@ class PlaybackHistory {
             CREATE INDEX IF NOT EXISTS idx_playback_history_file_time
                 ON playback_history(file_path, played_at);
         `);
+        // Migracion segura: la columna artist habilita la separacion por artista.
+        // Bases existentes la adquieren sin perder datos.
+        try { this.db.prepare('ALTER TABLE playback_history ADD COLUMN artist TEXT').run(); } catch (err) {}
     }
 
-    record({ filePath, title = '', category = 'music', sourceFolder = '', playedAt = new Date().toISOString() } = {}) {
+    record({ filePath, title = '', category = 'music', sourceFolder = '', artist = '', playedAt = new Date().toISOString() } = {}) {
         if (!filePath || category === 'locution') return { stored: false };
         this.db.prepare(`
-            INSERT INTO playback_history (file_path, title, category, source_folder, played_at)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(String(filePath), String(title || ''), String(category || 'music'), String(sourceFolder || ''), new Date(playedAt).toISOString());
+            INSERT INTO playback_history (file_path, title, category, source_folder, artist, played_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(
+            String(filePath),
+            String(title || ''),
+            String(category || 'music'),
+            String(sourceFolder || ''),
+            String(artist || ''),
+            new Date(playedAt).toISOString()
+        );
         return { stored: true };
     }
 
@@ -59,12 +76,41 @@ class PlaybackHistory {
         `).all(String(category || 'music'), cutoffIso(amount, unit, now)).map(row => row.file_path);
     }
 
-    prune(days = 30, now = new Date().toISOString()) {
-        return this.db.prepare('DELETE FROM playback_history WHERE played_at < ?').run(cutoffIso(days, 'days', now)).changes;
+    // Reproducciones recientes con su ultima hora, para "la menos reciente" al
+    // forzar repeticion cuando una carpeta agota su pozo.
+    recentSongs({ category = 'music', days, value, unit = 'days', now = new Date().toISOString() } = {}) {
+        const amount = value ?? days ?? 1;
+        return this.db.prepare(`
+            SELECT file_path AS filePath, MAX(played_at) AS lastPlayed
+            FROM playback_history
+            WHERE category = ? AND played_at >= ?
+            GROUP BY file_path
+            ORDER BY lastPlayed DESC
+        `).all(String(category || 'music'), cutoffIso(amount, unit, now));
+    }
+
+    // Artistas reproducidos recientemente (texto crudo). La normalizacion para
+    // comparar se hace en el renderer (minusculas, sin acentos).
+    recentArtists({ category = 'music', days, value, unit = 'days', now = new Date().toISOString() } = {}) {
+        const amount = value ?? days ?? 1;
+        return this.db.prepare(`
+            SELECT artist, MAX(played_at) AS lastPlayed
+            FROM playback_history
+            WHERE category = ? AND played_at >= ? AND artist IS NOT NULL AND artist <> ''
+            GROUP BY artist
+            ORDER BY lastPlayed DESC
+        `).all(String(category || 'music'), cutoffIso(amount, unit, now));
+    }
+
+    prune(days = MIN_RETENTION_DAYS, now = new Date().toISOString()) {
+        return this.db.prepare('DELETE FROM playback_history WHERE played_at < ?')
+            .run(cutoffIso(normalizeRetentionDays(days), 'days', now)).changes;
     }
 }
 
 module.exports = {
     PlaybackHistory,
-    normalizeRetentionDays
+    normalizeRetentionDays,
+    MIN_RETENTION_DAYS,
+    MAX_RETENTION_DAYS
 };

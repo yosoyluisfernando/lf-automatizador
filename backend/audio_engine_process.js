@@ -48,7 +48,7 @@ const REPORT_KEEP_BYTES = 1024 * 1024;
 const ROUTINE_STATUS_LOG_INTERVAL_MS = 30000;
 
 class RustAudioEngineProbe {
-    constructor({ rootDir, cp, writeLog, onEngineEvent } = {}) {
+    constructor({ rootDir, cp, writeLog, onEngineEvent, onEngineReady } = {}) {
         this.rootDir = rootDir || path.join(__dirname, '..');
         this.cp = cp || require('child_process');
         this.writeLog = typeof writeLog === 'function' ? writeLog : () => {};
@@ -57,6 +57,10 @@ class RustAudioEngineProbe {
         // `timeLocutionEnded`). main.js los reenvía al renderer vía IPC para
         // que el frontend reaccione sin tener que orquestar nada por sí mismo.
         this.onEngineEvent = typeof onEngineEvent === 'function' ? onEngineEvent : null;
+        // Callback invocado UNA sola vez cuando el motor emite `ready`, señal
+        // de que WASAPI está inicializado y el motor acepta comandos de configuración.
+        // Es el momento correcto para aplicar rutas de audio guardadas.
+        this.onEngineReady = typeof onEngineReady === 'function' ? onEngineReady : null;
         this.exePath = resolveRustAudioEnginePath(this.rootDir);
         this.reportPath = path.join(this.rootDir, 'config', 'audio_engine_report.jsonl');
         this.process = null;
@@ -429,7 +433,10 @@ class RustAudioEngineProbe {
         if (this.onEngineEvent && (isPushStatus || isAsyncEvent)) {
             try { this.onEngineEvent(message); } catch (err) {}
         }
-        if (message.type === 'ready') return;
+        if (message.type === 'ready') {
+            if (this.onEngineReady) try { this.onEngineReady(); } catch (err) {}
+            return;
+        }
         if (pending) {
             clearTimeout(pending.timeout);
             if (message.type === 'error') {

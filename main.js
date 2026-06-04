@@ -148,10 +148,60 @@ const ffmpegCapabilities = {
     baseline: ffmpegRuntime.baseline.capabilities,
     fdk: ffmpegRuntime.fdk?.capabilities || null,
 };
+// Lee general_settings.json y construye los comandos `route` iniciales que se
+// envían al motor Rust en respuesta al evento `ready`. Los IDs almacenados son
+// los IDs nativos de Rust (indexId / id del dispositivo WASAPI), escritos por
+// settings.js usando setSelectRustDeviceOptions. El motor los resuelve
+// directamente sin necesidad de traducción desde deviceIds de browser.
+function buildStartupRouteCommands() {
+    try {
+        const settingsPath = path.join(getConfigDir(path.join(__dirname, 'config'), __dirname), 'general_settings.json');
+        if (!fs.existsSync(settingsPath)) return [];
+        const cfg = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        const outMain     = cfg.outMain     || 'default';
+        const outMonitor  = cfg.outMonitor  || outMain;
+        const outCue      = cfg.outCue      || outMain;
+        const cartwallMode = cfg.cartwallOutputMode || 'master';
+        const outCartwall = cartwallMode === 'monitor' ? outMonitor
+            : cartwallMode === 'cue'    ? outCue
+            : cartwallMode === 'device' ? (cfg.outCartwall || outMain)
+            : outMain;
+        const routes = [
+            { cmd: 'route', bus: 'master',   outputId: outMain },
+            { cmd: 'route', bus: 'jingle',   outputId: outMain },
+            { cmd: 'route', bus: 'cue',      outputId: outCue },
+            { cmd: 'route', bus: 'cartwall', outputId: outCartwall },
+        ];
+        if (cfg.monitorEnabled === true) {
+            routes.push({
+                cmd: 'route',
+                bus: 'monitor',
+                outputId: outMonitor,
+                sourceMode: cfg.monitorSourceMode === 'preFx' ? 'preFx' : 'postFx'
+            });
+        }
+        return routes;
+    } catch (err) {
+        return [];
+    }
+}
+
 const rustAudioEngine = new RustAudioEngineProbe({
     rootDir: __dirname,
     cp,
     writeLog,
+    // El motor emite `ready` cuando WASAPI ha terminado de inicializarse y
+    // puede aceptar comandos. Es el momento correcto para aplicar la
+    // configuración de salida de audio guardada, sin depender de timeouts
+    // ni del ciclo de vida del renderer.
+    onEngineReady: () => {
+        const routes = buildStartupRouteCommands();
+        routes.forEach(cmd => rustAudioEngine.send(cmd));
+        if (routes.length) {
+            const masterOut = routes.find(r => r.bus === 'master')?.outputId || 'default';
+            writeLog(`[RustAudio] Rutas de arranque aplicadas: master=${masterOut}`);
+        }
+    },
     // Reenvía al renderer eventos asíncronos del motor (locución horaria,
     // futuros eventos de fin de pista, etc.). El renderer escucha
     // 'audio-engine-rust-event' y reacciona sin tener que mantener relojes.
@@ -538,6 +588,25 @@ function openArtistCatalogWindow() {
     artistCatalogWindow.on('closed', () => { artistCatalogWindow = null; });
 }
 
+function openMusicSeparationWindow() {
+    if (musicSeparationWindow && !musicSeparationWindow.isDestroyed()) {
+        musicSeparationWindow.focus();
+        return;
+    }
+    musicSeparationWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+        width: 760,
+        height: 640,
+        minWidth: 620,
+        minHeight: 520,
+        title: 'Reglas de Separación Musical',
+        autoHideMenuBar: true,
+        parent: mainWindow || undefined,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+    });
+    musicSeparationWindow.loadFile('frontend/separacion_musical.html');
+    musicSeparationWindow.on('closed', () => { musicSeparationWindow = null; });
+}
+
 async function initializeCurationFromConfiguredRoot() {
     try {
         const rootPath = getConfiguredLibraryRoot();
@@ -674,7 +743,7 @@ const fileTypesPath = path.join(configDir, 'file_types.json');
 const explicitTypesPath = path.join(configDir, 'explicit_types.json');
 
 let mainWindow;
-let activePlaylistTab = 0; let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null;
+let activePlaylistTab = 0; let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null; let musicSeparationWindow = null;
 let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let aboutWindow = null;
 let ffmpegProcess = null; let activeEncoderConfig = null; let isAppQuitting = false; let forceQuit = false;
 let lastEditorSource = 'playlist'; 
@@ -2316,6 +2385,8 @@ function createApplicationMenu() {
                 { label: '🎨 Editor de Géneros Musicales', ...menuShortcut('app.open_genre_editor'), click: () => openGenreEditorWindow() },
                 { label: '💼 Gestor de Comerciales', ...menuShortcut('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
                 { type: 'separator' },
+                { label: '🎚️ Reglas de separación musical', click: () => openMusicSeparationWindow() },
+                { type: 'separator' },
                 {
                     label: '🚀 Inicializar curaduría desde carpeta raíz',
                     click: async () => {
@@ -2403,6 +2474,8 @@ app.whenReady().then(() => {
     }
 }); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) powerSaveBlocker.stop(appSuspensionBlockerId); } catch (e) {} try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
 ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
+ipcMain.on('preview-ui-layout', (e, data) => { if (mainWindow) mainWindow.webContents.send('preview-ui-layout', data); });
+ipcMain.on('revert-ui-layout', () => { if (mainWindow) mainWindow.webContents.send('revert-ui-layout'); });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
     const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow;
     const res = await dialog.showOpenDialog(ownerWindow, {
@@ -2665,6 +2738,8 @@ const sharedState = {
     set artistCardWindow(val) { artistCardWindow = val; },
     get artistCatalogWindow() { return artistCatalogWindow; },
     set artistCatalogWindow(val) { artistCatalogWindow = val; },
+    get musicSeparationWindow() { return musicSeparationWindow; },
+    set musicSeparationWindow(val) { musicSeparationWindow = val; },
 
 };
 
@@ -2672,6 +2747,7 @@ require('./backend/ipc/commercials')(sharedState);
 require('./backend/ipc/events')(sharedState);
 require('./backend/ipc/ui')(sharedState);
 require('./backend/ipc/windows')(sharedState);
+require('./backend/ipc/system')(sharedState);
 require('./backend/ipc/cartwall')(sharedState);
 require('./backend/ipc/library')(sharedState);
 require('./backend/ipc/stream')(sharedState);

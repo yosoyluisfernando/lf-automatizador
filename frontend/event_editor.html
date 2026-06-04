@@ -40,17 +40,82 @@
         
         <div class="section-box">
             <h4 class="section-title">1. Origen del Audio</h4>
-            <div class="radio-group-horizontal" style="margin-bottom: 15px;">
+            <div class="radio-group-horizontal" style="margin-bottom: 15px; flex-wrap: wrap; gap: 8px 20px;">
                 <label><input type="radio" name="ev-source-type" value="file" checked> 🎵 Archivo</label>
                 <label><input type="radio" name="ev-source-type" value="playlist"> 📄 Playlist</label>
                 <label><input type="radio" name="ev-source-type" value="folder"> 📁 Carpeta Rotativa</label>
-                <label><input type="radio" name="ev-source-type" value="commercial"> Comerciales</label>
-                <label class="disabled-feature"><input type="radio" name="ev-source-type" value="macro"> ⚙️ Macro / Comando de Red <span class="badge-soon">Próximamente</span></label>
+                <label style="display:none;"><input type="radio" name="ev-source-type" value="commercial"> Comerciales</label>
+                <label><input type="radio" name="ev-source-type" value="stream_url"> 📡 Emisora (URL)</label>
+                <label><input type="radio" name="ev-source-type" value="locution"> 🎙 Locuciones</label>
+                <label class="disabled-feature" style="display:none;"><input type="radio" name="ev-source-type" value="macro"> ⚙️ Macro / Comando de Red <span class="badge-soon">Próximamente</span></label>
             </div>
-            <div class="row-item">
+            <div class="row-item" id="ev-filepath-row">
                 <input type="text" id="ev-filepath" class="input-text" placeholder="Selecciona la ruta de origen..." readonly>
                 <select id="ev-commercial-block" class="input-text" style="display:none;"></select>
                 <button type="button" id="btn-browse" class="settings-btn">Examinar</button>
+            </div>
+
+            <!-- ── Campos inline para fuente Emisora (URL) ──────────────── -->
+            <div id="ev-stream-config" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px;">
+                <!-- URL -->
+                <div class="row-item" style="margin-bottom:0;">
+                    <label style="width:130px; flex-shrink:0;">URL de la emisora <span style="color:#e74c3c;">*</span></label>
+                    <input type="text" id="ev-stream-url" class="input-text" placeholder="https://stream.ejemplo.com/live">
+                    <button type="button" id="btn-stream-verify" class="settings-btn" style="white-space:nowrap; padding:5px 10px;" title="Verificar conexión y detectar formato">🔍</button>
+                </div>
+                <div id="ev-stream-probe-result" style="font-size:11px; color:#888; padding-left:140px; min-height:14px;"></div>
+
+                <!-- Duración obligatoria (solo timer, indefinida bloqueada) -->
+                <div style="background:#222225; border-radius:3px; padding:10px 12px; display:flex; flex-direction:column; gap:6px;">
+                    <div style="font-size:12px; color:#f39c12; font-weight:bold;">⏱ Duración en la playlist <span style="color:#e74c3c; font-size:11px;">(requerida)</span></div>
+                    <div style="font-size:11px; color:#888; margin-bottom:4px;">Las emisoras requieren una duración definida. Se avanzará automáticamente al terminar.</div>
+                    <div style="display:flex; align-items:center; gap:6px; font-size:12px; color:#ddd;">
+                        <input type="number" id="ev-stream-hours" class="input-text" min="0" max="23" value="0" style="width:50px; text-align:center;">
+                        <span style="color:#888;">h</span>
+                        <input type="number" id="ev-stream-minutes" class="input-text" min="0" max="59" value="30" style="width:50px; text-align:center;">
+                        <span style="color:#888;">m</span>
+                        <input type="number" id="ev-stream-secs" class="input-text" min="0" max="59" value="0" style="width:50px; text-align:center;">
+                        <span style="color:#888;">s</span>
+                        <span id="ev-stream-dur-preview" style="color:#888; font-size:11px; margin-left:8px;"></span>
+                    </div>
+                </div>
+
+                <!-- Avanzado: timeout + reintentos -->
+                <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; font-size:12px; color:#aaa;">
+                    <span style="color:#666;">⚙ Avanzado:</span>
+                    <label style="display:flex; align-items:center; gap:5px;">
+                        Espera conexión
+                        <input type="number" id="ev-stream-timeout" class="input-text" min="2" max="60" value="10" style="width:44px; text-align:center;">
+                        <span style="color:#666; font-size:11px;">s</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:5px;">
+                        Máx. reintentos
+                        <input type="number" id="ev-stream-retries" class="input-text" min="0" max="20" value="3" style="width:44px; text-align:center;">
+                    </label>
+                </div>
+
+                <!-- Metadatos -->
+                <div style="display:flex; flex-direction:column; gap:5px; font-size:12px;">
+                    <label style="color:#aaa;">Metadatos enviados al encoder y NowPlaying.txt</label>
+                    <select id="ev-stream-meta-mode" class="input-text" style="max-width:380px;">
+                        <option value="icy">📡 Metadatos de la emisora (StreamTitle en vivo)</option>
+                        <option value="station">🏷️ Solo el nombre de la emisora</option>
+                        <option value="custom">✏️ Texto personalizado...</option>
+                    </select>
+                    <input type="text" id="ev-stream-meta-custom" class="input-text" placeholder="Texto fijo que se enviará al encoder" style="display:none; max-width:380px;">
+                </div>
+            </div>
+
+            <!-- ── Configuración de Locuciones ──────────────────────────── -->
+            <div id="ev-locution-config" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px;">
+                <div class="row-item" style="margin-bottom:0;">
+                    <label style="width:130px; flex-shrink:0;">Tipo de Locución</label>
+                    <select id="ev-locution-type" class="input-text" style="max-width:220px;">
+                        <option value="time">⏰ Hora</option>
+                        <option value="temperature">🌡️ Temperatura</option>
+                        <option value="humidity">💧 Humedad</option>
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -139,20 +204,41 @@
             <div class="radio-group">
                 <label><input type="radio" name="ev-action" value="add" checked> ➕ Insertar a la playlist (Agregar como siguiente, después de la actual)</label>
                 <label><input type="radio" name="ev-action" value="temp"> ⏳ Temporal (Se borra al terminar, ideal para comerciales)</label>
-                <label><input type="radio" name="ev-action" value="clear"> 🗑️ Borrar toda la lista actual y cargar este evento</label>
+                <label id="ev-action-clear-label"><input type="radio" id="ev-action-clear" name="ev-action" value="clear"> 🗑️ Borrar toda la lista actual y cargar este evento</label>
                 <label><input type="radio" name="ev-action" value="append-end"> 🔽 Agregar al final de la lista</label>
                 
-                <label class="disabled-feature" style="margin-top: 8px;"><input type="radio" name="ev-action" value="ducking" disabled> 🎙️ Superposición / Pisador (Baja el volumen maestro, no afecta la lista) <span class="badge-soon">Próximamente</span></label>
-                <label class="disabled-feature"><input type="checkbox" disabled> Aplicar transiciones suaves (Fade In / Fade Out) <span class="badge-soon">Próximamente</span></label>
+                <label id="ev-action-ducking-label" style="margin-top: 8px; opacity:0.4; pointer-events:none; display:flex; align-items:center; gap:6px;">
+                    <input type="radio" id="ev-action-ducking" name="ev-action" value="ducking" disabled>
+                    🎙️ Superposición / Pisador (Suena encima, no modifica la lista)
+                    <button type="button" id="btn-ducking-config" title="Configurar volumen del pisador" style="display:none; background:#333; border:1px solid #555; border-radius:3px; cursor:pointer; color:#aaa; font-size:13px; padding:1px 7px; line-height:1.4;">⚙</button>
+                </label>
+                <!-- Panel de configuración del pisador -->
+                <div id="ev-ducking-panel" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px; margin-left:20px;">
+                    <div style="font-size:11px; color:#00a8ff; font-weight:bold; border-bottom:1px solid #333; padding-bottom:5px;">Configuración de Pisador</div>
+                    <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc;">
+                        <label style="width:175px; flex-shrink:0;">Volumen Objetivo (BGM):</label>
+                        <input type="range" id="ev-ducking-vol" min="0" max="100" value="20" style="flex:1; cursor:pointer;">
+                        <span id="ev-ducking-vol-display" style="width:38px; text-align:right; color:#00a8ff; font-weight:bold;">20%</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc;">
+                        <label style="width:175px; flex-shrink:0;">Tiempo de Fundido (ms):</label>
+                        <input type="number" id="ev-ducking-fade" class="input-text" min="0" max="5000" step="50" value="500" style="width:80px; text-align:center;">
+                    </div>
+                </div>
+                <label class="disabled-feature" style="display:none;"><input type="checkbox" disabled> Aplicar transiciones suaves (Fade In / Fade Out) <span class="badge-soon">Próximamente</span></label>
             </div>
         </div>
 
         <div class="section-box">
             <h4 class="section-title">4. Reglas de Ejecución</h4>
-            <div class="radio-group">
-                <label><input type="radio" name="ev-exec" value="interrupt" checked> ⚡ Interrumpir Inmediatamente (Corta la canción actual)</label>
-                <label><input type="radio" name="ev-exec" value="wait"> ⏳ Esperar a que finalice la canción actual</label>
-                <label><input type="radio" name="ev-exec" value="max-delay"> ⌛ Tiempo Máx de Espera (Tolerancia)</label>
+            <div class="radio-group" id="ev-exec-group">
+                <label id="ev-exec-interrupt-label"><input type="radio" name="ev-exec" value="interrupt" checked> ⚡ Interrumpir Inmediatamente (Corta la canción actual)</label>
+                <label id="ev-exec-wait-label"><input type="radio" name="ev-exec" value="wait"> ⏳ Esperar a que finalice la canción actual</label>
+                <label id="ev-exec-maxdelay-label"><input type="radio" name="ev-exec" value="max-delay"> ⌛ Tiempo Máx de Espera (Tolerancia)</label>
+            </div>
+            <!-- Advertencia visible solo cuando fuente=stream_url + ejecución=interrupt -->
+            <div id="ev-stream-interrupt-warning" style="display:none; margin-top:8px; background:#2c1a00; border-left:3px solid #e67e22; padding:8px 10px; border-radius:0 3px 3px 0; font-size:11px; color:#f0a050;">
+                ⚠️ <strong>Aviso para emisoras:</strong> Al interrumpir, habrá un silencio breve mientras la emisora se conecta. Se aplica fade-out automático a la pista actual antes de cortar.
             </div>
 
             <div style="margin-top: 15px; border-top: 1px dashed #333; padding-top: 10px;">

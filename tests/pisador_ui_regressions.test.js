@@ -57,3 +57,32 @@ test('renderer prepares, plays and clears overlay sessions instead of rerolling 
     assert.match(renderJs, /commandRustControlPlane\('play'/);
     assert.doesNotMatch(renderJs, /playOverlayDrop\(mc\[`p\$\{i\}_file`\]\)/);
 });
+
+test('program ducking is applied as a factor inside the Rust deck-gain mirror so the reconcile cannot undo it', () => {
+    // Causa raíz del bug del pisador: el duck se escribía directo sobre el gain
+    // del deck y el siguiente ciclo de syncRustPlaylistControlPlane lo pisaba con
+    // el gain "intended". El gain espejado DEBE multiplicar por programDuckFactor.
+    assert.match(renderJs, /let programDuckFactor = 1\b/);
+    assert.match(
+        renderJs,
+        /function getRustPlaylistMirrorGain[\s\S]*?base \* programDuckFactor/,
+        'getRustPlaylistMirrorGain debe aplicar el factor de duck'
+    );
+});
+
+test('ducking drives the global factor and fades decks via the engine, not a per-deck snapshot', () => {
+    assert.match(renderJs, /function applyRustPlaylistDucking[\s\S]*?programDuckFactor = targetFactor/);
+    assert.match(renderJs, /function removeRustPlaylistDucking[\s\S]*?programDuckFactor = 1/);
+    assert.match(renderJs, /scheduleRustPlaylistGainRamp\(id, intended \* fromFactor/);
+    // El snapshot per-deck que peleaba con el reconcile quedó eliminado.
+    assert.doesNotMatch(renderJs, /rustPlaylistPreDuckingGains/);
+});
+
+test('duck volume/fade are captured at apply time so the prefs restore never races the duck', () => {
+    assert.match(renderJs, /activeDuckParams = \{ vol: duckVol, fadeSecs \}/);
+    assert.match(renderJs, /function removeRustPlaylistDucking[\s\S]*?activeDuckParams\?\.fadeSecs/);
+});
+
+test('temporary duck diagnostics were removed after confirming the root cause', () => {
+    assert.doesNotMatch(renderJs, /DUCK-DIAG/);
+});

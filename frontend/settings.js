@@ -5,11 +5,13 @@ const { normalizeAudioPrefs } = require('./audio_prefs');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { COMMANDS, DEFAULT_SHORTCUTS, MANDATORY_ACTIONS, ALWAYS_RESERVED, COMMAND_CATEGORIES } = require('./command_registry');
 const { buildComboString } = require('./shortcut_manager');
+const { wireSystemPrefs, collectSystemPrefs } = require('./system_prefs_ui');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 
 const fileTypesPath = path.join(configDir, 'file_types.json');
 const generalPrefsPath = path.join(configDir, 'general_settings.json');
+const uiPrefsPath = path.join(configDir, 'ui_prefs.json');
 
 function loadConfig(filePath, defaultData) {
     if (fs.existsSync(filePath)) {
@@ -84,9 +86,22 @@ let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, {
     removePlayedProtectionEnabled: false, removePlayedProtectionMinRemaining: 2,
     dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip',
     chk_mus_fadein: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false,
-    num_mus_fadein: 0, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14
+    num_mus_fadein: 0, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14,
+    autoStartWithSystem: false, autoPlayOnStart: false, startEncoderOnAutoPlay: false
 }));
 delete generalPrefs.num_mus_mix_fadeout;
+
+let uiPrefs = loadConfig(uiPrefsPath, { 
+    controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82],
+    controlsOrder: ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'],
+    controlsHidden: [],
+    modesOrder: ['btn-mode-looplist', 'btn-mode-remove', 'btn-mode-repeat'],
+    modesHidden: [],
+    widgetsOrder: ['btn-reloj', 'temp-widget', 'hum-widget'],
+    playlistColumnsOrder: ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro'],
+    playlistColumnsHidden: [],
+    playlistFitToWindow: false
+});
 
 let currentSelectedTypeId = 'default';
 let cwState = { activeProfileId: 'default', profiles: [] };
@@ -794,9 +809,13 @@ function saveAll() {
         generalPrefs.weatherLatitude = selectedWeatherCoords.lat;
         generalPrefs.weatherLongitude = selectedWeatherCoords.lon;
     }
+    collectSystemPrefs(generalPrefs);
     generalPrefs = normalizeAudioPrefs(generalPrefs);
     delete generalPrefs.num_mus_mix_fadeout;
     saveConfig(generalPrefsPath, generalPrefs);
+
+    uiPrefs.controlsPos = document.getElementById('sel-controls-pos').value;
+    saveConfig(uiPrefsPath, uiPrefs);
 
     if (currentShortcuts !== null) {
         ipcRenderer.invoke('save-keyboard-shortcuts', currentShortcuts);
@@ -855,6 +874,8 @@ function restoreSettingsSnapshot() {
 // poblarse con las opciones de tarjetas (que vienen async desde el SO).
 setTimeout(captureSettingsSnapshot, 1500);
 
+let isClosingNormally = false;
+
 document.getElementById('btn-apply').addEventListener('click', () => {
     // FASE 3 — Aplicar: persiste y empuja al motor Rust en caliente PERO
     // NO cierra la ventana. Después de aplicar, refrescamos el snapshot
@@ -864,6 +885,7 @@ document.getElementById('btn-apply').addEventListener('click', () => {
 });
 document.getElementById('btn-accept').addEventListener('click', () => {
     // FASE 3 — Guardar (Aceptar y Cerrar): aplica + persiste + cierra.
+    isClosingNormally = true;
     saveAll();
     window.close();
 });
@@ -871,8 +893,17 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
     // FASE 3 — Cancelar: revierte la UI al snapshot y cierra SIN persistir
     // ni mandar comandos al motor Rust. Los cambios que estaban "flotando"
     // en los selectores se descartan.
+    isClosingNormally = true;
     restoreSettingsSnapshot();
+    ipcRenderer.send('revert-ui-layout');
     window.close();
+});
+
+window.addEventListener('beforeunload', () => {
+    if (!isClosingNormally) {
+        // Si se cierra con la X de la ventana, revertimos para no dejar la vista previa huérfana
+        ipcRenderer.send('revert-ui-layout');
+    }
 });
 
 // ── Atajos de teclado ─────────────────────────────────────────────────────────
@@ -1223,3 +1254,218 @@ ipcRenderer.on('switch-tab', (e, targetTab) => {
     const tabEl = document.querySelector(`[data-target="${targetTab}"]`);
     if (tabEl) tabEl.click();
 });
+
+// ── Pestaña Interfaz ────────────────────────────────────────────────────────
+function initInterfaceSettings() {
+    const selPos = document.getElementById('sel-controls-pos');
+    if (selPos) selPos.value = uiPrefs.controlsPos || 'bottom';
+    
+    selPos.addEventListener('change', () => {
+        sendUIPreview();
+    });
+
+    const buildList = (listId, allIds, orderArr, hiddenArr, labels) => {
+        const ul = document.getElementById(listId);
+        if (!ul) return;
+        ul.innerHTML = '';
+        
+        let sorted = [...allIds];
+        sorted.sort((a, b) => {
+            let idxA = orderArr.indexOf(a);
+            let idxB = orderArr.indexOf(b);
+            if (idxA === -1) idxA = 99;
+            if (idxB === -1) idxB = 99;
+            return idxA - idxB;
+        });
+
+        sorted.forEach((id) => {
+            const li = document.createElement('li');
+            li.className = 'draggable-item';
+            li.dataset.id = id;
+            li.style.display = 'flex';
+            li.style.alignItems = 'center';
+            li.style.padding = '8px 10px';
+            li.style.background = '#222';
+            li.style.border = '1px solid #333';
+            li.style.marginBottom = '5px';
+            li.style.borderRadius = '4px';
+
+            li.draggable = true;
+            li.style.cursor = 'grab';
+            
+            li.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', id);
+                setTimeout(() => li.style.opacity = '0.5', 0);
+            });
+            li.addEventListener('dragend', () => {
+                li.style.opacity = '1';
+                ul.querySelectorAll('.draggable-item').forEach(x => {
+                    x.style.borderTop = ''; x.style.borderBottom = '';
+                });
+            });
+            li.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const bounding = li.getBoundingClientRect();
+                const offset = bounding.y + (bounding.height / 2);
+                if (e.clientY - offset > 0) {
+                    li.style.borderBottom = '2px solid #3498db';
+                    li.style.borderTop = '';
+                } else {
+                    li.style.borderTop = '2px solid #3498db';
+                    li.style.borderBottom = '';
+                }
+            });
+            li.addEventListener('dragleave', () => {
+                li.style.borderTop = '';
+                li.style.borderBottom = '';
+            });
+            li.addEventListener('drop', (e) => {
+                e.preventDefault();
+                li.style.borderTop = '';
+                li.style.borderBottom = '';
+                const draggedId = e.dataTransfer.getData('text/plain');
+                if (draggedId === id) return;
+                const draggedEl = ul.querySelector(`[data-id="${draggedId}"]`);
+                if (!draggedEl) return;
+                const bounding = li.getBoundingClientRect();
+                if (e.clientY - (bounding.y + bounding.height / 2) > 0) {
+                    ul.insertBefore(draggedEl, li.nextElementSibling);
+                } else {
+                    ul.insertBefore(draggedEl, li);
+                }
+                sendUIPreview();
+            });
+
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.checked = !hiddenArr.includes(id);
+            chk.style.marginRight = '10px';
+            chk.addEventListener('change', sendUIPreview);
+
+            const span = document.createElement('span');
+            span.textContent = labels[id] || id;
+            span.style.flex = '1';
+
+            const btnUp = document.createElement('button');
+            btnUp.textContent = '▲';
+            btnUp.className = 'settings-btn';
+            btnUp.style.padding = '2px 8px';
+            btnUp.style.marginRight = '5px';
+            btnUp.onclick = (e) => { e.preventDefault(); moveItem(ul, li, -1); };
+
+            const btnDown = document.createElement('button');
+            btnDown.textContent = '▼';
+            btnDown.className = 'settings-btn';
+            btnDown.style.padding = '2px 8px';
+            btnDown.onclick = (e) => { e.preventDefault(); moveItem(ul, li, 1); };
+
+            li.appendChild(chk);
+            li.appendChild(span);
+            li.appendChild(btnUp);
+            li.appendChild(btnDown);
+            ul.appendChild(li);
+        });
+
+        ul.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+        ul.addEventListener('drop', (e) => {
+            if (e.target !== ul) return;
+            e.preventDefault();
+            const draggedId = e.dataTransfer.getData('text/plain');
+            if (!draggedId) return;
+            const draggedEl = ul.querySelector(`[data-id="${draggedId}"]`);
+            if (!draggedEl) return;
+            
+            const bounding = ul.getBoundingClientRect();
+            if (e.clientY < bounding.y + (bounding.height / 2)) {
+                ul.insertBefore(draggedEl, ul.firstChild);
+            } else {
+                ul.appendChild(draggedEl);
+            }
+            sendUIPreview();
+        });
+    };
+
+    const moveItem = (ul, li, dir) => {
+        if (dir === -1 && li.previousElementSibling) {
+            ul.insertBefore(li, li.previousElementSibling);
+        } else if (dir === 1 && li.nextElementSibling) {
+            ul.insertBefore(li.nextElementSibling, li);
+        }
+        sendUIPreview();
+    };
+
+    const controlsLabels = {
+        'btn-play': 'Play', 'btn-pause': 'Pausa', 'btn-stop': 'Stop',
+        'btn-next': 'Siguiente', 'btn-stop-after': 'Pausar al finalizar', 'btn-talk': 'MIC'
+    };
+    const modesLabels = {
+        'btn-mode-looplist': 'Bucle / Infinita', 'btn-mode-remove': 'Eliminar al tocar', 'btn-mode-repeat': 'Repetir canción'
+    };
+    const widgetsLabels = {
+        'btn-reloj': 'Reloj', 'temp-widget': 'Temperatura', 'hum-widget': 'Humedad'
+    };
+    const playlistLabels = {
+        'col-hora': 'Hora de inicio', 'col-titulo': 'Título', 'col-duracion': 'Duración', 'col-intro': 'Intro', 'col-outro': 'Outro'
+    };
+
+    const allControls = ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'];
+    const allModes = ['btn-mode-looplist', 'btn-mode-remove', 'btn-mode-repeat'];
+    const allWidgets = ['btn-reloj', 'temp-widget', 'hum-widget'];
+    const allPlaylistCols = ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro'];
+
+    const widgetsHidden = [];
+    if (!uiPrefs.temp) widgetsHidden.push('temp-widget');
+    if (!uiPrefs.hum) widgetsHidden.push('hum-widget');
+
+    const chkFit = document.getElementById('chk-fit-to-window');
+    if (chkFit) {
+        chkFit.checked = uiPrefs.playlistFitToWindow;
+        chkFit.addEventListener('change', sendUIPreview);
+    }
+
+    buildList('list-controls-order', allControls, uiPrefs.controlsOrder || allControls, uiPrefs.controlsHidden || [], controlsLabels);
+    buildList('list-modes-order', allModes, uiPrefs.modesOrder || allModes, uiPrefs.modesHidden || [], modesLabels);
+    buildList('list-widgets-order', allWidgets, uiPrefs.widgetsOrder || allWidgets, widgetsHidden, widgetsLabels);
+    buildList('list-playlist-order', allPlaylistCols, uiPrefs.playlistColumnsOrder || allPlaylistCols, uiPrefs.playlistColumnsHidden || [], playlistLabels);
+}
+
+function sendUIPreview() {
+    const getOrder = (listId) => {
+        const ul = document.getElementById(listId);
+        if (!ul) return [];
+        return Array.from(ul.children).map(li => li.dataset.id);
+    };
+    const getHidden = (listId) => {
+        const ul = document.getElementById(listId);
+        if (!ul) return [];
+        return Array.from(ul.children).filter(li => !li.querySelector('input[type=checkbox]').checked).map(li => li.dataset.id);
+    };
+
+    uiPrefs.controlsPos = document.getElementById('sel-controls-pos').value;
+    uiPrefs.controlsOrder = getOrder('list-controls-order');
+    uiPrefs.controlsHidden = getHidden('list-controls-order');
+    
+    uiPrefs.modesOrder = getOrder('list-modes-order');
+    uiPrefs.modesHidden = getHidden('list-modes-order');
+    
+    uiPrefs.widgetsOrder = getOrder('list-widgets-order');
+    const wHidden = getHidden('list-widgets-order');
+    uiPrefs.temp = !wHidden.includes('temp-widget');
+    uiPrefs.hum = !wHidden.includes('hum-widget');
+
+    uiPrefs.playlistColumnsOrder = getOrder('list-playlist-order');
+    uiPrefs.playlistColumnsHidden = getHidden('list-playlist-order');
+    
+    const chkFit = document.getElementById('chk-fit-to-window');
+    uiPrefs.playlistFitToWindow = chkFit ? chkFit.checked : false;
+    
+    ipcRenderer.send('preview-ui-layout', uiPrefs);
+}
+
+initInterfaceSettings();
+wireSystemPrefs(generalPrefs, ipcRenderer);

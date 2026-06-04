@@ -36,7 +36,7 @@ const { EventEmitter } = require('events');
 const PCM_CHUNK_BYTES = 3528;
 const PCM_BYTES_PER_SECOND = 44100 * 2 * 2;
 const MIN_PREBUFFER_SECONDS = 1;
-const DEFAULT_PREBUFFER_SECONDS = 5;
+const DEFAULT_PREBUFFER_SECONDS = 3;
 const MAX_PREBUFFER_SECONDS = 15;
 
 function normalizePrebufferSeconds(value = DEFAULT_PREBUFFER_SECONDS) {
@@ -45,9 +45,13 @@ function normalizePrebufferSeconds(value = DEFAULT_PREBUFFER_SECONDS) {
     return Math.min(MAX_PREBUFFER_SECONDS, Math.max(MIN_PREBUFFER_SECONDS, Math.round(parsed)));
 }
 
+// Capacidad del ring buffer en Rust: prebuffer + 5 segundos de margen fijo.
+// El margen absorbe la ráfaga inicial de FFmpeg cuando la red entrega datos
+// comprimidos más rápido que el tiempo real. Sin este margen el ring buffer
+// se desbordaba y Rust descartaba muestras → glitches en los primeros segundos.
 function ringBufferSecondsForPrebuffer(value = DEFAULT_PREBUFFER_SECONDS) {
     const prebufferSeconds = normalizePrebufferSeconds(value);
-    return Math.max(2, Math.ceil(prebufferSeconds * 4 / 3));
+    return prebufferSeconds + 5;
 }
 
 class StreamProxy extends EventEmitter {
@@ -79,6 +83,11 @@ class StreamProxy extends EventEmitter {
         this._preBufferBytes = PCM_BYTES_PER_SECOND * DEFAULT_PREBUFFER_SECONDS;
         this._ringBufferSeconds = ringBufferSecondsForPrebuffer(DEFAULT_PREBUFFER_SECONDS);
         this._maxBufferBytes = PCM_BYTES_PER_SECOND * (DEFAULT_PREBUFFER_SECONDS + 5);
+        // Rate limiting: controla cuánto se adelanta el envío a Rust respecto al
+        // tiempo real para evitar desbordar el ring buffer cuando FFmpeg decodifica
+        // más rápido que el tiempo real (red rápida con stream comprimido).
+        this._playLiveAt = 0;
+        this._sentBytesAfterPlay = 0;
     }
 
     /** Estado actual ('connecting'|'live'|'reconnecting'|'error'|'stopped'). */
@@ -227,6 +236,8 @@ class StreamProxy extends EventEmitter {
         this._buffer = Buffer.alloc(0);
         this._retryCount = 0;
         this._maxRetries = maxRetries;
+        this._playLiveAt = 0;
+        this._sentBytesAfterPlay = 0;
         this._prebufferSeconds = normalizePrebufferSeconds(prebufferSeconds);
         this._preBufferBytes = PCM_BYTES_PER_SECOND * this._prebufferSeconds;
         this._ringBufferSeconds = ringBufferSecondsForPrebuffer(this._prebufferSeconds);
@@ -239,7 +250,7 @@ class StreamProxy extends EventEmitter {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Método público: stop
+    // Método público: stop / stopFfmpegOnly
     // ─────────────────────────────────────────────────────────────────────────
 
     /** Detiene la retransmisión. */
@@ -260,6 +271,23 @@ class StreamProxy extends EventEmitter {
         this._buffer = Buffer.alloc(0);
     }
 
+    /**
+     * Detiene solo FFmpeg (sin enviar stream_stop a Rust).
+     * Uso: cuando se quiere hacer fade-out en el motor Rust antes de liberar
+     * el ring buffer. El caller es responsable de enviar stream_stop después.
+     */
+    stopFfmpegOnly() {
+        this._stopping = true;
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+        clearTimeout(this._startupTimer);
+        this._startupTimer = null;
+        this._killProcess();
+        this._buffer = Buffer.alloc(0);
+        this._playLiveAt = 0;
+        this._sentBytesAfterPlay = 0;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Internos
     // ─────────────────────────────────────────────────────────────────────────
@@ -271,6 +299,8 @@ class StreamProxy extends EventEmitter {
 
     _spawn() {
         this._buffer = Buffer.alloc(0);
+        this._playLiveAt = 0;
+        this._sentBytesAfterPlay = 0;
         // NOTA: stream_start se envía a Rust DESPUÉS de que el pre-buffer esté
         // lleno (ver _flushBuffer). Esto evita que Rust empiece a reproducir
         // sin datos suficientes → glitches / cortes en los primeros segundos.
@@ -330,6 +360,16 @@ class StreamProxy extends EventEmitter {
             if (!preBufferFull) {
                 if (this._buffer.length < this._preBufferBytes) return; // seguir acumulando
                 preBufferFull = true;
+
+                // Recortar al prebuffer exacto antes de enviar.
+                // FFmpeg puede decodificar más rápido que el tiempo real (la red
+                // entrega datos comprimidos en ráfaga). Sin este recorte, el flush
+                // inicial enviaría más datos de los que caben en el ring buffer de
+                // Rust → desbordamiento → muestras descartadas → glitches.
+                if (this._buffer.length > this._preBufferBytes) {
+                    this._buffer = this._buffer.slice(this._buffer.length - this._preBufferBytes);
+                }
+
                 // Activar el deck en Rust ANTES de enviar los chunks
                 if (this.engine && this._playerId) {
                     try {
@@ -347,6 +387,9 @@ class StreamProxy extends EventEmitter {
                 // Rust prepara el player pausado. El orden del pipe stdin garantiza
                 // que stream_play llegue despues de todos los chunks precargados.
                 this._flushBuffer();
+                // Activar rate limiter: referencia de tiempo cero y bytes ya enviados.
+                this._playLiveAt = Date.now();
+                this._sentBytesAfterPlay = this._preBufferBytes;
                 if (this.engine && this._playerId) {
                     this.engine.send({ cmd: 'stream_play', player: this._playerId });
                 }
@@ -403,11 +446,24 @@ class StreamProxy extends EventEmitter {
 
     _flushBuffer() {
         while (this._buffer.length >= PCM_CHUNK_BYTES && !this._stopping) {
+            // Rate limiter: después de que empieza la reproducción, no enviar más
+            // datos de los que el ring buffer de Rust puede absorber. El límite es
+            // (tiempo transcurrido + capacidad del ring) en bytes de PCM.
+            // Esto impide el desbordamiento cuando FFmpeg decodifica en ráfaga
+            // (red rápida → MP3/AAC llega más rápido que el tiempo real).
+            if (this._playLiveAt > 0) {
+                const elapsedSec = (Date.now() - this._playLiveAt) / 1000;
+                const maxBytes = PCM_BYTES_PER_SECOND * (elapsedSec + this._ringBufferSeconds);
+                if (this._sentBytesAfterPlay >= maxBytes) break;
+            }
             const chunk = this._buffer.slice(0, PCM_CHUNK_BYTES);
             this._buffer = this._buffer.slice(PCM_CHUNK_BYTES);
             const b64 = chunk.toString('base64');
             if (this.engine && this._playerId) {
                 this.engine.send({ cmd: 'stream_chunk', player: this._playerId, data: b64 });
+            }
+            if (this._playLiveAt > 0) {
+                this._sentBytesAfterPlay += PCM_CHUNK_BYTES;
             }
         }
     }

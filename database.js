@@ -204,6 +204,18 @@ function initDB() {
             cyclic_unit TEXT, cyclic_limit INTEGER, last_fired TEXT
         )
     `);
+    // Columnas para fuente de tipo stream_url (emisoras de radio en vivo).
+    // Usamos ALTER TABLE con try/catch para no romper bases existentes.
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_url TEXT").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_stop_seconds INTEGER DEFAULT 0").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_connect_timeout INTEGER DEFAULT 10").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_max_retries INTEGER DEFAULT 3").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_metadata_mode TEXT DEFAULT 'icy'").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN stream_custom_metadata TEXT").run(); } catch(e) {}
+    // Columnas para tipo locución y configuración de pisador/ducking por evento.
+    try { db.prepare("ALTER TABLE events ADD COLUMN locution_type TEXT DEFAULT 'time'").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN event_ducking_volume INTEGER DEFAULT 20").run(); } catch(e) {}
+    try { db.prepare("ALTER TABLE events ADD COLUMN event_ducking_fade INTEGER DEFAULT 500").run(); } catch(e) {}
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS schedule_programs (

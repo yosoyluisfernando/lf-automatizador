@@ -38,7 +38,9 @@ class ShortcutManager {
         this._enabled     = true;
         this._guard       = null;
         this._boundKeydown = this._onKeydown.bind(this);
+        this._boundKeyup = this._onKeyup.bind(this);
         window.addEventListener('keydown', this._boundKeydown, true);
+        window.addEventListener('keyup', this._boundKeyup, true);
     }
 
     /**
@@ -57,6 +59,10 @@ class ShortcutManager {
     /** Registra el mapa de handlers { actionId → función }. */
     registerHandlers(handlersMap) {
         this._handlers = handlersMap || {};
+    }
+
+    registerKeyupHandlers(handlersMap) {
+        this._handlersKeyup = handlersMap || {};
     }
 
     /** Ejecuta el handler de una acción por su ID. */
@@ -86,6 +92,23 @@ class ShortcutManager {
     /** Elimina el listener. Llamar al destruir la ventana. */
     destroy() {
         window.removeEventListener('keydown', this._boundKeydown, true);
+        window.removeEventListener('keyup', this._boundKeyup, true);
+    }
+
+    _onKeyup(e) {
+        if (!this._enabled) return;
+        if (ALWAYS_RESERVED.has(e.key)) return;
+        if (isEditableShortcutTarget(e.target)) return;
+        const combo = buildComboString(e);
+        if (!combo) return;
+        const actionId = this._keyToAction[combo];
+        if (!actionId) return;
+        const fn = this._handlersKeyup ? this._handlersKeyup[actionId] : null;
+        if (typeof fn === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+            fn(e);
+        }
     }
 
     _onKeydown(e) {

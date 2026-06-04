@@ -22,8 +22,15 @@ const AUDIO_PREFS_DEFAULTS = {
     historyRetentionDays: 30,
     historyMusicEnabled: true,
     reportMusicEnabled: true,
-    musicRandomProtectionValue: 1,
-    musicRandomProtectionUnit: 'days',
+    // Separacion de canciones (antes "evitar repetir musica aleatoria").
+    // Solo-horas: minimo 1, maximo 48, predeterminado 12.
+    musicRandomProtectionValue: 12,
+    musicRandomProtectionUnit: 'hours',
+    // Separacion por artista: opcional, viene desactivada.
+    musicArtistSeparationEnabled: false,
+    musicArtistSeparationHours: 1,
+    // Incluir subcarpetas en carpetas aleatorias: 'ask' | 'always' | 'never'.
+    randomIncludeSubfolders: 'ask',
     reportPersistOnRestart: true,
     reportRetentionUnit: 'days',
     reportRetentionValue: 7,
@@ -87,11 +94,35 @@ function normalizeAudioPrefs(prefs = {}) {
         repeatDisableOnManualNext: prefs.repeatDisableOnManualNext !== false,
         removePlayedProtectionEnabled: prefs.removePlayedProtectionEnabled === true,
         removePlayedProtectionMinRemaining: Math.max(1, Math.min(999, parseInt(prefs.removePlayedProtectionMinRemaining, 10) || AUDIO_PREFS_DEFAULTS.removePlayedProtectionMinRemaining)),
-        historyRetentionDays: Math.max(1, Math.min(366, parseInt(prefs.historyRetentionDays, 10) || AUDIO_PREFS_DEFAULTS.historyRetentionDays)),
+        // Memoria fisica: piso de 30 dias (respalda las reglas de separacion).
+        historyRetentionDays: Math.max(30, Math.min(366, parseInt(prefs.historyRetentionDays, 10) || AUDIO_PREFS_DEFAULTS.historyRetentionDays)),
         historyMusicEnabled: prefs.historyMusicEnabled !== false,
         reportMusicEnabled: prefs.reportMusicEnabled !== false,
-        musicRandomProtectionUnit: prefs.musicRandomProtectionUnit === 'hours' ? 'hours' : 'days',
-        musicRandomProtectionValue: (() => { const u = prefs.musicRandomProtectionUnit === 'hours' ? 'hours' : 'days'; const max = u === 'hours' ? 24 : 7; return Math.max(1, Math.min(max, parseInt(prefs.musicRandomProtectionValue ?? prefs.musicRandomProtectionDays, 10) || AUDIO_PREFS_DEFAULTS.musicRandomProtectionValue)); })(),
+        // Separacion de canciones: solo-horas (1..48). Migracion unica desde el
+        // esquema legado en dias -> horas (dias x 24, tope 48h). Idempotente: un
+        // valor ya en horas solo se reajusta al nuevo rango.
+        musicRandomProtectionUnit: 'hours',
+        musicRandomProtectionValue: (() => {
+            const max = 48;
+            const hasValue = prefs.musicRandomProtectionValue != null || prefs.musicRandomProtectionDays != null;
+            if (!hasValue) return AUDIO_PREFS_DEFAULTS.musicRandomProtectionValue;
+            let hours;
+            if (prefs.musicRandomProtectionUnit === 'hours') {
+                hours = parseInt(prefs.musicRandomProtectionValue, 10);
+            } else {
+                const days = parseInt(prefs.musicRandomProtectionValue ?? prefs.musicRandomProtectionDays, 10);
+                hours = Number.isFinite(days) ? days * 24 : NaN;
+            }
+            if (!Number.isFinite(hours)) hours = AUDIO_PREFS_DEFAULTS.musicRandomProtectionValue;
+            return Math.max(1, Math.min(max, hours));
+        })(),
+        // Separacion por artista: opcional (desactivada por defecto), 1..48h.
+        musicArtistSeparationEnabled: prefs.musicArtistSeparationEnabled === true,
+        musicArtistSeparationHours: Math.max(1, Math.min(48, parseInt(prefs.musicArtistSeparationHours, 10) || AUDIO_PREFS_DEFAULTS.musicArtistSeparationHours)),
+        // Incluir subcarpetas en carpetas aleatorias.
+        randomIncludeSubfolders: ['ask', 'always', 'never'].includes(prefs.randomIncludeSubfolders)
+            ? prefs.randomIncludeSubfolders
+            : AUDIO_PREFS_DEFAULTS.randomIncludeSubfolders,
         reportPersistOnRestart: prefs.reportPersistOnRestart !== false,
         reportRetentionUnit: prefs.reportRetentionUnit === 'hours' ? 'hours' : 'days',
         reportRetentionValue: Math.max(1, Math.min(366, parseInt(prefs.reportRetentionValue, 10) || AUDIO_PREFS_DEFAULTS.reportRetentionValue)),

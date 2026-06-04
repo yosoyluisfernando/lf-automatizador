@@ -18,7 +18,20 @@ const {
 function extractFunction(source, name) {
     const start = source.indexOf(`function ${name}(`);
     assert.notStrictEqual(start, -1, `No se encontro function ${name}`);
-    const braceStart = source.indexOf('{', start);
+    // Primero encontrar el cierre de la lista de parámetros para no confundir
+    // llaves de desestructuración (p.ej. { fadeSeconds = 0 } = {}) con la
+    // llave de apertura del cuerpo de la función.
+    let parenDepth = 0;
+    let afterParams = -1;
+    for (let i = source.indexOf('(', start); i < source.length; i++) {
+        if (source[i] === '(') parenDepth++;
+        else if (source[i] === ')') {
+            parenDepth--;
+            if (parenDepth === 0) { afterParams = i + 1; break; }
+        }
+    }
+    if (afterParams < 0) throw new Error(`No se pudo encontrar los parámetros de function ${name}`);
+    const braceStart = source.indexOf('{', afterParams);
     let depth = 0;
     for (let i = braceStart; i < source.length; i++) {
         if (source[i] === '{') depth++;
@@ -187,17 +200,18 @@ test('playNextAfterFailedStream stops cleanly when loop resolves back to the onl
     assert.strictEqual(stopped, true);
 });
 
-test('stream prebuffer defaults to five seconds and clamps the supported range', () => {
-    assert.strictEqual(normalizePrebufferSeconds(), 5);
+test('stream prebuffer defaults to three seconds and clamps the supported range', () => {
+    assert.strictEqual(normalizePrebufferSeconds(), 3);
     assert.strictEqual(normalizePrebufferSeconds('8'), 8);
     assert.strictEqual(normalizePrebufferSeconds(0), 1);
     assert.strictEqual(normalizePrebufferSeconds(20), 15);
-    assert.strictEqual(normalizePrebufferSeconds('not-a-number'), 5);
+    assert.strictEqual(normalizePrebufferSeconds('not-a-number'), 3);
 });
 
-test('Rust ring capacity grows proportionally with the selected prebuffer', () => {
-    assert.strictEqual(ringBufferSecondsForPrebuffer(1), 2);
-    assert.strictEqual(ringBufferSecondsForPrebuffer(5), 7);
+test('Rust ring capacity adds fixed headroom to absorb FFmpeg burst', () => {
+    assert.strictEqual(ringBufferSecondsForPrebuffer(1), 6);
+    assert.strictEqual(ringBufferSecondsForPrebuffer(3), 8);
+    assert.strictEqual(ringBufferSecondsForPrebuffer(5), 10);
     assert.strictEqual(ringBufferSecondsForPrebuffer(15), 20);
 });
 
@@ -407,7 +421,7 @@ test('StreamProxy waits for the configured prebuffer and tells Rust its proporti
         sampleRate: 44100,
         channels: 2,
         gain: 1.0,
-        ringBufferSeconds: 7,
+        ringBufferSeconds: 10,  // 5 (prebuffer) + 5 (headroom fijo)
     }]);
     assert.strictEqual(sends.at(-1)?.cmd, 'stream_play');
     proxy.stop();
@@ -496,6 +510,7 @@ test('stopActiveStream clears the pending connection timeout from the active row
         streamTimerStopSecs: 20,
         streamMetaMode: 'icy',
         streamCustomMeta: '',
+        uiPrefs: {},
         clearTimeout: timer => clearedTimers.push(timer),
         ipcRenderer: { invoke: () => Promise.resolve({ success: true }) },
         document: { getElementById: () => null },
@@ -517,11 +532,11 @@ test('renderer treats RustAudio timeouts as infrastructure incidents instead of 
     assert.ok((source.match(/recoverRustAudioAfterInfrastructureFailure\(tr, result\.error\);/g) || []).length >= 2);
 });
 
-test('stream URL modal exposes a per-row prebuffer with its startup-delay warning', () => {
+test('stream URL modal does not expose manual prebuffer control (fixed default)', () => {
     const html = fs.readFileSync(path.join(rootDir, 'frontend', 'index.html'), 'utf8');
-    assert.match(html, /id="add-stream-prebuffer"/);
-    assert.match(html, /id="add-stream-prebuffer"[^>]*min="1"[^>]*max="15"[^>]*value="5"/);
-    assert.match(html, /estabilidad.+demora|demora.+estabilidad/i);
+    // El control manual de prebuffer fue eliminado: el valor óptimo lo gestiona
+    // el backend automáticamente con rate limiting para evitar glitches.
+    assert.doesNotMatch(html, /id="add-stream-prebuffer"/);
 });
 
 test('renderer persists and forwards the stream URL prebuffer setting', () => {

@@ -32,6 +32,7 @@ const COMMANDS = [
     { id: 'app.open_calendar',       label: 'Calendario Semanal',              category: COMMAND_CATEGORIES.HERRAMIENTAS, mandatory: false, defaultKey: null },
     { id: 'app.open_rotation',       label: 'Generador de Playlist',           category: COMMAND_CATEGORIES.HERRAMIENTAS, mandatory: false, defaultKey: null },
     { id: 'app.toggle_menu_bar',     label: 'Mostrar / Ocultar Barra de Menú', category: COMMAND_CATEGORIES.HERRAMIENTAS, mandatory: false, defaultKey: null },
+    { id: 'app.talk',                label: 'MIC / Pulsar para hablar (Push-to-Talk)', category: COMMAND_CATEGORIES.HERRAMIENTAS, mandatory: false, defaultKey: 'T' },
     // ── Insertar en Playlist ──────────────────────────────────────────────────
     { id: 'insert.time_locution',    label: 'Insertar Locución de Hora',       category: COMMAND_CATEGORIES.INSERTAR,    mandatory: false, defaultKey: 'Ctrl+H' },
     { id: 'insert.temperature',      label: 'Insertar Temperatura en Playlist', category: COMMAND_CATEGORIES.INSERTAR,    mandatory: false, defaultKey: null },

@@ -1309,6 +1309,8 @@ module.exports = function(context) {
         if (context.libraryWindow) context.libraryWindow.webContents.send('settings-updated', payload);
         if (context.previewWindow) context.previewWindow.webContents.send('settings-updated', payload);
         if (context.consoleWindow) context.consoleWindow.webContents.send('settings-updated', payload);
+        if (context.reportsWindow && !context.reportsWindow.isDestroyed()) context.reportsWindow.webContents.send('settings-updated', payload);
+        if (context.musicSeparationWindow && !context.musicSeparationWindow.isDestroyed()) context.musicSeparationWindow.webContents.send('settings-updated', payload);
     }
 
     ipcMain.on('open-commercial-manager', () => openCommercialManagerWindow());
@@ -1381,13 +1383,24 @@ module.exports = function(context) {
         }
     });
 
-    ipcMain.on('open-encoder', () => {
+    // Crea (o reutiliza) la ventana del encoder. `show` permite abrirla oculta
+    // —útil para el auto-arranque del encoder en operación desatendida, donde la
+    // ventana solo necesita existir para que su lógica de conexión/reconexión
+    // corra; no hace falta mostrársela al operador—. `autoConnectMarked` pide a
+    // la UI del encoder que conecte los servidores marcados como "auto-conectar".
+    function openEncoderWindow({ show = true, autoConnectMarked = false } = {}) {
         if (context.encoderWindow) {
-            context.encoderWindow.show();
-            context.encoderWindow.focus();
+            if (show) {
+                context.encoderWindow.show();
+                context.encoderWindow.focus();
+            }
+            // La ventana ya está cargada: pedir la autoconexión directamente.
+            if (autoConnectMarked && !context.encoderWindow.webContents.isLoading()) {
+                context.encoderWindow.webContents.send('encoder-autoconnect-marked');
+            }
             return;
         }
-        context.encoderWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, '..', '..', 'assets', 'icons', 'encoder.png')),  
+        context.encoderWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, '..', '..', 'assets', 'icons', 'encoder.png')),
             width: 480,
             height: 760,
             minWidth: 460,
@@ -1395,6 +1408,7 @@ module.exports = function(context) {
             title: 'Emisor de Radio (Encoder)',
             autoHideMenuBar: true,
             resizable: true,
+            show,
             webPreferences: { nodeIntegration: true, contextIsolation: false }
         });
         context.encoderWindow.loadFile('frontend/encoder.html');
@@ -1406,6 +1420,9 @@ module.exports = function(context) {
                 snapshot.push({ serverId: s.id, status: s.status || (s.proc ? 'connecting' : 'disconnected') });
             }
             context.encoderWindow.webContents.send('encoder-servers-snapshot', snapshot);
+            if (autoConnectMarked) {
+                context.encoderWindow.webContents.send('encoder-autoconnect-marked');
+            }
         });
         context.encoderWindow.on('close', (e) => {
             if (!context.isAppQuitting && countLiveServers() > 0) {
@@ -1414,6 +1431,25 @@ module.exports = function(context) {
             }
         });
         context.encoderWindow.on('closed', () => { context.encoderWindow = null; });
+    }
+
+    ipcMain.on('open-encoder', () => openEncoderWindow({ show: true }));
+
+    // Disparado por el renderer cuando arranca la reproducción automática y el
+    // operador activó "Iniciar el encoder al comenzar la reproducción
+    // automática". Solo actúa si hay al menos un servidor marcado, para no abrir
+    // una ventana oculta inútil.
+    ipcMain.on('autoplay-start-encoders', () => {
+        let anyMarked = false;
+        try {
+            const { prefs } = loadEncoderPrefs({ filePath: encoderPrefsPath, safeStorage, fileSystem: fs });
+            anyMarked = Array.isArray(prefs.servers) && prefs.servers.some(s => s && s.autoConnect === true);
+        } catch (_) { anyMarked = false; }
+        if (!anyMarked) {
+            try { writeLog('[AUTOPLAY] Encoder: ningún servidor está marcado para auto-conectar; se omite.'); } catch (_) {}
+            return;
+        }
+        openEncoderWindow({ show: false, autoConnectMarked: true });
     });
     // Conecta un servidor a partir de su config cruda (resuelve contrato + arranca).
     async function connectOneFromConfig(id, rawConfig) {

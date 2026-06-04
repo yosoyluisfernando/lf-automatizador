@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Reglas de Separación Musical - LF Automatizador</title>
+    <style>
+        :root { --bg:#121212; --panel:#18181a; --header:#1a1a1c; --border:#333; --accent:#00a8ff; --text:#e0e0e0; --muted:#888; --active:#2ecc71; --danger:#e74c3c; --warning:#f39c12; }
+        * { box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",sans-serif; }
+        * { scrollbar-width:thin; scrollbar-color:#5a5f68 #141416; }
+        *::-webkit-scrollbar { width:10px; height:10px; }
+        *::-webkit-scrollbar-track { background:#141416; }
+        *::-webkit-scrollbar-thumb { background:#4a4f58; border:2px solid #141416; border-radius:10px; }
+        body { background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+        button, input, select { font:inherit; }
+        .header { background:var(--header); padding:12px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:14px; }
+        .logo-text { font-size:17px; font-weight:900; letter-spacing:1px; color:var(--accent); }
+        .header-actions { display:flex; gap:8px; align-items:center; }
+        .btn { border:1px solid var(--border); background:#222; color:#fff; padding:8px 14px; border-radius:20px; font-weight:800; font-size:12px; cursor:pointer; }
+        .btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+        .btn:disabled { opacity:.45; cursor:not-allowed; }
+        .btn-save { background:#27ae60; border-color:#27ae60; color:#fff; }
+        .btn-save:hover:not(:disabled) { background:#27ae60; border-color:#2ecc71; color:#fff; }
+        .content { flex:1; overflow-y:auto; padding:20px 24px 28px; display:flex; flex-direction:column; gap:22px; }
+        .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:18px 20px; }
+        .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--accent); margin-bottom:14px; font-weight:800; }
+        .field { display:grid; grid-template-columns:1fr 90px 70px; gap:10px; align-items:center; font-size:13px; padding:7px 0; }
+        .field + .field { border-top:1px solid #232326; }
+        .field .hint { grid-column:1 / -1; font-size:11px; color:var(--muted); margin-top:-2px; }
+        .field input[type="number"], .field select { background:#0a0a0a; border:1px solid var(--border); border-radius:4px; color:#fff; padding:6px 8px; outline:none; width:100%; }
+        .field input[type="number"]:focus, .field select:focus { border-color:var(--accent); }
+        .field .unit { color:var(--muted); font-size:12px; }
+        .field input[type="checkbox"] { width:16px; height:16px; }
+        .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+        .icon-btn { width:30px; height:30px; border-radius:6px; border:1px solid var(--border); background:#222; color:#fff; font-size:18px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .icon-btn.add:hover { border-color:var(--active); color:var(--active); }
+        .icon-btn.del:hover { border-color:var(--danger); color:var(--danger); }
+        .icon-btn:disabled { opacity:.4; cursor:not-allowed; }
+        table { width:100%; border-collapse:collapse; font-size:12px; }
+        thead th { text-align:left; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:1px; padding:6px 8px; border-bottom:1px solid var(--border); }
+        tbody td { padding:5px 8px; border-bottom:1px solid #202023; vertical-align:middle; }
+        tbody tr.selected { background:rgba(0,168,255,.10); }
+        tbody tr { cursor:pointer; }
+        .folder-path { font-family:Consolas,monospace; color:#cfd3d8; word-break:break-all; }
+        td input[type="number"] { width:64px; background:#0a0a0a; border:1px solid var(--border); border-radius:4px; color:#fff; padding:4px 6px; outline:none; }
+        td input[type="number"]:focus { border-color:var(--accent); }
+        td input[type="checkbox"] { width:15px; height:15px; }
+        .empty { color:var(--muted); font-size:12px; padding:14px 8px; text-align:center; }
+        .footer-note { font-size:11px; color:var(--muted); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo-text">🎚️ Reglas de Separación Musical</div>
+        <div class="header-actions">
+            <button class="btn" id="btn-cancel">Cerrar</button>
+            <button class="btn btn-save" id="btn-save">Guardar</button>
+        </div>
+    </div>
+
+    <div class="content">
+        <div class="card">
+            <h2>Configuración Global</h2>
+
+            <div class="field">
+                <label for="global-song-hours">Separación de canciones</label>
+                <input type="number" id="global-song-hours" min="1" max="48" value="12">
+                <span class="unit">horas</span>
+                <div class="hint">No se puede desactivar. Mínimo 1 h, máximo 48 h (predeterminado 12 h). Sincronizada con el panel de Reportes.</div>
+            </div>
+
+            <div class="field">
+                <label for="global-artist-enabled" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="global-artist-enabled">
+                    Separación de artistas
+                </label>
+                <input type="number" id="global-artist-hours" min="1" max="48" value="1">
+                <span class="unit">horas</span>
+                <div class="hint">Opcional (desactivada por defecto). Mínimo 1 h, máximo 48 h.</div>
+            </div>
+
+            <div class="field">
+                <label for="global-subfolders">Incluir subcarpetas en carpetas aleatorias</label>
+                <select id="global-subfolders" style="grid-column:2 / -1;">
+                    <option value="ask">Siempre preguntar</option>
+                    <option value="always">Siempre incluir</option>
+                    <option value="never">Nunca incluir</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Configuración por Carpetas</h2>
+            <div class="toolbar">
+                <button class="icon-btn add" id="btn-add-folder" title="Agregar carpeta">+</button>
+                <button class="icon-btn del" id="btn-del-folder" title="Eliminar regla seleccionada" disabled>−</button>
+                <span class="footer-note">Las reglas por carpeta tienen prioridad sobre las globales. Deja un valor vacío para heredar el global.</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:50%;">Carpeta</th>
+                        <th>Canciones (h)</th>
+                        <th>Artista</th>
+                        <th>Artista (h)</th>
+                    </tr>
+                </thead>
+                <tbody id="folder-rules-body"></tbody>
+            </table>
+            <div class="empty" id="folder-empty">No hay reglas por carpeta. Usa el botón (+) para agregar una.</div>
+        </div>
+    </div>
+
+    <script src="separacion_musical.js"></script>
+</body>
+</html>

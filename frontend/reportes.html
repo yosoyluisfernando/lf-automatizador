@@ -76,8 +76,8 @@
             </table>
             <div style="display:grid;grid-template-columns:1fr 100px 90px;gap:8px;align-items:center;font-size:12px;">
                 <label>Conservar reporte al reiniciar:</label><input type="checkbox" id="report-persist-on-restart"><span></span>
-                <label>Conservar memoria fisica:</label><input type="number" id="history-retention-days" min="1" max="366" value="30"><span>dias</span>
-                <label>Evitar repetir musica aleatoria:</label><input type="number" id="music-random-protection-value" min="1" max="7" value="1"><select id="music-random-protection-unit"><option value="days">Dias</option><option value="hours">Horas</option></select>
+                <label>Conservar memoria fisica:</label><input type="number" id="history-retention-days" min="30" max="366" value="30"><span>dias</span>
+                <label>Separacion de canciones (global):</label><input type="number" id="music-random-protection-value" min="1" max="48" value="12"><span>horas</span>
                 <label>Conservar reporte visual:</label><input type="number" id="report-retention-value" min="1" max="366" value="7"><select id="report-retention-unit"><option value="days">Dias</option><option value="hours">Horas</option></select>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">

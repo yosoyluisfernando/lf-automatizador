@@ -33,6 +33,9 @@ function makeServer(data = {}) {
         bitrate: String(data.bitrate || '128').replace(/[^\d]/g, '') || '128',
         legacy: data.legacy === true,
         genre: data.genre || '',
+        // Auto-conectar cuando la reproducción inicia de forma automática al
+        // abrir el programa (opcional, desactivado por defecto).
+        autoConnect: data.autoConnect === true,
         // runtime (no se persiste)
         status: 'disconnected',
         autoReconnect: false,
@@ -85,7 +88,7 @@ function savePrefs() {
         servers: servers.map(s => ({
             id: s.id, name: s.name, type: s.type, ip: s.ip, port: s.port, adminPort: s.adminPort,
             user: s.user, pass: s.pass, mount: s.mount, codec: s.codec, bitrate: s.bitrate,
-            legacy: s.legacy === true, genre: s.genre || ''
+            legacy: s.legacy === true, genre: s.genre || '', autoConnect: s.autoConnect === true
         }))
     };
     ipcRenderer.send('encoder-prefs-save', data);
@@ -291,6 +294,7 @@ function buildServerCard(s) {
                     <option value="320">320 kbps (Estudio/HD)</option>
                 </select>
             </div>
+            <div class="row"><label>Auto-conectar al iniciar:</label><input type="checkbox" class="fld-autoconnect" title="Conecta este servidor automáticamente cuando la reproducción inicie de forma automática al abrir el programa (requiere activar el auto-play y el arranque del encoder en Ajustes → Sistema e Interfaz)."></div>
         </div>`;
 
     // Rellenar valores
@@ -307,6 +311,7 @@ function buildServerCard(s) {
     card.querySelector('.fld-legacy').checked = s.legacy === true;
     card.querySelector('.fld-icyname').value = s.name || '';
     card.querySelector('.fld-genre').value = s.genre || '';
+    card.querySelector('.fld-autoconnect').checked = s.autoConnect === true;
 
     wireServerCard(card, s);
     return card;
@@ -361,6 +366,7 @@ function wireServerCard(card, s) {
     card.querySelector('.fld-genre').addEventListener('input', (e) => { s.genre = e.target.value; savePrefs(); });
     card.querySelector('.fld-codec').addEventListener('change', (e) => { s.codec = e.target.value; savePrefs(); });
     card.querySelector('.fld-bitrate').addEventListener('change', (e) => { s.bitrate = String(e.target.value).replace(/[^\d]/g, '') || '128'; savePrefs(); });
+    card.querySelector('.fld-autoconnect').addEventListener('change', (e) => { s.autoConnect = e.target.checked; savePrefs(); });
 
     card.querySelector('.srv-toggle').addEventListener('click', () => {
         if (s.status === 'disconnected') connectServer(s.id);
@@ -688,6 +694,14 @@ ipcRenderer.on('encoder-status', (e, payload) => {
 ipcRenderer.on('encoder-servers-snapshot', (e, list) => {
     if (!Array.isArray(list)) return;
     list.forEach(item => { if (getServer(item.serverId)) setServerStatus(item.serverId, item.status); });
+});
+// Arranque automático del encoder (auto-play desatendido): conecta únicamente
+// los servidores marcados como "auto-conectar al iniciar" y que aún no estén en
+// uso. Reutiliza connectServer, así que hereda validación y reconexión.
+ipcRenderer.on('encoder-autoconnect-marked', () => {
+    servers.forEach(s => {
+        if (s.autoConnect === true && s.status === 'disconnected') connectServer(s.id);
+    });
 });
 ipcRenderer.on('encoder-throughput', (e, report) => updateServerThroughput(report || {}));
 ipcRenderer.on('encoder-error', (e, payload) => {

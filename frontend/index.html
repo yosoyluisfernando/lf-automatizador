@@ -240,17 +240,22 @@
                         <label title="Los eventos no saltarán solos, requerirán clic en Ejecutar"><input type="checkbox" id="chk-events-manual"> Solo Manual</label>
                         <button id="btn-events-exec" class="mini-btn" style="margin-left: auto;">▶ Ejecutar</button>
                     </div>
-                    <div class="events-top-bar event-prehold-bar">
+                    <div class="events-top-bar event-prehold-bar" style="display: none;">
                         <label title="Si una cancion termina poco antes de un evento, espera el evento en vez de arrancar otra pista"><input type="checkbox" id="chk-event-prehold"> Proteger antes de evento</label>
                         <input type="number" id="event-prehold-seconds" class="settings-input" min="1" max="120" step="1" style="width: 52px; padding: 3px 5px;">
                         <span style="font-size: 10px; color: #888;">seg.</span>
                     </div>
                     <div class="events-list-container" style="flex: 1; overflow-y: auto; background: #111; transition: 0.3s;">
                         <ul id="events-list" class="event-ul"></ul>
+                        <div id="events-emitted-container" class="events-emitted-container" style="display: none;">
+                            <div class="events-emitted-header">Emitidos recientemente</div>
+                            <ul id="events-list-emitted" class="event-ul"></ul>
+                        </div>
                     </div>
                     <div class="events-bottom-bar">
                         <button id="btn-events-add" class="mini-btn">Añadir</button>
                         <button id="btn-events-mod" class="mini-btn" disabled>Modificar</button>
+                        <button id="btn-events-filter" class="mini-btn">Filtro ▼</button>
                         <button id="btn-events-list" class="mini-btn" style="margin-left: auto;">Lista ▼</button>
                     </div>
                 </div>
@@ -338,6 +343,7 @@
                         <button id="btn-stop">⏹ Stop (S)</button>
                         <button id="btn-next">⏭ Sig (N)</button>
                         <button id="btn-stop-after" style="transition: 0.2s;" title="Pausar reproducción al finalizar la actual (F)">⏸⏹ Pausar Fin (F)</button>
+                        <button id="btn-talk" class="talk-btn" title="MIC / Pulsar para hablar (Clic derecho para configurar)">🎤 MIC</button>
                     </div>
                     <div class="playback-modes">
                         <button id="btn-mode-looplist" class="mode-btn" title="Reproducción Infinita">🔁</button>
@@ -509,6 +515,28 @@
         <div class="context-item" id="em-save-all">Guardar Todo (Respaldo General)</div>
     </div>
 
+    <div id="events-filter-menu" class="context-menu" style="display: none; padding-bottom: 8px;">
+        <div class="context-item" id="ef-all">Todo</div>
+        <div class="context-item" id="ef-today">Hoy</div>
+        <div class="context-item" id="ef-3h">Próximas 3 horas</div>
+        <div class="context-item" id="ef-6h">Próximas 6 horas</div>
+        <div class="context-item" id="ef-12h">Próximas 12 horas</div>
+        <div class="context-separator"></div>
+        <div class="context-item" id="ef-sort-next">🔳 Próximo a emitir primero</div>
+        <div class="context-item" id="ef-show-emitted" title="Separa los eventos ya emitidos en su apartado. Solo aplica a las vistas de hoy; en 'Todo' y en otros días siempre se ven todos.">🔳 Separar emitidos hoy</div>
+        <div class="context-separator"></div>
+        <div style="padding: 4px 10px; font-size: 11px; color: #888;">Día Específico:</div>
+        <div id="events-filter-days" style="display: flex; gap: 4px; padding: 4px 10px; justify-content: space-between;">
+            <button class="mini-btn" data-day="1" title="Lunes">L</button>
+            <button class="mini-btn" data-day="2" title="Martes">M</button>
+            <button class="mini-btn" data-day="3" title="Miércoles">X</button>
+            <button class="mini-btn" data-day="4" title="Jueves">J</button>
+            <button class="mini-btn" data-day="5" title="Viernes">V</button>
+            <button class="mini-btn" data-day="6" title="Sábado">S</button>
+            <button class="mini-btn" data-day="0" title="Domingo">D</button>
+        </div>
+    </div>
+
     <div id="event-item-menu" class="context-menu" style="display: none;">
         <div class="context-item" id="eim-exec">&#9654; Ejecutar ahora</div>
         <div class="context-item" id="eim-ignore" title="Omitir solo el pase actual de la hora">&#9940; Ignorar este pase</div>
@@ -539,6 +567,36 @@
         <div class="context-separator"></div>
         <div class="context-item" id="tab-menu-eliminar" style="color: #e74c3c;">&#10060; Eliminar Botonera</div>
     </div>
+    <div id="talk-config-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="width: 380px;">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; color:#00a8ff;">Pulsar para Hablar</h3>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
+                <div class="setting-row">
+                    <label style="flex: 1;">Volumen Objetivo (PGM):</label>
+                    <input type="range" id="talk-target-vol" min="0" max="100" value="20" style="flex: 1; margin: 0 10px;">
+                    <span id="talk-target-vol-label" style="width: 30px; text-align:right;">20%</span>
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Tiempo de Fundido (ms):</label>
+                    <input type="number" id="talk-fade-ms" class="dark-number" min="0" step="100" value="500" style="width: 80px;">
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Modo de Acción:</label>
+                    <select id="talk-mode-select" class="dark-select" style="width: 170px;">
+                        <option value="hold">Mantener Presionado</option>
+                        <option value="toggle">Click On/Off</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button id="btn-talk-config-cancel" class="settings-btn mode-options-cancel" type="button">Cancelar</button>
+                <button id="btn-talk-config-save" class="settings-btn mode-options-save" type="button">Guardar</button>
+            </div>
+        </div>
+    </div>
+
     <div id="cw-profile-modal" class="modal-overlay" style="display: none; z-index: 3000;">
         <div class="modal-content" style="width: 320px;">
             <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 id="cw-profile-modal-title" style="margin: 0; color:#00a8ff;">Nuevo Perfil</h3></div>
@@ -888,13 +946,7 @@
                     <input id="add-stream-retries" type="number" min="0" max="20" value="3"
                         style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
                 </label>
-                <label style="font-size:12px; color:#aaa; display:flex; align-items:center; gap:6px;">
-                    Prebuffer
-                    <input id="add-stream-prebuffer" type="number" min="1" max="15" value="5"
-                        style="width:44px; background:#111; color:#fff; border:1px solid #444; border-radius:4px; padding:3px 6px; text-align:center;" class="dark-number">
-                    <span style="color:#666; font-size:11px;">s</span>
-                </label>
-                <span style="width:100%; color:#888; font-size:11px;">Más estabilidad puede causar mayor demora al iniciar.</span>
+                <span style="width:100%; color:#888; font-size:11px;">La conexión puede tardar unos segundos mientras se estabiliza el audio.</span>
             </div>
 
             <!-- Botones -->

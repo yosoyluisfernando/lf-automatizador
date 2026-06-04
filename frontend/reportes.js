@@ -156,32 +156,19 @@ document.addEventListener('DOMContentLoaded', () => {
         setChecked('history-station-enabled', getType('t_station_id').history);
         setChecked('report-locution-enabled', getType('t_time').report);
         byId('history-retention-days').value = prefs.historyRetentionDays;
+        // Separacion de canciones: representacion solo-horas del valor global.
         byId('music-random-protection-value').value = prefs.musicRandomProtectionValue;
-        byId('music-random-protection-unit').value = prefs.musicRandomProtectionUnit;
-        syncProtectionLimits();
         byId('report-persist-on-restart').checked = prefs.reportPersistOnRestart;
         byId('report-retention-value').value = prefs.reportRetentionValue;
         byId('report-retention-unit').value = prefs.reportRetentionUnit;
     };
-    const syncProtectionLimits = () => {
-        const input = byId('music-random-protection-value');
-        const unit = byId('music-random-protection-unit').value;
-        const max = unit === 'hours' ? 24 : 7;
-        input.max = max;
-        input.min = 1;
-        if (parseInt(input.value, 10) > max) input.value = max;
-        if (parseInt(input.value, 10) < 1) input.value = 1;
-    };
-    byId('music-random-protection-unit').addEventListener('change', syncProtectionLimits);
     byId('btn-report-settings').addEventListener('click', () => { loadReportSettings(); overlay.style.display = 'flex'; });
     byId('btn-report-settings-cancel').addEventListener('click', () => { overlay.style.display = 'none'; });
     byId('btn-report-settings-save').addEventListener('click', () => {
         // ── Validación de rangos antes de guardar ──
-        const protUnit = byId('music-random-protection-unit').value;
-        const protMax = protUnit === 'hours' ? 24 : 7;
         const validations = [
-            { id: 'history-retention-days', label: 'Conservar memoria fisica', min: 1, max: 366 },
-            { id: 'music-random-protection-value', label: 'Evitar repetir musica aleatoria', min: 1, max: protMax },
+            { id: 'history-retention-days', label: 'Conservar memoria fisica', min: 30, max: 366 },
+            { id: 'music-random-protection-value', label: 'Separacion de canciones', min: 1, max: 48 },
             { id: 'report-retention-value', label: 'Conservar reporte visual', min: 1, max: 366 }
         ];
         for (const rule of validations) {
@@ -197,8 +184,9 @@ document.addEventListener('DOMContentLoaded', () => {
             reportMusicEnabled: byId('report-music-enabled').checked,
             historyMusicEnabled: byId('history-music-enabled').checked,
             historyRetentionDays: byId('history-retention-days').value,
+            // Solo-horas: la separacion de canciones siempre se guarda en horas.
             musicRandomProtectionValue: byId('music-random-protection-value').value,
-            musicRandomProtectionUnit: byId('music-random-protection-unit').value,
+            musicRandomProtectionUnit: 'hours',
             reportPersistOnRestart: byId('report-persist-on-restart').checked,
             reportRetentionValue: byId('report-retention-value').value,
             reportRetentionUnit: byId('report-retention-unit').value
@@ -215,6 +203,12 @@ document.addEventListener('DOMContentLoaded', () => {
         fs.writeFileSync(fileTypesPath, JSON.stringify(types, null, 2));
         ipcRenderer.send('settings-updated', {});
         overlay.style.display = 'none';
+    });
+
+    // Sincronizacion bidireccional con la ventana de Reglas de Separacion Musical:
+    // si cambia la configuracion global mientras este panel esta abierto, se refleja.
+    ipcRenderer.on('settings-updated', () => {
+        if (overlay.style.display === 'flex') loadReportSettings();
     });
 
     const logBox = document.getElementById('sys-log');
