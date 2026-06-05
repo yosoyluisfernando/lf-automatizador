@@ -589,6 +589,36 @@
                         <option value="toggle">Click On/Off</option>
                     </select>
                 </div>
+                <hr style="border: 0; border-top: 1px solid #333; margin: 5px 0;">
+                <div class="setting-row" style="margin-top: 5px;">
+                    <label style="flex: 1; color: #b56ad9; font-weight: bold;">Activar Auto-Ducking (Voz):</label>
+                    <label class="switch"><input type="checkbox" id="talk-auto-ducking-enable"> <span class="slider round"></span></label>
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Dispositivo de Entrada:</label>
+                    <select id="talk-auto-ducking-device" class="dark-select" style="width: 170px;">
+                        <option value="default">Predeterminado</option>
+                    </select>
+                </div>
+                <div class="setting-row" style="align-items: center;">
+                    <label style="flex: 1;">Nivel de Entrada (Prueba):</label>
+                    <div class="vu-channel" style="flex: 1; margin: 0 10px; height: 12px;">
+                        <div class="vu-bar-bg"><div class="vu-gradient"></div><div class="vu-cover" id="talk-auto-ducking-vu-cover"></div></div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Umbral de Detección (dB):</label>
+                    <input type="range" id="talk-auto-ducking-threshold" min="-60" max="-5" value="-30" style="flex: 1; margin: 0 10px;">
+                    <span id="talk-auto-ducking-threshold-label" style="width: 45px; text-align:right;">-30 dB</span>
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Tiempo de Ataque (ms):</label>
+                    <input type="number" id="talk-auto-ducking-attack" class="dark-number" min="0" step="50" value="200" style="width: 80px;" title="Tiempo de voz continua para activar">
+                </div>
+                <div class="setting-row">
+                    <label style="flex: 1;">Tiempo de Liberación (ms):</label>
+                    <input type="number" id="talk-auto-ducking-release" class="dark-number" min="0" step="100" value="1000" style="width: 80px;" title="Tiempo de silencio para desactivar">
+                </div>
             </div>
             <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
                 <button id="btn-talk-config-cancel" class="settings-btn mode-options-cancel" type="button">Cancelar</button>

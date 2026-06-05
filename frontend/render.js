@@ -1159,7 +1159,19 @@ function saveSessionSnapshot(force = false) {
     try {
         const json = JSON.stringify(buildSessionState(), null, 2);
         if (!force && json === lastSessionSnapshotJson) return;
-        fs.writeFileSync(sessionStatePath, json, 'utf-8');
+        // Escritura ATÓMICA + respaldo. Crítico para operación desatendida: un
+        // corte de luz a mitad de un fs.writeFileSync directo dejaría
+        // session_state.json truncado/corrupto y perderíamos la sesión (y la
+        // fila/playlist exacta para el auto-arranque). Estrategia:
+        //   1) conservar la versión anterior (siempre completa) como .bak
+        //   2) escribir a un temporal
+        //   3) renombrar el temporal sobre el definitivo (operación atómica)
+        // En cualquier punto de un corte, queda intacto el definitivo anterior
+        // o el .bak, nunca un archivo a medias.
+        const tmpPath = sessionStatePath + '.tmp';
+        try { if (fs.existsSync(sessionStatePath)) fs.copyFileSync(sessionStatePath, sessionStatePath + '.bak'); } catch (e) { }
+        fs.writeFileSync(tmpPath, json, 'utf-8');
+        fs.renameSync(tmpPath, sessionStatePath);
         lastSessionSnapshotJson = json;
         syncRustPlaylistSnapshot();
         syncRustPlaylistPlaybackContext();
@@ -2802,6 +2814,12 @@ function countOperationalRowsInTbody(tbody) {
 
 function removePlayedRowAfterFinish(row) {
     if (!generalPrefs.modeRemovePlayed || !row || !document.body.contains(row)) return false;
+    // Nunca eliminar la fila que está sonando ahora mismo: ocurre cuando el
+    // operador re-marca manualmente la carpeta aleatoria actual para que suene
+    // otra pista al azar (playNext re-dispara la misma fila). En los caminos de
+    // Stop, stopAll() ya dejó currentPlayingRow en null, así que esto no afecta
+    // la eliminación normal de la pista detenida.
+    if (row === currentPlayingRow) return false;
     const tbody = row.closest('tbody');
     const minRemaining = Math.max(1, Math.min(999, parseInt(generalPrefs.removePlayedProtectionMinRemaining, 10) || 2));
     const operationalCount = countOperationalRowsInTbody(tbody);
@@ -3178,7 +3196,16 @@ async function ensureDbTracksLoaded(paths) {
 }
 
 async function restoreSessionState() {
-    const state = loadConfig(sessionStatePath, null);
+    let state = loadConfig(sessionStatePath, null);
+    if (!state || !Array.isArray(state.playlists)) {
+        // El archivo principal falta o está corrupto (p. ej. corte de luz justo
+        // al escribir). Intentamos el respaldo .bak para no perder la sesión.
+        const backup = loadConfig(sessionStatePath + '.bak', null);
+        if (backup && Array.isArray(backup.playlists)) {
+            state = backup;
+            recordIncident('[SESION] Archivo principal ilegible; sesión recuperada desde el respaldo (.bak).', { category: 'session', level: 'warn' });
+        }
+    }
     if (!state || !Array.isArray(state.playlists)) {
         setIncidentStatus('session', 'Nueva', 'manual');
         return false;
@@ -12636,16 +12663,25 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
     }
     let target = null;
     if (queuedNextRow && document.body.contains(queuedNextRow)) {
+        // Excepción intencional: si el operador marca manualmente como siguiente la
+        // MISMA carpeta aleatoria que está sonando, quiere otra pista al azar de esa
+        // carpeta. Como cada reproducción de una fila 'random' resuelve un archivo
+        // nuevo (hydrateRandomRowFromLibrary), permitimos re-disparar la fila actual
+        // en lugar de tratarla como "pointer residual".
+        const isManualRandomReplay = queuedNextRow === currentPlayingRow
+            && queuedNextRow.dataset?.manualNext === "true"
+            && queuedNextRow.dataset?.type === 'random';
         // Si el loop está desactivado, rechazar queuedNextRow si apunta hacia atrás en la
         // lista (pointer residual de cuando el loop estaba activo). Cubre la race condition
         // donde el reloj virtual llama playNext() antes de que el clic procese la limpieza.
-        const isStaleLoopPointer = queuedNextRow === currentPlayingRow
+        const isStaleLoopPointer = !isManualRandomReplay && (
+            queuedNextRow === currentPlayingRow
             || (!generalPrefs.modeLoopPlaylist
             && currentPlayingRow
             && document.body.contains(currentPlayingRow)
             && queuedNextRow.closest('tbody') === currentPlayingRow.closest('tbody')
             && queuedNextRow.dataset.manualNext !== "true"
-            && !isRowAfterAnchor(queuedNextRow, currentPlayingRow));
+            && !isRowAfterAnchor(queuedNextRow, currentPlayingRow)));
         if (!isStaleLoopPointer) {
             target = queuedNextRow;
         }
@@ -15425,6 +15461,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generalPrefs.talkTargetVol === undefined) generalPrefs.talkTargetVol = 20;
     if (generalPrefs.talkFadeMs === undefined) generalPrefs.talkFadeMs = 500;
     if (generalPrefs.talkMode === undefined) generalPrefs.talkMode = 'hold';
+    if (generalPrefs.autoDuckingEnable === undefined) generalPrefs.autoDuckingEnable = false;
+    if (generalPrefs.autoDuckingThreshold === undefined) generalPrefs.autoDuckingThreshold = -30;
+    if (generalPrefs.autoDuckingAttack === undefined) generalPrefs.autoDuckingAttack = 200;
+    if (generalPrefs.autoDuckingRelease === undefined) generalPrefs.autoDuckingRelease = 1000;
+    if (generalPrefs.autoDuckingDevice === undefined) generalPrefs.autoDuckingDevice = 'default';
 
     const btnTalk = document.getElementById('btn-talk');
     const configModal = document.getElementById('talk-config-modal');
@@ -15434,6 +15475,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const inputVolLabel = document.getElementById('talk-target-vol-label');
     const inputMs = document.getElementById('talk-fade-ms');
     const selMode = document.getElementById('talk-mode-select');
+
+    const duckEnable = document.getElementById('talk-auto-ducking-enable');
+    const duckThreshold = document.getElementById('talk-auto-ducking-threshold');
+    const duckThresholdLabel = document.getElementById('talk-auto-ducking-threshold-label');
+    const duckAttack = document.getElementById('talk-auto-ducking-attack');
+    const duckRelease = document.getElementById('talk-auto-ducking-release');
+    const duckDevice = document.getElementById('talk-auto-ducking-device');
+    const duckVuCover = document.getElementById('talk-auto-ducking-vu-cover');
 
     if (btnTalk) {
         btnTalk.addEventListener('mousedown', (e) => {
@@ -15468,13 +15517,60 @@ document.addEventListener('DOMContentLoaded', () => {
             if (inputMs) inputMs.value = generalPrefs.talkFadeMs;
             if (selMode) selMode.value = generalPrefs.talkMode;
             
+            if (duckEnable) duckEnable.checked = generalPrefs.autoDuckingEnable;
+            if (duckThreshold) {
+                duckThreshold.value = generalPrefs.autoDuckingThreshold;
+                if (duckThresholdLabel) duckThresholdLabel.textContent = generalPrefs.autoDuckingThreshold + ' dB';
+            }
+            if (duckAttack) duckAttack.value = generalPrefs.autoDuckingAttack;
+            if (duckRelease) duckRelease.value = generalPrefs.autoDuckingRelease;
+            
+            if (typeof populateAutoDuckingDevices === 'function') {
+                populateAutoDuckingDevices();
+            } else if (duckDevice) {
+                duckDevice.value = generalPrefs.autoDuckingDevice || 'default';
+            }
+            
             if (configModal) configModal.style.display = 'flex';
+            
+            // Iniciar engine inmediatamente si está activado para poder probar el vúmetro
+            if (generalPrefs.autoDuckingEnable) {
+                startAutoDuckingEngine();
+            }
+        });
+    }
+
+    if (duckEnable) {
+        duckEnable.addEventListener('change', () => {
+            if (duckEnable.checked) {
+                startAutoDuckingEngine();
+            } else {
+                stopAutoDuckingEngine();
+                if (duckVuCover) duckVuCover.style.width = '100%';
+            }
+        });
+    }
+
+    if (duckDevice) {
+        duckDevice.addEventListener('change', () => {
+            if (duckEnable && duckEnable.checked) {
+                // Parar y reiniciar con el nuevo dispositivo para el preview
+                stopAutoDuckingEngine();
+                generalPrefs.autoDuckingDevice = duckDevice.value; // Temporal hasta guardar
+                startAutoDuckingEngine();
+            }
         });
     }
 
     if (inputVol) {
         inputVol.addEventListener('input', (e) => {
             if (inputVolLabel) inputVolLabel.textContent = e.target.value + '%';
+        });
+    }
+    
+    if (duckThreshold) {
+        duckThreshold.addEventListener('input', (e) => {
+            if (duckThresholdLabel) duckThresholdLabel.textContent = e.target.value + ' dB';
         });
     }
     
@@ -15494,10 +15590,170 @@ document.addEventListener('DOMContentLoaded', () => {
             if (inputMs) generalPrefs.talkFadeMs = parseInt(inputMs.value) || 500;
             if (selMode) generalPrefs.talkMode = selMode.value;
             
+            if (duckEnable) generalPrefs.autoDuckingEnable = duckEnable.checked;
+            if (duckThreshold) generalPrefs.autoDuckingThreshold = parseInt(duckThreshold.value) || -30;
+            if (duckAttack) generalPrefs.autoDuckingAttack = parseInt(duckAttack.value) || 200;
+            if (duckRelease) generalPrefs.autoDuckingRelease = parseInt(duckRelease.value) || 1000;
+            if (duckDevice) generalPrefs.autoDuckingDevice = duckDevice.value;
+            
             if (typeof saveConfig === 'function' && typeof generalPrefsPath !== 'undefined') {
                 saveConfig(generalPrefsPath, generalPrefs);
             }
+            
+            // Si estaba encendido y cambiamos de dispositivo, forzar reinicio
+            stopAutoDuckingEngine();
+            if (generalPrefs.autoDuckingEnable) {
+                startAutoDuckingEngine();
+            }
+            
             configModal.style.display = 'none';
         });
     }
 });
+
+// ====== AUTO-DUCKING ENGINE ======
+let autoDuckingContext = null;
+let autoDuckingStream = null;
+let autoDuckingAnalyser = null;
+let autoDuckingRaf = null;
+let autoDuckingVoiceActive = false;
+let autoDuckingTimeAbove = 0;
+let autoDuckingTimeBelow = 0;
+let autoDuckingLastCheck = 0;
+
+async function startAutoDuckingEngine() {
+    if (autoDuckingContext) return; // already running
+    try {
+        const devId = generalPrefs.autoDuckingDevice || 'default';
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: { 
+                deviceId: devId !== 'default' ? { exact: devId } : undefined,
+                echoCancellation: false, 
+                noiseSuppression: false, 
+                autoGainControl: false 
+            } 
+        });
+        autoDuckingStream = stream;
+        autoDuckingContext = new (window.AudioContext || window.webkitAudioContext)();
+        autoDuckingAnalyser = autoDuckingContext.createAnalyser();
+        autoDuckingAnalyser.fftSize = 512;
+        const source = autoDuckingContext.createMediaStreamSource(stream);
+        source.connect(autoDuckingAnalyser);
+
+        autoDuckingVoiceActive = false;
+        autoDuckingTimeAbove = 0;
+        autoDuckingTimeBelow = 0;
+        autoDuckingLastCheck = performance.now();
+
+        autoDuckingLoop();
+        if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Motor de detección de voz iniciado.");
+    } catch (err) {
+        if (typeof logSystem === 'function') logSystem(`[ERROR] No se pudo iniciar Auto-Ducking: ${err.message}`);
+        generalPrefs.autoDuckingEnable = false; 
+    }
+}
+
+function stopAutoDuckingEngine() {
+    if (autoDuckingRaf) {
+        cancelAnimationFrame(autoDuckingRaf);
+        autoDuckingRaf = null;
+    }
+    if (autoDuckingStream) {
+        autoDuckingStream.getTracks().forEach(track => track.stop());
+        autoDuckingStream = null;
+    }
+    if (autoDuckingContext) {
+        autoDuckingContext.close();
+        autoDuckingContext = null;
+    }
+    autoDuckingAnalyser = null;
+    
+    if (autoDuckingVoiceActive) {
+        autoDuckingVoiceActive = false;
+        if (isTalkActive) deactivateTalk();
+    }
+    if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Motor de detección de voz detenido.");
+}
+
+function autoDuckingLoop() {
+    if (!autoDuckingContext) return;
+    autoDuckingRaf = requestAnimationFrame(autoDuckingLoop);
+
+    const now = performance.now();
+    const dt = now - autoDuckingLastCheck;
+    autoDuckingLastCheck = now;
+
+    const dataArray = new Float32Array(autoDuckingAnalyser.frequencyBinCount);
+    autoDuckingAnalyser.getFloatTimeDomainData(dataArray);
+
+    let sumSquares = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+        sumSquares += dataArray[i] * dataArray[i];
+    }
+    const rms = Math.sqrt(sumSquares / dataArray.length);
+    const db = rms > 0 ? 20 * Math.log10(rms) : -100;
+
+    const threshold = generalPrefs.autoDuckingThreshold || -30;
+    const attackMs = generalPrefs.autoDuckingAttack || 200;
+    const releaseMs = generalPrefs.autoDuckingRelease || 1000;
+    
+    const duckVuCover = document.getElementById('talk-auto-ducking-vu-cover');
+    if (duckVuCover) {
+        let pct = 0;
+        if (db > -60) pct = Math.min(100, Math.max(0, ((db + 60) / 60) * 100));
+        // El cover tapa desde la derecha. width 100% = tapado (sin sonido). width 0% = destapado (volumen máximo).
+        duckVuCover.style.width = (100 - pct) + '%';
+    }
+
+    if (db >= threshold) {
+        autoDuckingTimeBelow = 0;
+        autoDuckingTimeAbove += dt;
+        
+        if (!autoDuckingVoiceActive && autoDuckingTimeAbove >= attackMs) {
+            autoDuckingVoiceActive = true;
+            if (!isTalkActive) {
+                activateTalk();
+            }
+        }
+    } else {
+        autoDuckingTimeAbove = 0;
+        autoDuckingTimeBelow += dt;
+
+        if (autoDuckingVoiceActive && autoDuckingTimeBelow >= releaseMs) {
+            autoDuckingVoiceActive = false;
+            if (isTalkActive) {
+                deactivateTalk();
+            }
+        }
+    }
+}
+
+// Auto start if enabled after first interaction (browser policy)
+if (generalPrefs.autoDuckingEnable) {
+    document.addEventListener('click', () => {
+        if (generalPrefs.autoDuckingEnable && !autoDuckingContext) {
+            startAutoDuckingEngine();
+        }
+    }, { once: true });
+}
+
+async function populateAutoDuckingDevices() {
+    const duckDevice = document.getElementById('talk-auto-ducking-device');
+    if (!duckDevice) return;
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        duckDevice.innerHTML = '<option value="default">Predeterminado</option>';
+        audioInputs.forEach(d => {
+            if (d.deviceId === 'default' || d.deviceId === 'communications') return;
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.textContent = d.label || `Micrófono ${duckDevice.options.length}`;
+            duckDevice.appendChild(opt);
+        });
+        duckDevice.value = generalPrefs.autoDuckingDevice || 'default';
+    } catch (e) { 
+        console.error("Error al poblar dispositivos para auto-ducking", e);
+    }
+}
+
