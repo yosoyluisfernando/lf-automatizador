@@ -91,7 +91,6 @@ if (-not (Test-Path $configDir)) {
     Write-Host "   · El programa nunca se ha abierto (necesita abrirse" -ForegroundColor Gray
     Write-Host "     al menos una vez para crear su configuracion)." -ForegroundColor Gray
     Write-Host ""
-    Pausar "Presiona Enter para cerrar..."
     exit 1
 }
 
@@ -122,7 +121,6 @@ if ($proceso) {
     if ($resp -notmatch '^[sS]$') {
         Write-Host ""
         Write-OK "Operacion cancelada. No se modifico nada."
-        Pausar
         exit 0
     }
     Write-Host ""
@@ -191,7 +189,6 @@ if (-not (Test-Path $sessionFile)) {
         Write-Fail "No se pudo leer el archivo de sesion."
         Write-Info "El archivo puede estar daniado. No se modifico nada."
         Write-Host ""
-        Pausar "Presiona Enter para cerrar..."
         exit 1
     }
 }
@@ -242,7 +239,6 @@ if (-not (Test-Path $settingsFile)) {
         Write-Fail "No se pudo actualizar los ajustes generales."
         Write-Info "El archivo puede estar daniado. No se modifico nada."
         Write-Host ""
-        Pausar "Presiona Enter para cerrar..."
         exit 1
     }
 }
@@ -275,5 +271,3 @@ Write-Host "  $configDir" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Ya puedes abrir LF Automatizador." -ForegroundColor Cyan
 Write-Host ""
-
-Pausar "Presiona Enter para cerrar esta ventana..."

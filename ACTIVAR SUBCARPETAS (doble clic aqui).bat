@@ -4,3 +4,4 @@
 ::  Doble clic para ejecutar. No requiere permisos de administrador.
 :: ============================================================
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0activar_subcarpetas.ps1"
+pause
