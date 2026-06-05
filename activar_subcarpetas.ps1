@@ -1,23 +1,24 @@
 # ==============================================================================
-#   LF Automatizador — Activar subcarpetas en carpetas aleatorias
-#   Autor: Luis Fernando | https://github.com/yosoyluisfernando/lf-automatizador
-#   Licencia: GPL-3.0  |  Codigo abierto y auditadle
+#   LF Automatizador - Activar subcarpetas en carpetas aleatorias
+#   Autor: Luis Fernando
+#   https://github.com/yosoyluisfernando/lf-automatizador
+#   Licencia: GPL-3.0  |  Codigo abierto y auditable
 # ==============================================================================
 #
-#  QUE HACE ESTE SCRIPT  (puedes leerlo completo antes de ejecutarlo)
-#  ─────────────────────────────────────────────────────────────────
+#  QUE HACE ESTE SCRIPT (puedes leerlo completo antes de ejecutarlo)
+#  ----------------------------------------------------------------
 #  Busca tu configuracion de LF Automatizador y activa la opcion
 #  "incluir subcarpetas" en todas tus carpetas aleatorias guardadas.
 #
 #  ARCHIVOS QUE TOCA:
-#    • session_state.json      → tus playlists guardadas
-#    • general_settings.json   → ajustes generales del programa
+#    session_state.json      -> tus playlists guardadas
+#    general_settings.json   -> ajustes generales del programa
 #
 #  ARCHIVOS QUE NO TOCA:
-#    × Tu musica (no modifica ningun archivo de audio)
-#    × Nada fuera de la carpeta de configuracion del programa
-#    × No envia nada a internet
-#    × No requiere permisos de administrador
+#    Tu musica (no modifica ningun archivo de audio)
+#    Nada fuera de la carpeta de configuracion del programa
+#    No envia nada a internet
+#    No requiere permisos de administrador
 #
 #  COPIA DE SEGURIDAD:
 #    Antes de cualquier cambio se crea un respaldo .bak en la misma
@@ -27,15 +28,15 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ── Colores y helpers visuales ────────────────────────────────────────────────
+# -- Helpers visuales ----------------------------------------------------------
 
 function Write-Header {
     Clear-Host
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║         LF AUTOMATIZADOR — Activador de Subcarpetas      ║" -ForegroundColor Cyan
-    Write-Host "  ║                   por Luis Fernando                      ║" -ForegroundColor DarkCyan
-    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "  +----------------------------------------------------------+" -ForegroundColor Cyan
+    Write-Host "  |      LF AUTOMATIZADOR - Activador de Subcarpetas         |" -ForegroundColor Cyan
+    Write-Host "  |                  por Luis Fernando                       |" -ForegroundColor DarkCyan
+    Write-Host "  +----------------------------------------------------------+" -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -44,36 +45,30 @@ function Write-Step($numero, $texto) {
 }
 
 function Write-OK($texto) {
-    Write-Host "      ✔  $texto" -ForegroundColor Green
+    Write-Host "      OK  $texto" -ForegroundColor Green
 }
 
 function Write-Info($texto) {
-    Write-Host "      ·  $texto" -ForegroundColor DarkGray
+    Write-Host "       -  $texto" -ForegroundColor DarkGray
 }
 
 function Write-Warn($texto) {
-    Write-Host "      ⚠  $texto" -ForegroundColor Yellow
+    Write-Host "      !!  $texto" -ForegroundColor Yellow
 }
 
 function Write-Fail($texto) {
-    Write-Host "      ✘  $texto" -ForegroundColor Red
+    Write-Host "    FAIL  $texto" -ForegroundColor Red
 }
 
 function Write-Separador {
-    Write-Host "  ──────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ----------------------------------------------------------" -ForegroundColor DarkGray
 }
 
-function Pausar($mensaje = "Presiona Enter para salir...") {
-    Write-Host ""
-    Write-Host "  $mensaje" -ForegroundColor DarkGray
-    Read-Host | Out-Null
-}
-
-# ── Inicio ────────────────────────────────────────────────────────────────────
+# -- Inicio --------------------------------------------------------------------
 
 Write-Header
 
-# ── PASO 1: Encontrar la carpeta de configuracion ─────────────────────────────
+# -- PASO 1: Encontrar la carpeta de configuracion -----------------------------
 
 Write-Step "1" "Buscando tu configuracion de LF Automatizador..."
 Write-Host ""
@@ -87,8 +82,8 @@ if (-not (Test-Path $configDir)) {
     Write-Host "  $configDir" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  Posibles causas:" -ForegroundColor White
-    Write-Host "   · LF Automatizador no esta instalado en este equipo." -ForegroundColor Gray
-    Write-Host "   · El programa nunca se ha abierto (necesita abrirse" -ForegroundColor Gray
+    Write-Host "   - LF Automatizador no esta instalado en este equipo." -ForegroundColor Gray
+    Write-Host "   - El programa nunca se ha abierto (necesita abrirse" -ForegroundColor Gray
     Write-Host "     al menos una vez para crear su configuracion)." -ForegroundColor Gray
     Write-Host ""
     exit 1
@@ -100,7 +95,7 @@ Write-Host ""
 Write-Separador
 Write-Host ""
 
-# ── PASO 2: Verificar que el programa este cerrado ────────────────────────────
+# -- PASO 2: Verificar que el programa este cerrado ----------------------------
 
 Write-Step "2" "Verificando que LF Automatizador este cerrado..."
 Write-Host ""
@@ -110,13 +105,13 @@ $proceso = Get-Process -Name "LF Automatizador", "lf-automatizador" -ErrorAction
 if ($proceso) {
     Write-Warn "LF Automatizador parece estar abierto ahora mismo."
     Write-Host ""
-    Write-Host "  Si continuas con el programa abierto, al cerrarlo" -ForegroundColor Yellow
-    Write-Host "  podria sobreescribir los cambios que hagamos aqui." -ForegroundColor Yellow
+    Write-Host "  Si continuas con el programa abierto, al cerrarlo podria" -ForegroundColor Yellow
+    Write-Host "  sobreescribir los cambios que hagamos aqui." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  Recomendacion: cierra el programa y vuelve a ejecutar" -ForegroundColor White
     Write-Host "  este script." -ForegroundColor White
     Write-Host ""
-    Write-Host -NoNewline "  ¿Continuar de todas formas? (s/N): " -ForegroundColor Yellow
+    Write-Host -NoNewline "  Continuar de todas formas? (s/N): " -ForegroundColor Yellow
     $resp = Read-Host
     if ($resp -notmatch '^[sS]$') {
         Write-Host ""
@@ -132,7 +127,7 @@ if ($proceso) {
 Write-Separador
 Write-Host ""
 
-# ── PASO 3: Procesar las playlists (session_state.json) ───────────────────────
+# -- PASO 3: Procesar las playlists (session_state.json) -----------------------
 
 Write-Step "3" "Revisando tus playlists guardadas..."
 Write-Host ""
@@ -151,7 +146,6 @@ if (-not (Test-Path $sessionFile)) {
         $sessionRaw = Get-Content $sessionFile -Raw -Encoding UTF8
         $session    = $sessionRaw | ConvertFrom-Json
 
-        # Contar y mostrar carpetas aleatorias
         foreach ($playlist in $session.playlists) {
             foreach ($fila in $playlist) {
                 if ($fila.type -eq 'random') {
@@ -173,7 +167,6 @@ if (-not (Test-Path $sessionFile)) {
         } elseif ($carpetasMod -eq 0) {
             Write-Info "Todas tus carpetas ya tenian subcarpetas activadas."
         } else {
-            # Crear respaldo y guardar
             $bak = $sessionFile + ".bak"
             Copy-Item $sessionFile $bak -Force
             Write-Host ""
@@ -187,7 +180,7 @@ if (-not (Test-Path $sessionFile)) {
 
     } catch {
         Write-Fail "No se pudo leer el archivo de sesion."
-        Write-Info "El archivo puede estar daniado. No se modifico nada."
+        Write-Info "El archivo puede estar danado. No se modifico nada."
         Write-Host ""
         exit 1
     }
@@ -197,7 +190,7 @@ Write-Host ""
 Write-Separador
 Write-Host ""
 
-# ── PASO 4: Preferencia global (general_settings.json) ───────────────────────
+# -- PASO 4: Preferencia global (general_settings.json) -----------------------
 
 Write-Step "4" "Configurando preferencia global para carpetas nuevas..."
 Write-Host ""
@@ -237,7 +230,7 @@ if (-not (Test-Path $settingsFile)) {
 
     } catch {
         Write-Fail "No se pudo actualizar los ajustes generales."
-        Write-Info "El archivo puede estar daniado. No se modifico nada."
+        Write-Info "El archivo puede estar danado. No se modifico nada."
         Write-Host ""
         exit 1
     }
@@ -247,24 +240,24 @@ Write-Host ""
 Write-Separador
 Write-Host ""
 
-# ── RESUMEN FINAL ─────────────────────────────────────────────────────────────
+# -- RESUMEN FINAL -------------------------------------------------------------
 
-Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "  ║                   ✔  TODO LISTO                         ║" -ForegroundColor Green
-Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  +----------------------------------------------------------+" -ForegroundColor Green
+Write-Host "  |                    TODO LISTO                            |" -ForegroundColor Green
+Write-Host "  +----------------------------------------------------------+" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Resumen de cambios:" -ForegroundColor White
 Write-Host ""
 
 if ($totalCarpetas -gt 0) {
-    Write-Host "   Carpetas aleatorias en tus playlists : $totalCarpetas" -ForegroundColor Gray
-    Write-Host "   · Actualizadas ahora                 : $carpetasMod" -ForegroundColor Green
-    Write-Host "   · Ya tenian subcarpetas activadas    : $carpetasYaOk" -ForegroundColor DarkGray
+    Write-Host "   Carpetas aleatorias encontradas  : $totalCarpetas" -ForegroundColor Gray
+    Write-Host "   Actualizadas ahora               : $carpetasMod" -ForegroundColor Green
+    Write-Host "   Ya tenian subcarpetas activadas  : $carpetasYaOk" -ForegroundColor DarkGray
 } else {
     Write-Host "   No habia carpetas aleatorias en la sesion guardada." -ForegroundColor DarkGray
 }
 
-Write-Host "   Carpetas nuevas que agregues          : incluiran subcarpetas automaticamente" -ForegroundColor Green
+Write-Host "   Carpetas nuevas que agregues     : incluiran subcarpetas automaticamente" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Respaldos disponibles en:" -ForegroundColor DarkGray
 Write-Host "  $configDir" -ForegroundColor DarkGray
