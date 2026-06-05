@@ -5,7 +5,12 @@
 #   Licencia: GPL-3.0  |  Codigo abierto y auditable
 # ==============================================================================
 #
-#  QUE HACE ESTE SCRIPT (puedes leerlo completo antes de ejecutarlo)
+#  COMO EJECUTAR ESTE SCRIPT:
+#    1. Haz clic derecho sobre este archivo (.ps1)
+#    2. Selecciona "Ejecutar con PowerShell"
+#    3. Si Windows pregunta si deseas permitir la ejecucion, acepta.
+#
+#  QUE HACE ESTE SCRIPT:
 #  ----------------------------------------------------------------
 #  Busca tu configuracion de LF Automatizador y activa la opcion
 #  "incluir subcarpetas" en todas tus carpetas aleatorias guardadas.
@@ -64,6 +69,12 @@ function Write-Separador {
     Write-Host "  ----------------------------------------------------------" -ForegroundColor DarkGray
 }
 
+function Esperar {
+    Write-Host ""
+    Write-Host "  Presiona Enter para cerrar esta ventana..." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+}
+
 # -- Inicio --------------------------------------------------------------------
 
 Write-Header
@@ -85,7 +96,7 @@ if (-not (Test-Path $configDir)) {
     Write-Host "   - LF Automatizador no esta instalado en este equipo." -ForegroundColor Gray
     Write-Host "   - El programa nunca se ha abierto (necesita abrirse" -ForegroundColor Gray
     Write-Host "     al menos una vez para crear su configuracion)." -ForegroundColor Gray
-    Write-Host ""
+    Esperar
     exit 1
 }
 
@@ -116,6 +127,7 @@ if ($proceso) {
     if ($resp -notmatch '^[sS]$') {
         Write-Host ""
         Write-OK "Operacion cancelada. No se modifico nada."
+        Esperar
         exit 0
     }
     Write-Host ""
@@ -127,7 +139,7 @@ if ($proceso) {
 Write-Separador
 Write-Host ""
 
-# -- PASO 3: Procesar las playlists (session_state.json) -----------------------
+# -- PASO 3: Procesar las playlists (session_state.json) ----------------------
 
 Write-Step "3" "Revisando tus playlists guardadas..."
 Write-Host ""
@@ -181,7 +193,7 @@ if (-not (Test-Path $sessionFile)) {
     } catch {
         Write-Fail "No se pudo leer el archivo de sesion."
         Write-Info "El archivo puede estar danado. No se modifico nada."
-        Write-Host ""
+        Esperar
         exit 1
     }
 }
@@ -208,7 +220,7 @@ if (-not (Test-Path $settingsFile)) {
         $valorActual = $settings.randomIncludeSubfolders
 
         if ($valorActual -eq 'always') {
-            Write-Info "La preferencia global ya estaba en 'siempre incluir'. Sin cambios."
+            Write-Info "La preferencia global ya estaba configurada. Sin cambios."
         } else {
             $bak = $settingsFile + ".bak"
             Copy-Item $settingsFile $bak -Force
@@ -231,7 +243,7 @@ if (-not (Test-Path $settingsFile)) {
     } catch {
         Write-Fail "No se pudo actualizar los ajustes generales."
         Write-Info "El archivo puede estar danado. No se modifico nada."
-        Write-Host ""
+        Esperar
         exit 1
     }
 }
@@ -263,4 +275,5 @@ Write-Host "  Respaldos disponibles en:" -ForegroundColor DarkGray
 Write-Host "  $configDir" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Ya puedes abrir LF Automatizador." -ForegroundColor Cyan
-Write-Host ""
+
+Esperar
