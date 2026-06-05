@@ -64,3 +64,20 @@ config/artists/img/
 
 # Wireframes temporales del companion de diseno
 .superpowers/
+
+# Archivos internos que no pertenecen al repo público
+tests/
+manual/
+docs/
+Documentación/
+error_log.txt
+ACTUALIZAR-MOTOR-STREAM.bat
+Radio.html
+prueba.html
+"entendiendo la consola virtual.md"
+POR_HACER.md
+NOTA_CAMBIOS_*.md
+modify_*.py
+test_ducking.js
+config/session_state.json.bak
+config/session_state.json.tmp
