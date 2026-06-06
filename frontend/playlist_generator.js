@@ -379,7 +379,7 @@ async function init() {
 
     colRules.addEventListener('dragover', (e) => { 
         e.preventDefault(); 
-        e.dataTransfer.dropEffect = 'move';
+        e.dataTransfer.dropEffect = e.dataTransfer.effectAllowed === 'copy' ? 'copy' : 'move';
         
         const target = getDropTarget(e.clientY);
         document.querySelectorAll('.step').forEach(r => r.classList.remove('drop-target-top', 'drop-target-bottom'));

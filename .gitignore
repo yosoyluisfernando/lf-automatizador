@@ -67,6 +67,7 @@ config/artists/img/
 .superpowers/
 
 # Archivos internos que no pertenecen al repo público
+PLAN_GENERADOR_PLAYLIST.md
 tests/
 manual/
 docs/
