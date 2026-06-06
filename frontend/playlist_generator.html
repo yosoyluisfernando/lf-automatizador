@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title data-i18n="playlist_generator.title_window">Generador de Playlist - LF Automatizador</title>
+    <style>
+        :root { --bg:#121212; --panel:#18181a; --header:#1a1a1c; --border:#333; --accent:#00a8ff; --text:#e0e0e0; --muted:#888; --ok:#27ae60; --danger:#c0392b; --warn:#f39c12; }
+        * { box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",sans-serif; }
+        *::-webkit-scrollbar { width:10px; height:10px; }
+        *::-webkit-scrollbar-track { background:#141416; }
+        *::-webkit-scrollbar-thumb { background:#4a4f58; border:2px solid #141416; border-radius:10px; }
+        body { background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+        button, input, select, textarea { font:inherit; }
+        .header { background:var(--header); padding:12px 18px; border-bottom:1px solid var(--border); }
+        .header h1 { font-size:16px; color:var(--accent); font-weight:800; }
+        .header p { font-size:12px; color:var(--muted); margin-top:3px; }
+        .body { flex:1; display:flex; gap:14px; padding:14px; overflow:hidden; }
+        .col-explorer { width:300px; min-width:240px; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; overflow:hidden; }
+        .col-rules { flex:1; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+        .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px; }
+        .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--accent); margin-bottom:10px; font-weight:800; }
+        .section-title { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); font-weight:800; margin-bottom:8px; }
+        .steps { display:flex; flex-direction:column; gap:5px; min-height:120px; max-height:240px; overflow-y:auto; background:#0a0a0a; border:1px solid var(--border); border-radius:4px; padding:6px; }
+        .steps:empty::before { content:attr(data-empty); color:var(--muted); font-size:12px; padding:8px; display:block; }
+        .step { display:flex; align-items:center; gap:6px; background:#1f1f22; border:1px solid var(--border); border-radius:5px; padding:2px 8px; font-size:13px; cursor:grab; transition:border-color 0.1s; }
+        .step:active { cursor:grabbing; }
+        .step.drop-target-top { border-top:2px solid var(--accent); padding-top:1px; }
+        .step.drop-target-bottom { border-bottom:2px solid var(--accent); padding-bottom:1px; }
+        .step.folder { border-left:3px solid var(--accent); }
+        .step.locution { border-left:3px solid var(--warn); }
+        .loc-cards { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+        .loc-card { display:flex; align-items:center; gap:8px; background:#1f1f22; border:1px solid var(--border); border-radius:8px; padding:8px 12px; color:#dfe3e8; cursor:pointer; font-size:13px; }
+        .loc-card:hover { border-color:var(--accent); color:#fff; }
+        .loc-card .loc-ico { font-size:16px; }
+        .step .lbl { flex:1; color:#dfe3e8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .step .idx { color:var(--muted); font-size:11px; min-width:18px; text-align:right; }
+        .step button { background:#2a2a2e; border:1px solid var(--border); color:#cfd3d8; border-radius:4px; width:24px; height:24px; cursor:pointer; font-size:13px; line-height:1; }
+        .step button:hover { border-color:var(--accent); color:#fff; }
+        .step button.del:hover { border-color:var(--danger); color:#ff6b6b; }
+        .palette { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; max-height:200px; overflow-y:auto; }
+        .chip { background:#222; border:1px solid var(--border); border-radius:14px; padding:3px 10px; font-size:11px; cursor:pointer; color:#cfd3d8; white-space:nowrap; }
+        .chip:hover { border-color:var(--accent); color:#fff; }
+        .row { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:13px; }
+        .num { width:64px; background:#0a0a0a; border:1px solid var(--border); border-radius:4px; color:#fff; padding:6px; text-align:center; outline:none; }
+        .num:focus { border-color:var(--accent); }
+        .btn { border:1px solid var(--border); background:#222; color:#fff; padding:8px 14px; border-radius:6px; font-weight:700; font-size:12px; cursor:pointer; }
+        .btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+        .btn:disabled { opacity:.45; cursor:not-allowed; }
+        .btn-ok { background:var(--ok); border-color:var(--ok); }
+        .btn-ok:hover { background:#2ecc71; color:#fff; }
+        .btn-danger { background:var(--danger); border-color:var(--danger); }
+        .summary { background:#0d0d0f; border:1px solid var(--border); border-radius:6px; padding:10px; font-size:12px; color:#9fb4c4; white-space:pre-line; min-height:48px; margin-top:10px; }
+        .folder-list { flex:1; overflow-y:auto; margin-top:10px; display:flex; flex-direction:column; gap:6px; }
+        .folder-item { background:#1f1f22; border:1px solid var(--border); border-radius:6px; padding:8px; font-size:11px; }
+        .folder-item .fpath { color:#cfd3d8; word-break:break-all; }
+        .folder-item .fmeta { color:var(--muted); margin-top:3px; }
+        .explorer-tree { flex:1; overflow:auto; background:#0d0d0f; border:1px solid var(--border); border-radius:6px; padding:6px; font-size:13px; margin-top:6px; }
+        .explorer-tree ul { list-style:none; margin:0; padding-left:14px; }
+        .explorer-tree ul.root { padding-left:0; }
+        .tree-item { display:flex; align-items:center; gap:4px; padding:2px 4px; border-radius:4px; cursor:grab; white-space:nowrap; color:#dfe3e8; }
+        .tree-item:hover { background:#1f2937; }
+        .tree-item .tree-toggle { width:14px; display:inline-block; text-align:center; color:var(--muted); cursor:pointer; user-select:none; }
+        .tree-item .nm { overflow:hidden; text-overflow:ellipsis; }
+        .steps.drop-active { border-color:var(--accent); box-shadow:0 0 0 2px rgba(0,168,255,0.25) inset; }
+        .hint { font-size:11px; color:var(--muted); margin-top:6px; line-height:1.4; }
+        .footer { background:var(--header); border-top:1px solid var(--border); padding:12px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+        .pl-targets { display:flex; gap:6px; margin-right:auto; }
+        .pl-btn { padding:7px 12px; border-radius:6px; border:2px solid var(--border); background:#222; color:#ccc; cursor:pointer; font-size:12px; font-weight:700; }
+        .pl-btn.sel { border-color:var(--accent); color:#fff; background:#10202c; }
+        .pl-btn.air { border-color:var(--danger); color:#ff6b6b; }
+        label.chk { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:#bbb; cursor:pointer; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1 data-i18n="playlist_generator.title_main">🧩 Generador de Playlist</h1>
+        <p data-i18n="playlist_generator.subtitle">Arma una hora por géneros de biblioteca o por carpetas (con o sin subcarpetas).</p>
+    </div>
+    <div class="body">
+        <div class="col-explorer">
+            <div class="section-title" data-i18n="playlist_generator.explorer_title">Explorador de carpetas</div>
+            <label class="chk" style="margin-bottom:4px;"><input type="checkbox" id="chk-include-sub" checked> <span data-i18n="playlist_generator.include_sub">Incluir subcarpetas al arrastrar</span></label>
+            <div id="explorer-tree" class="explorer-tree"></div>
+            <div class="hint" data-i18n="playlist_generator.explorer_hint">Arrastra una carpeta a los pasos de la derecha. Doble clic para abrir/cerrar.</div>
+            <button id="btn-add-folder" class="btn" style="margin-top:6px;" data-i18n="playlist_generator.add_folder">📁 Añadir carpeta manualmente…</button>
+        </div>
+        <div class="col-rules">
+            <div class="card">
+                <h2 data-i18n="playlist_generator.pattern_title">Patrón del reloj</h2>
+                <div id="steps" class="steps" data-empty="Sin pasos. Haz clic en una categoría o añade una carpeta."></div>
+                <div class="hint" data-i18n="playlist_generator.pattern_hint">Cada fila es un paso del ciclo. Reordena arrastrando y elimina con ✕.</div>
+                <!-- NOTA: El selector de GÉNEROS MUSICALES sigue programado y
+                     funcional, pero está OCULTO por ahora (no es útil hasta
+                     estabilizar la curación de la biblioteca). Para reactivarlo,
+                     quitar el style="display:none" del bloque #genre-section. -->
+                <div id="genre-section" style="display:none;">
+                    <div class="section-title" style="margin-top:12px;" data-i18n="playlist_generator.categories_title">Categorías disponibles (clic para añadir)</div>
+                    <div id="palette" class="palette"></div>
+                </div>
+                <div class="section-title" style="margin-top:12px;" data-i18n="playlist_generator.locutions_title">Locuciones (clic para añadir)</div>
+                <div class="loc-cards" id="loc-cards">
+                    <button class="loc-card" id="loc-time" type="button"><span class="loc-ico">⏰</span><span data-i18n="playlist_generator.loc_time">Locución de hora</span></button>
+                    <button class="loc-card" id="loc-temp" type="button"><span class="loc-ico">🌡️</span><span data-i18n="playlist_generator.loc_temp">Locución de temperatura</span></button>
+                    <button class="loc-card" id="loc-hum" type="button"><span class="loc-ico">💧</span><span data-i18n="playlist_generator.loc_hum">Locución de humedad</span></button>
+                </div>
+            </div>
+            <div class="card">
+                <h2 data-i18n="playlist_generator.rules_title">Duración y separación</h2>
+                <div class="row"><span data-i18n="playlist_generator.target_dur">Duración objetivo</span> <input id="target-min" class="num" inputmode="numeric" value="60"> <span data-i18n="playlist_generator.minutes">minutos</span></div>
+                <div class="row"><label class="chk"><input type="checkbox" id="chk-artist" checked> <span data-i18n="playlist_generator.artist">Artista</span></label> <input id="sep-artist" class="num" inputmode="numeric" value="4"> <span data-i18n="playlist_generator.tracks">pistas</span></div>
+                <div class="row"><label class="chk"><input type="checkbox" id="chk-title" checked> <span data-i18n="playlist_generator.title_label">Título</span></label> <input id="sep-title" class="num" inputmode="numeric" value="8"> <span data-i18n="playlist_generator.tracks">pistas</span></div>
+                <div id="summary" class="summary"></div>
+            </div>
+        </div>
+    </div>
+    <div class="footer">
+        <div class="pl-targets" id="pl-targets"></div>
+        <label class="chk"><input type="checkbox" id="chk-clear"> <span data-i18n="playlist_generator.clear">Limpiar lista destino</span></label>
+        <button id="btn-preflight" class="btn" data-i18n="playlist_generator.preflight">Calcular</button>
+        <button id="btn-generate" class="btn btn-ok" data-i18n="playlist_generator.generate">Generar en playlist</button>
+        <button id="btn-close" class="btn btn-danger" data-i18n="playlist_generator.close">Cerrar</button>
+    </div>
+    <script src="playlist_generator.js"></script>
+</body>
+</html>

@@ -49,7 +49,7 @@ function saveFileTypes() {
     const merged = fileTypes.map(t => {
         const base = diskById.get(t.id);
         if (!base) return t; // tipo nuevo aun no presente en disco
-        return { ...base, name: t.name, identifier: t.identifier, color: t.color, aliases: t.aliases };
+        return { ...base, name: t.name, identifier: t.identifier, color: t.color, aliases: t.aliases, shortcutRoot: t.shortcutRoot, shortcutSub: t.shortcutSub, showShortcut: t.showShortcut };
     });
     try { fs.writeFileSync(fileTypesPath, JSON.stringify(merged, null, 2)); } catch (e) {}
     fileTypes = normalizeFileTypes(merged);
@@ -132,6 +132,10 @@ function renderProperties() {
     if (!t) {
         nameEl.value = ''; idEl.value = ''; colorEl.value = '#ffffff';
         nameEl.disabled = idEl.disabled = colorEl.disabled = true;
+        const rEl = byId('type-root'); if (rEl) rEl.value = '';
+        const sEl = byId('type-show-shortcut'); if (sEl) { sEl.checked = false; sEl.disabled = true; }
+        const pb = byId('btn-pick-root'); if (pb) pb.disabled = true;
+        const cb = byId('btn-clear-root'); if (cb) cb.disabled = true;
         return;
     }
     nameEl.value = t.name || '';
@@ -141,16 +145,38 @@ function renderProperties() {
     const lock = t.readonly === true;
     nameEl.disabled = lock;
     idEl.disabled = lock;
-    colorEl.disabled = lock;
+    // El color es editable en TODOS los tipos excepto Locuciones (hora).
+    const colorLock = t.id === 't_time';
+    colorEl.disabled = colorLock;
+    const resetColorBtn = byId('btn-reset-color'); if (resetColorBtn) resetColorBtn.disabled = colorLock;
+
+    // Carpeta raíz + "mostrar acceso directo" (editable incluso en tipos por
+    // defecto). Locuciones: bloqueado (se configura en Ajustes; sin acceso directo).
+    const rootEl = byId('type-root');
+    const showEl = byId('type-show-shortcut');
+    const pickBtn = byId('btn-pick-root');
+    const clearBtn = byId('btn-clear-root');
+    const isLocution = t.id === 't_time';
+    if (rootEl) rootEl.value = t.shortcutRoot || '';
+    if (showEl) { showEl.checked = t.showShortcut === true; showEl.disabled = isLocution; }
+    if (pickBtn) pickBtn.disabled = isLocution;
+    if (clearBtn) clearBtn.disabled = isLocution || !t.shortcutRoot;
+    const noteRow = byId('row-shortcut-note'); if (noteRow) noteRow.style.display = isLocution ? '' : 'none';
+    const showRow = byId('row-show-shortcut'); if (showRow) showRow.style.display = isLocution ? 'none' : '';
 }
 
 function commitPropertyEdits() {
     const t = getSelectedType();
-    if (!t || t.readonly) return;
-    t.name = byId('type-name').value.trim() || t.name;
-    t.identifier = byId('type-identifier').value.trim();
-    const c = byId('type-color').value;
-    if (/^#[0-9a-f]{6}$/i.test(c)) t.color = c;
+    if (!t) return;
+    if (!t.readonly) {
+        t.name = byId('type-name').value.trim() || t.name;
+        t.identifier = byId('type-identifier').value.trim();
+    }
+    // El color es editable en todos los tipos excepto Locuciones (hora).
+    if (t.id !== 't_time') {
+        const c = byId('type-color').value;
+        if (/^#[0-9a-f]{6}$/i.test(c)) t.color = c;
+    }
 }
 
 // ── Render: tabla de asignaciones ──────────────────────────────────────────
@@ -303,10 +329,46 @@ function applyOptModal() {
 }
 
 // ── Añadir / modificar / eliminar asignaciones ─────────────────────────────
+
+// ¿La ruta ya pertenece a OTRO tipo (asignación directa o dentro de una carpeta
+// asignada con subcarpetas de otro tipo)? Devuelve el typeId en conflicto o null.
+function findConflictingType(p) {
+    if (explicitTypes[p] && explicitTypes[p] !== selectedTypeId) return explicitTypes[p];
+    const norm = pp => String(pp).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const target = norm(p);
+    for (const [assignedPath, typeId] of Object.entries(explicitTypes)) {
+        if (typeId === selectedTypeId || !isRealPath(assignedPath)) continue;
+        const opt = optionsDB[assignedPath];
+        const isFolder = opt ? opt.kind === 'folder' : (() => { try { return fs.statSync(assignedPath).isDirectory(); } catch (e) { return false; } })();
+        if (!isFolder) continue;
+        const includeSub = opt ? opt.includeSubfolders !== false : true;
+        const ap = norm(assignedPath);
+        if (target === ap) return typeId;
+        if (includeSub && target.startsWith(ap + '/')) return typeId;
+    }
+    return null;
+}
+
+// Avisa si algún ítem ya pertenece a otro tipo y pregunta si moverlo. Devuelve
+// false si el usuario cancela (no se agrega).
+async function checkConflictAndConfirm(items) {
+    for (const item of items) {
+        const conflictId = findConflictingType(item.path);
+        if (conflictId) {
+            const conflictName = (fileTypes.find(t => t.id === conflictId) || {}).name || conflictId;
+            const move = await ipcRenderer.invoke('dialog:confirm',
+                `"${item.path}" ya pertenece al tipo "${conflictName}".\n\n¿Mover a "${getSelectedType()?.name || ''}"?  (Cancelar = no agregar)`);
+            if (!move) return false;
+        }
+    }
+    return true;
+}
+
 async function addFolder() {
     if (!selectedTypeId) return;
     const folder = await ipcRenderer.invoke('dialog:pickFolder', { title: i18n.t('file_types_manager.pick_folder_title') || 'Seleccionar carpeta' });
     if (!folder) return;
+    if (!(await checkConflictAndConfirm([{ path: folder, kind: 'folder' }]))) return;
     openOptModal('add', [{ path: folder, kind: 'folder' }]);
 }
 
@@ -315,7 +377,9 @@ async function addFile() {
     const files = await ipcRenderer.invoke('dialog:pickAudioFiles', { title: i18n.t('file_types_manager.pick_file_title') || 'Seleccionar archivo de audio' });
     const list = Array.isArray(files) ? files.filter(Boolean) : (files ? [files] : []);
     if (!list.length) return;
-    openOptModal('add', list.map(p => ({ path: p, kind: 'file' })));
+    const items = list.map(p => ({ path: p, kind: 'file' }));
+    if (!(await checkConflictAndConfirm(items))) return;
+    openOptModal('add', items);
 }
 
 function modifySelected() {
@@ -412,7 +476,82 @@ ipcRenderer.on('file-types-data-updated', () => {
 });
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
+async function pickShortcutRoot() {
+    const t = getSelectedType();
+    if (!t || t.id === 't_time') return;
+    let folder = '';
+    try { folder = await ipcRenderer.invoke('dialog:pickFolder', { title: 'Carpeta raíz de ' + t.name }); } catch (e) { folder = ''; }
+    if (!folder) return;
+    // Si cambiamos de raíz, soltar la asignación de la raíz anterior.
+    if (t.shortcutRoot && t.shortcutRoot !== folder) {
+        delete explicitTypes[t.shortcutRoot];
+        fileTypeAssignments.removeOptions(t.shortcutRoot, optionsDB);
+    }
+    t.shortcutRoot = folder;
+    t.shortcutSub = true; // raíz de tipo: siempre incluye subcarpetas.
+    // La raíz se asigna como carpeta de ESTE tipo: su contenido toma el tipo
+    // (color/separación) y aparece en "Carpetas y archivos asignados".
+    explicitTypes[folder] = t.id;
+    fileTypeAssignments.setOptions(folder, { kind: 'folder', includeSubfolders: true, ignoreSeparation: true, saveToHistory: false }, optionsDB);
+    saveFileTypes();
+    saveExplicit();
+    saveOptions();
+    notifyDataChanged();
+    renderProperties();
+    renderAssignments();
+}
+function clearShortcutRoot() {
+    const t = getSelectedType();
+    if (!t || t.id === 't_time') return;
+    const old = t.shortcutRoot;
+    if (old) {
+        delete explicitTypes[old];
+        fileTypeAssignments.removeOptions(old, optionsDB);
+    }
+    delete t.shortcutRoot; delete t.shortcutSub;
+    saveFileTypes();
+    saveExplicit();
+    saveOptions();
+    notifyDataChanged();
+    renderProperties();
+    renderAssignments();
+}
+function toggleShowShortcut() {
+    const t = getSelectedType();
+    if (!t || t.id === 't_time') return;
+    t.showShortcut = byId('type-show-shortcut').checked === true;
+    saveFileTypes();
+    notifyDataChanged();
+}
+
+function applyColorChange() {
+    const t = getSelectedType();
+    if (!t || t.id === 't_time') return;
+    const c = byId('type-color').value;
+    if (!/^#[0-9a-f]{6}$/i.test(c)) return;
+    t.color = c;
+    saveFileTypes();
+    notifyDataChanged();
+    renderTypeList();
+}
+function resetTypeColor() {
+    const t = getSelectedType();
+    if (!t || t.id === 't_time') return;
+    const def = (defaultFileTypes.find(d => d.id === t.id) || {}).color;
+    const color = /^#[0-9a-f]{6}$/i.test(def || '') ? def : '#e0e0e0';
+    t.color = color;
+    const colorEl = byId('type-color'); if (colorEl) colorEl.value = color;
+    saveFileTypes();
+    notifyDataChanged();
+    renderTypeList();
+}
+
 byId('btn-add-type').addEventListener('click', addType);
+byId('type-color') && byId('type-color').addEventListener('change', applyColorChange);
+byId('btn-reset-color') && byId('btn-reset-color').addEventListener('click', resetTypeColor);
+byId('btn-pick-root') && byId('btn-pick-root').addEventListener('click', pickShortcutRoot);
+byId('btn-clear-root') && byId('btn-clear-root').addEventListener('click', clearShortcutRoot);
+byId('type-show-shortcut') && byId('type-show-shortcut').addEventListener('change', toggleShowShortcut);
 byId('btn-del-type').addEventListener('click', deleteType);
 byId('btn-add-folder').addEventListener('click', addFolder);
 byId('btn-add-file').addEventListener('click', addFile);

@@ -626,6 +626,43 @@ function openFileTypesManagerWindow() {
     fileTypesManagerWindow.on('closed', () => { fileTypesManagerWindow = null; });
 }
 
+// ── Generador de Playlist (ventana independiente) ────────────────────────────
+// La ventana es UI delgada; la ventana PRINCIPAL tiene el core + datos + carpetas
+// + inserción. Se comunican por relay: el generador pide con 'pg-to-main' y la
+// principal responde con 'pg-reply' usando el mismo id.
+let playlistGeneratorWindow = null;
+function openPlaylistGeneratorWindow() {
+    if (playlistGeneratorWindow && !playlistGeneratorWindow.isDestroyed()) {
+        playlistGeneratorWindow.focus();
+        return;
+    }
+    playlistGeneratorWindow = new BrowserWindow({
+        icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+        width: 1100, height: 720, minWidth: 900, minHeight: 600,
+        title: 'Generador de Playlist',
+        autoHideMenuBar: true,
+        backgroundColor: '#121212',
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+    });
+    playlistGeneratorWindow.loadFile(require('path').join(__dirname, 'frontend', 'playlist_generator.html'));
+    playlistGeneratorWindow.on('closed', () => { playlistGeneratorWindow = null; });
+}
+ipcMain.on('open-playlist-generator', openPlaylistGeneratorWindow);
+
+const _pgPending = new Map();
+let _pgReqId = 0;
+ipcMain.handle('pg-to-main', (e, msg) => new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) { resolve({ error: 'no-main-window' }); return; }
+    const id = ++_pgReqId;
+    _pgPending.set(id, resolve);
+    mainWindow.webContents.send('pg-from-generator', { id, action: msg && msg.action, payload: msg && msg.payload });
+    setTimeout(() => { if (_pgPending.has(id)) { _pgPending.delete(id); resolve({ error: 'timeout' }); } }, 120000);
+}));
+ipcMain.on('pg-reply', (e, msg) => {
+    const resolve = msg && _pgPending.get(msg.id);
+    if (resolve) { _pgPending.delete(msg.id); resolve(msg.data); }
+});
+
 async function initializeCurationFromConfiguredRoot() {
     try {
         const rootPath = getConfiguredLibraryRoot();
@@ -2603,6 +2640,7 @@ ipcMain.handle('dialog:pickAudioFiles', async (e, opts = {}) => {
 // Sincronizacion del Gestor de Tipos de Archivo <-> ventana principal.
 ipcMain.on('file-types-data-changed', () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('file-types-data-updated');
+    if (playlistGeneratorWindow && !playlistGeneratorWindow.isDestroyed()) playlistGeneratorWindow.webContents.send('file-types-data-updated');
 });
 ipcMain.on('file-types-assignments-changed', () => {
     if (fileTypesManagerWindow && !fileTypesManagerWindow.isDestroyed()) fileTypesManagerWindow.webContents.send('file-types-data-updated');

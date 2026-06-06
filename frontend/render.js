@@ -37,7 +37,32 @@ const { version: APP_VERSION } = require('../package.json');
 const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manager');
 const { DEFAULT_SHORTCUTS } = require('./command_registry');
 const { runAutoPlayOnStart } = require('./autostart_runtime');
+const { createPlaylistGeneratorCore } = require('../backend/services/playlist_generator_core');
 const shortcutManager = new ShortcutManager();
+
+// Núcleo del Generador de Playlist (lógica pura extraída a backend/services).
+// Creación perezosa: la primera llamada ocurre al generar (runtime), cuando
+// manualCuesDB / fileTypesData / genreProfiles / ICON_CLOCK_LABEL ya existen.
+let _playlistGenCore = null;
+function getPlaylistGenCore() {
+    if (!_playlistGenCore) {
+        _playlistGenCore = createPlaylistGeneratorCore({
+            getManualCuesDB: () => manualCuesDB,
+            getFileTypesData: () => fileTypesData,
+            getGenreProfiles: () => genreProfiles,
+            getTrackTypeData,
+            shuffleArray,
+            ICON_CLOCK_LABEL,
+            ICON_TEMP_LABEL: ICON_TEMPERATURE_LABEL,
+            ICON_HUM_LABEL: ICON_HUMIDITY_LABEL,
+            listFolderFiles: async (folderPath, recursive) => {
+                const rels = await randomFolderSource.warmRandomFolder(folderPath, recursive);
+                return (rels || []).map(rel => randomFolderSource.resolveAbsolute(folderPath, rel));
+            }
+        });
+    }
+    return _playlistGenCore;
+}
 
 
 document.addEventListener('dragover', (e) => e.preventDefault());
@@ -754,19 +779,41 @@ function rebuildPlaylistColumns(prefs = uiPrefs) {
     
     const allRows = playlistTable.querySelectorAll('tbody tr');
     allRows.forEach(tr => {
-        let rowHtml = '';
-        visibleCols.forEach(colId => {
-            if (colId === 'col-hora') rowHtml += tr.dataset.cellHtmlHora || '<td class="col-hora"></td>';
-            if (colId === 'col-titulo') rowHtml += tr.dataset.cellHtmlTitulo || '<td class="col-titulo"></td>';
-            if (colId === 'col-duracion') rowHtml += tr.dataset.cellHtmlDuracion || '<td class="col-duracion"></td>';
-            if (colId === 'col-intro') rowHtml += tr.dataset.cellHtmlIntro || '<td class="col-intro"></td>';
-            if (colId === 'col-outro') rowHtml += tr.dataset.cellHtmlOutro || '<td class="col-outro"></td>';
+        const currentCells = {};
+        Array.from(tr.children).forEach(td => {
+            if (td.classList.contains('col-hora')) currentCells['col-hora'] = td;
+            else if (td.classList.contains('col-titulo')) currentCells['col-titulo'] = td;
+            else if (td.classList.contains('col-duracion')) currentCells['col-duracion'] = td;
+            else if (td.classList.contains('col-intro')) currentCells['col-intro'] = td;
+            else if (td.classList.contains('col-outro')) currentCells['col-outro'] = td;
         });
-        tr.innerHTML = rowHtml;
+
+        tr.innerHTML = '';
+        visibleCols.forEach(colId => {
+            if (currentCells[colId]) {
+                tr.appendChild(currentCells[colId]);
+            } else {
+                const tempDiv = document.createElement('table');
+                let rawHtml = '';
+                if (colId === 'col-hora') rawHtml = tr.dataset.cellHtmlHora || '<td class="col-hora">--:--:--</td>';
+                if (colId === 'col-titulo') rawHtml = tr.dataset.cellHtmlTitulo || '<td class="col-titulo"></td>';
+                if (colId === 'col-duracion') rawHtml = tr.dataset.cellHtmlDuracion || '<td class="col-duracion"></td>';
+                if (colId === 'col-intro') rawHtml = tr.dataset.cellHtmlIntro || '<td class="col-intro"></td>';
+                if (colId === 'col-outro') rawHtml = tr.dataset.cellHtmlOutro || '<td class="col-outro"></td>';
+                
+                tempDiv.innerHTML = `<tbody><tr>${rawHtml}</tr></tbody>`;
+                const newTd = tempDiv.querySelector('td');
+                if (newTd) tr.appendChild(newTd);
+            }
+        });
     });
 
     applyPlaylistColumnWidths(prefs);
     initPlaylistColumnResizers(prefs);
+    
+    // Al regenerar columnas, forzamos recálculo de las horas para
+    // que cualquier columna de hora recién agregada reciba los tiempos correctos.
+    calcularHorasPlaylist();
 }
 
 function getRowLocation(row) {
@@ -1053,7 +1100,7 @@ function setQueuedNextManual(row) {
 function executePlaylistClickAction(actionKey, targetRow) {
     switch (actionKey) {
         case 'smart_play':
-            if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
+            if (isProgramAudioOnAir()) {
                 setQueuedNextManual(targetRow);
             } else {
                 playRow(targetRow, false, 0, { forceFollowView: true, startCause: 'manual-jump' });
@@ -3476,7 +3523,7 @@ document.addEventListener("DOMContentLoaded", () => {
         rotationButton.className = 'toolbar-btn toolbar-btn-icon-only';
         rotationButton.title = 'Generador de Playlists (en desarrollo)';
         rotationButton.innerHTML = '<span class="toolbar-btn-icon">🧩</span>';
-        rotationButton.addEventListener('click', () => { openRotationModal(); });
+        rotationButton.addEventListener('click', () => { ipcRenderer.send('open-playlist-generator'); });
         toolbarGroup.appendChild(rotationButton);
 
         const cartwallButton = document.createElement('button');
@@ -3613,6 +3660,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const cwPanel = document.getElementById('right-panel-cartwall');
+    
+    // Fallback global para reorganización de pestañas (cuando se suelta fuera de una pestaña específica)
+    document.addEventListener('dragover', (e) => {
+        if (plTabReorderSource) e.preventDefault();
+    });
+    document.addEventListener('drop', (e) => {
+        if (plTabReorderSource) {
+            e.preventDefault();
+            const plTabsContainer = document.querySelector('.playlist-tabs-container');
+            const tabs = Array.from(plTabsContainer.querySelectorAll('.pl-tab'));
+            if (tabs.length > 0) {
+                const firstRect = tabs[0].getBoundingClientRect();
+                if (e.clientX < firstRect.left + firstRect.width / 2) {
+                    reorderPlaylistTabTo(plTabReorderSource, tabs[0], e.clientX);
+                } else {
+                    const lastTab = tabs[tabs.length - 1];
+                    reorderPlaylistTabTo(plTabReorderSource, lastTab, lastTab.getBoundingClientRect().right + 1);
+                }
+            }
+            plTabReorderSource = null;
+        }
+    });
+
     if (cwPanel) {
         cwPanel.style.display = uiPrefs.cartwall ? 'flex' : 'none';
         syncCartwallResizerVisibility();
@@ -3823,9 +3893,16 @@ function wirePlaylistTabCustomization() {
     const miRename = document.getElementById('pltm-rename');
     const miToggle = document.getElementById('pltm-toggle-reorder');
     const miReset = document.getElementById('pltm-reset');
+    const miResetOrder = document.getElementById('pltm-reset-order');
     if (miRename) miRename.addEventListener('click', () => { hideAllMenus(); openPlaylistRenameModal(plTabContextTarget); });
     if (miToggle) miToggle.addEventListener('click', () => { setPlaylistReorderEnabled(!uiPrefs.allowPlaylistReorder); refreshPlTabContextMenuState(); hideAllMenus(); });
     if (miReset) miReset.addEventListener('click', () => { hideAllMenus(); renamePlaylistTab(plTabContextTarget, PLAYLIST_DEFAULT_NAMES[plTabContextTarget]); });
+    if (miResetOrder) miResetOrder.addEventListener('click', () => { 
+        hideAllMenus(); 
+        uiPrefs.playlistOrder = [0, 1, 2, 3]; 
+        saveConfig(uiPrefsPath, uiPrefs); 
+        applyPlaylistTabPrefs();
+    });
 
     const btnCancel = document.getElementById('btn-cancel-pl-rename');
     const btnAccept = document.getElementById('btn-accept-pl-rename');
@@ -4764,7 +4841,7 @@ ipcRenderer.on('menu-delete-selected', () => {
 ipcRenderer.on('menu-shuffle', () => { handleShuffleActivePlaylist(); });
 ipcRenderer.on('menu-clear-played', () => { handleClearPlayedTracks(); });
 ipcRenderer.on('menu-check-links', () => { handleCheckBrokenLinks(); });
-ipcRenderer.on('menu-open-rotation', () => { openRotationModal(); });
+ipcRenderer.on('menu-open-rotation', () => { ipcRenderer.send('open-playlist-generator'); });
 ipcRenderer.on('menu-toggle-loop', () => { setLoopPlaylistMode(!generalPrefs.modeLoopPlaylist); });
 
 ipcRenderer.on('menu-add-stop', () => { insertSpecialRow('stop'); });
@@ -6160,7 +6237,13 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
         && !(execution === 'interrupt' && interruptAllowed);
     const playbackAnchorRow = shouldQueueAfterCurrent ? getPlaybackAnchorRow() : null;
     if (playbackAnchorRow && playbackAnchorRow.parentNode === targetTbody) {
-        moveRowsAfterAnchor(insertedRows, playbackAnchorRow);
+        const _newRank = getEventPriorityRank(eventObj);
+        let _anchor = playbackAnchorRow;
+        for (let _s = _anchor.nextElementSibling; _s && _s.parentNode === targetTbody && _s.dataset.eventId && !insertedRows.includes(_s); _s = _s.nextElementSibling) {
+            if (getPlaylistRowEventRank(_s) < _newRank) break;
+            _anchor = _s;
+        }
+        moveRowsAfterAnchor(insertedRows, _anchor);
     }
     calcularHorasPlaylist(); updateNextTrackVisuals();
     markEventQueueAfterInsert(eventObj, runtimeOptions, firstInsertedRow, maxDelayActive, execution, action, interruptAllowed || (fromPlaylistCommand && action !== 'append-end'));
@@ -6254,23 +6337,137 @@ setInterval(() => {
 
 explorerContainer.addEventListener('click', () => { hideAllMenus(); clearSelection(); });
 
+// ── Accesos directos por Tipo de Archivo (Identificaciones / Comerciales /
+// Pisadores) en el explorador. La carpeta raíz se guarda en el propio tipo
+// (file_types.json, campo shortcutRoot) y se sincroniza con el Gestor de Tipos
+// vía 'file-types-data-changed' / 'file-types-data-updated'.
+const SHORTCUT_TYPE_IDS = ['t_station_id', 't_comercial', 't_pisador'];
+
+async function configureTypeRoot(typeId) {
+    const type = fileTypesData.find(t => t.id === typeId);
+    if (!type) return;
+    let root = '';
+    try { root = await ipcRenderer.invoke('dialog:pickFolder', { title: `Carpeta raíz de ${type.name}` }); } catch (e) { root = ''; }
+    if (!root) return;
+    if (type.shortcutRoot && type.shortcutRoot !== root) {
+        delete explicitTypesDB[type.shortcutRoot];
+        fileTypeAssignments.removeOptions(type.shortcutRoot, fileTypeOptionsDB);
+    }
+    type.shortcutRoot = root;
+    type.shortcutSub = true; // raíz de tipo: SIEMPRE incluye subcarpetas (obvio).
+    // La raíz se asigna como carpeta de ESTE tipo: su contenido toma el tipo
+    // (color/separación) y aparece en el Gestor como asignación.
+    explicitTypesDB[root] = type.id;
+    fileTypeAssignments.setOptions(root, { kind: 'folder', includeSubfolders: true, ignoreSeparation: true, saveToHistory: false }, fileTypeOptionsDB);
+    saveConfig(fileTypesPath, fileTypesData);
+    saveExplicitTypes();
+    saveFileTypeOptions();
+    try { ipcRenderer.send('file-types-data-changed'); } catch (e) {}
+    // El refresco del explorador lo hace el handler 'file-types-data-updated'
+    // (un solo render → evita la duplicación de accesos directos).
+}
+
+function clearTypeRoot(typeId) {
+    const type = fileTypesData.find(t => t.id === typeId);
+    if (!type) return;
+    const old = type.shortcutRoot;
+    if (old) {
+        delete explicitTypesDB[old];
+        fileTypeAssignments.removeOptions(old, fileTypeOptionsDB);
+    }
+    delete type.shortcutRoot; delete type.shortcutSub;
+    saveConfig(fileTypesPath, fileTypesData);
+    saveExplicitTypes();
+    saveFileTypeOptions();
+    try { ipcRenderer.send('file-types-data-changed'); } catch (e) {}
+}
+
+function renderTypeShortcuts(container) {
+    // Cualquier tipo (excepto Locuciones) con "mostrar acceso directo" activado.
+    const types = fileTypesData.filter(t => t && t.id !== 't_time' && t.showShortcut === true);
+    if (!types.length) return;
+    const ul = document.createElement('ul'); ul.className = 'file-tree root';
+    types.forEach(type => {
+        const li = document.createElement('li');
+        const div = document.createElement('div'); div.className = 'tree-item';
+        const root = type.shortcutRoot;
+        const configured = root && (() => { try { return fs.statSync(root).isDirectory(); } catch (e) { return false; } })();
+        if (configured) {
+            div.dataset.path = root; div.draggable = true; div.title = root;
+            div.innerHTML = `<span class="tree-toggle">+</span><span class="icon-folder" style="color:${type.color}">📂</span> `;
+            const nm = document.createElement('span'); nm.textContent = type.name; div.appendChild(nm);
+            div.ondragstart = (e) => {
+                e.dataTransfer.setData('text/plain', root);
+                e.dataTransfer.setData('application/json', JSON.stringify([root]));
+                e.dataTransfer.effectAllowed = 'copy';
+            };
+            const toggle = div.querySelector('.tree-toggle');
+            const expand = () => {
+                const existing = li.querySelector('ul');
+                if (existing) { const show = existing.style.display === 'none'; existing.style.display = show ? 'block' : 'none'; toggle.textContent = show ? '-' : '+'; return; }
+                try { const kids = fs.readdirSync(root).map(c => path.join(root, c)); renderTree(kids, li, false, true); toggle.textContent = '-'; } catch (err) {}
+            };
+            div.onclick = (e) => { e.stopPropagation(); if (e.target.classList.contains('tree-toggle')) expand(); };
+            div.ondblclick = (e) => { e.stopPropagation(); expand(); };
+            div.oncontextmenu = (e) => {
+                e.preventDefault(); e.stopPropagation();
+                clearSelection(); div.classList.add('selected');
+                contextMenuTargetFolder = root;
+                // Mismo menú que cualquier carpeta, pero sin "Establecer tipo de
+                // archivo" (estos accesos YA son la raíz de un tipo).
+                const setTypeItem = document.getElementById('ctx-folder-set-type'); if (setTypeItem) setTypeItem.style.display = 'none';
+                const setTypeSep = document.getElementById('ctx-folder-set-type-sep'); if (setTypeSep) setTypeSep.style.display = 'none';
+                showContextMenu(explorerFolderMenu, e.pageX, e.pageY);
+                applyMenuLogic();
+            };
+        } else {
+            div.style.opacity = '0.6';
+            div.innerHTML = `<span class="tree-toggle" style="visibility:hidden">+</span><span class="icon-folder" style="color:${type.color}">⭐</span> `;
+            const nm = document.createElement('span'); nm.textContent = `${type.name} (configurar)`; div.appendChild(nm);
+            div.title = 'Doble clic o clic derecho para elegir la carpeta raíz';
+            div.ondblclick = (e) => { e.stopPropagation(); configureTypeRoot(type.id); };
+            div.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); showAddRootMenu(e.pageX, e.pageY, type.id); };
+        }
+        li.appendChild(div); ul.appendChild(li);
+    });
+    container.appendChild(ul);
+}
+
+function showAddRootMenu(x, y, typeId) {
+    document.getElementById('type-root-mini-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.id = 'type-root-mini-menu';
+    menu.className = 'context-menu';
+    menu.style.cssText = `display:block; position:fixed; left:${x}px; top:${y}px; z-index:99999;`;
+    const item = document.createElement('div');
+    item.className = 'context-item';
+    item.textContent = '📁 Agregar carpeta raíz';
+    item.addEventListener('click', () => { menu.remove(); configureTypeRoot(typeId); });
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    const close = () => { menu.remove(); document.removeEventListener('mousedown', close, true); };
+    setTimeout(() => document.addEventListener('mousedown', close, true), 0);
+}
+
 async function loadDrives() {
     const isLinux = process.platform === 'linux';
+    explorerContainer.innerHTML = '';
     let drives = [];
     try { drives = await ipcRenderer.invoke('get-system-drives'); } catch (e) { }
+    const shortcuts = [];
     try {
         const paths = await ipcRenderer.invoke('get-default-paths');
-        const shortcuts = [];
         // Windows: Desktop + Downloads + Music
         // Linux: Downloads + Music + Home (sin Desktop, no se usa)
         if (!isLinux && paths.desktop) shortcuts.push(paths.desktop);
         if (paths.downloads) shortcuts.push(paths.downloads);
         if (paths.music) shortcuts.push(paths.music);
         if (isLinux && paths.home) shortcuts.push(paths.home);
-        renderTree([...shortcuts, ...drives], explorerContainer, true);
-    } catch (e) {
-        renderTree(drives, explorerContainer, true);
-    }
+    } catch (e) { }
+    // Orden pedido: Escritorio/Descargas/Música → accesos directos por tipo → discos.
+    if (shortcuts.length) renderTree(shortcuts, explorerContainer, true);
+    try { renderTypeShortcuts(explorerContainer); } catch (e) {}
+    renderTree(drives, explorerContainer, true);
 }
 
 function clearSelection() { document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('selected')); }
@@ -6297,7 +6494,7 @@ function handleExplorerSelection(e, div) {
 }
 function getSelectedExplorerPaths() { return Array.from(document.querySelectorAll('.tree-item.selected')).map(el => el.dataset.path).filter(Boolean); }
 
-function renderTree(items, container, isRoot = false) {
+function renderTree(items, container, isRoot = false, insideType = false) {
     const ul = document.createElement('ul'); ul.className = isRoot ? 'file-tree root' : 'file-tree';
     let dirs = [], files = [];
     items.forEach(itemPath => {
@@ -6387,12 +6584,16 @@ function renderTree(items, container, isRoot = false) {
                         if (iconSpan && iconSpan.textContent === '📁') iconSpan.textContent = '📂';
                         if (toggleSpan) toggleSpan.textContent = '-';
                         const children = fs.readdirSync(itemPath).map(child => path.join(itemPath, child));
-                        renderTree(children, li);
+                        renderTree(children, li, false, insideType);
                     } catch (err) { console.error("Error abriendo carpeta:", err); }
                 }
             };
             div.oncontextmenu = (e) => {
                 e.preventDefault(); e.stopPropagation(); clearSelection(); div.classList.add('selected'); contextMenuTargetFolder = itemPath;
+                // Dentro de un acceso directo de tipo, todo pertenece a ese tipo:
+                // ocultar "Establecer tipo de archivo". En carpetas normales, mostrar.
+                const _setTypeItem = document.getElementById('ctx-folder-set-type'); if (_setTypeItem) _setTypeItem.style.display = insideType ? 'none' : '';
+                const _setTypeSep = document.getElementById('ctx-folder-set-type-sep'); if (_setTypeSep) _setTypeSep.style.display = insideType ? 'none' : '';
                 let explicitId = explicitTypesDB[itemPath];
                 if (!explicitId) explicitId = getTrackTypeData(path.join(itemPath, 'dummy.mp3')) ? getTrackTypeData(path.join(itemPath, 'dummy.mp3')).id : null;
                 const isDefault = !explicitId;
@@ -7054,6 +7255,8 @@ ipcRenderer.on('file-types-data-updated', () => {
     reloadExplicitTypes();
     reloadFileTypeOptions();
     recolorAllPlaylistRows();
+    // Sincronizar accesos directos por tipo (raíz cambiada desde el Gestor).
+    try { loadDrives(); } catch (e) {}
 });
 
 function serializePlaylistClipboardRow(tr, includeElement = false) {
@@ -7455,65 +7658,6 @@ function getPlaylistRowColor(rowOrType, ruta = '') {
     return typeData ? typeData.color : '#e0e0e0';
 }
 
-function normalizeRotationText(value) {
-    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-}
-
-function getRotationGenreCategoryDefs() {
-    const categories = [];
-    const seen = new Set();
-    const addGenre = (genreKey, displayName, parentGenre = '') => {
-        const parentKey = normalizeRotationText(parentGenre);
-        const baseKey = normalizeRotationText(genreKey || displayName);
-        const key = parentKey && baseKey && !baseKey.includes(':') ? `${parentKey}:${baseKey}` : baseKey;
-        if (!key || seen.has(key)) return;
-        seen.add(key);
-        const name = String(displayName || genreKey || '').trim() || key;
-        const parentName = String(parentGenre || '').trim();
-        categories.push({
-            id: `genre:${key}`,
-            name: parentName ? `${parentName} / ${name}` : name,
-            color: '#2ecc71',
-            source: 'genre',
-            genreKey: key,
-            parentGenre: parentKey,
-            sortName: parentName ? `${parentName} / ${name}` : name,
-            aliases: parentName ? [`${name} (${parentName})`, name] : []
-        });
-    };
-
-    (genreProfiles || []).forEach(profile => {
-        // Only show genres that have at least one track
-        if (profile.trackCount > 0) {
-            addGenre(profile.genreKey, profile.displayName || profile.genreKey, profile.parentGenre || '');
-        }
-    });
-
-    return categories.sort((a, b) => String(a.sortName || a.name).localeCompare(String(b.sortName || b.name), 'es', { sensitivity: 'base' }));
-}
-
-function getRotationCategoryDefs() {
-    return [
-        { id: 'default', name: 'Musica', color: '#e0e0e0', source: 'type' },
-        ...fileTypesData.map(t => ({ id: t.id, name: t.name, color: t.color || '#e0e0e0', identifier: t.identifier || '', source: 'type' })),
-        ...getRotationGenreCategoryDefs()
-    ];
-}
-
-function resolveRotationCategory(token, categoryDefs = null) {
-    const clean = normalizeRotationText(String(token || '').replace(/^@/, ''));
-    if (!clean || ['musica', 'default', 'general', 'normal'].includes(clean)) return { id: 'default', name: 'Musica', color: '#e0e0e0' };
-    const defs = categoryDefs || getRotationCategoryDefs();
-    return defs.find(cat => {
-        return normalizeRotationText(cat.id) === clean || normalizeRotationText(cat.name) === clean || normalizeRotationText(cat.identifier) === clean || normalizeRotationText(cat.genreKey) === clean || (Array.isArray(cat.aliases) && cat.aliases.some(alias => normalizeRotationText(alias) === clean));
-    }) || null;
-}
-
-function getDefaultRotationPattern() {
-    const stationId = fileTypesData.find(t => /station|id|pisador|jingle/i.test(`${t.name} ${t.identifier}`));
-    return ['Musica', stationId ? stationId.name : null, 'Musica', 'Musica'].filter(Boolean).join('\n');
-}
-
 function parseRotationIntegerInput(input, fallback, min, max) {
     const raw = String(input?.value ?? '').replace(/[^\d]/g, '');
     const parsed = parseInt(raw, 10);
@@ -7557,284 +7701,11 @@ function saveClockwheelPrefsFromUi() {
     saveConfig(clockwheelPrefsPath, clockwheelPrefs);
 }
 
-function getRotationPatternCategories(patternText, categoryDefs = null) {
-    const defs = categoryDefs || getRotationCategoryDefs();
-    const rawTokens = String(patternText || '').split(/[\n,>]+/).map(t => t.trim()).filter(Boolean);
-    const tokens = rawTokens.length ? rawTokens : getDefaultRotationPattern().split(/\n/);
-    return tokens.map(token => ({ token, category: resolveRotationCategory(token, defs) })).filter(item => item.category);
-}
-
-function getRotationTrackTitle(filePath, data) {
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const title = (data?.customTitle || '').trim();
-    const artist = (data?.customArtist || '').trim();
-    if (artist && title) return `${artist} - ${title}${path.extname(filePath)}`;
-    return `${title || baseName}${path.extname(filePath)}`;
-}
-
-function getRotationArtistKey(filePath, data) {
-    const artist = (data?.customArtist || '').trim();
-    if (artist) return normalizeRotationText(artist);
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const split = baseName.split(/\s+-\s+/);
-    return normalizeRotationText(split.length > 1 ? split[0] : baseName);
-}
-
-function getRotationTitleKey(filePath, data) {
-    const title = (data?.customTitle || '').trim();
-    if (title) return normalizeRotationText(title);
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const split = baseName.split(/\s+-\s+/);
-    return normalizeRotationText(split.length > 1 ? split.slice(1).join(' - ') : baseName);
-}
-
-function getRotationDuration(filePath, data) {
-    const start = parseFloat(data?.inicio || 0) || 0;
-    const end = parseFloat(data?.fin || 0) || 0;
-    if (end > start) return Math.round(end - start);
-    const duration = parseFloat(data?.duration || 0) || 0;
-    return duration > 0 ? Math.round(duration) : 180;
-}
-
-function getRotationTrackGenreCategoryIds(data) {
-    const ids = new Set();
-    const add = (value) => {
-        const key = normalizeRotationText(value);
-        if (key) ids.add(`genre:${key}`);
-    };
-    const addSubgenre = (subgenre, parentGenre = '') => {
-        const subKey = normalizeRotationText(subgenre);
-        if (!subKey) return;
-        const parentKey = normalizeRotationText(parentGenre);
-        if (parentKey && !subKey.includes(':')) add(`${parentKey}:${subKey}`);
-        add(subKey);
-    };
-    add(data?.primaryGenre);
-    const genreParts = String(data?.genre || '').split('/').map(part => part.trim()).filter(Boolean);
-    if (data?.genre) {
-        genreParts.forEach(add);
-    }
-    if (genreParts.length > 1) addSubgenre(genreParts.slice(1).join(' / '), data?.primaryGenre || genreParts[0] || '');
-    addSubgenre(data?.subgenre, data?.primaryGenre || genreParts[0] || '');
-    try {
-        const parsed = JSON.parse(data?.genresJson || '[]');
-        if (Array.isArray(parsed)) parsed.forEach(item => add(item.key || item.name));
-    } catch (err) { }
-    return Array.from(ids);
-}
-
-function addRotationCandidate(byCategory, catId, track) {
-    if (!byCategory.has(catId)) byCategory.set(catId, []);
-    byCategory.get(catId).push(track);
-}
-
-function isTimeLocutionTrack(track) {
-    return track?.rowType === 'time' || track?.filePath === 'time_locution';
-}
-
-function inferRotationCategoryIdsFromPath(filePath, data, categoryDefs, typeData) {
-    const ids = new Set();
-    const haystack = [
-        path.dirname(filePath),
-        path.basename(filePath, path.extname(filePath)),
-        data?.genre,
-        data?.primaryGenre,
-        data?.subgenre
-    ].filter(Boolean).join(' ');
-
-    const cleanHaystack = normalizeRotationText(haystack);
-    if (!cleanHaystack) {
-        if (!typeData || typeData.id === 'default' || typeData.id === 'general') ids.add('default');
-        return Array.from(ids);
-    }
-
-    categoryDefs.forEach(category => {
-        if (!category || category.id === 'default' || category.id === 'general') return;
-        const candidates = [
-            category.name,
-            category.identifier,
-            category.genreKey,
-            ...(Array.isArray(category.aliases) ? category.aliases : [])
-        ].filter(Boolean);
-        if (candidates.some(candidate => {
-            const cleanNeedle = normalizeRotationText(candidate);
-            return cleanNeedle && cleanHaystack.includes(cleanNeedle);
-        })) {
-            ids.add(category.id);
-        }
-    });
-
-    if (!typeData || typeData.id === 'default' || typeData.id === 'general') ids.add('default');
-    return Array.from(ids);
-}
-
-function getRotationCandidates(categoryDefs = null) {
-    const defs = categoryDefs || getRotationCategoryDefs();
-    const byCategory = new Map();
-    defs.forEach(cat => byCategory.set(cat.id, []));
-    const timeCategory = fileTypesData.find(t => /locuci|hora|time|saytime/i.test(`${t.name} ${t.identifier}`));
-    if (timeCategory) {
-        addRotationCandidate(byCategory, timeCategory.id, {
-            filePath: 'time_locution',
-            title: ICON_CLOCK_LABEL,
-            duration: 5,
-            artistKey: 'locucion-hora',
-            titleKey: 'locucion-hora',
-            folderKey: 'time',
-            rowType: 'time'
-        });
-    }
-    Object.entries(manualCuesDB || {}).forEach(([filePath, data]) => {
-        if (!filePath || !/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(filePath)) return;
-        const typeData = getTrackTypeData(filePath);
-        const catId = typeData ? typeData.id : 'default';
-        const isId = typeData && /id|pisador|jingle|cuña|station|promo/i.test(`${typeData.name} ${typeData.identifier}`);
-        const track = {
-            filePath,
-            title: getRotationTrackTitle(filePath, data),
-            duration: getRotationDuration(filePath, data),
-            artistKey: getRotationArtistKey(filePath, data),
-            titleKey: getRotationTitleKey(filePath, data),
-            folderKey: normalizeRotationText(path.dirname(filePath)),
-            isIdentifier: !!isId
-        };
-        addRotationCandidate(byCategory, catId, track);
-        getRotationTrackGenreCategoryIds(data).forEach(genreCatId => addRotationCandidate(byCategory, genreCatId, track));
-        inferRotationCategoryIdsFromPath(filePath, data, defs, typeData).forEach(inferredCatId => addRotationCandidate(byCategory, inferredCatId, track));
-    });
-    byCategory.forEach((tracks, catId) => byCategory.set(catId, { items: shuffleArray([...tracks]), cursor: 0 }));
-    return byCategory;
-}
-
-function isRecentlyUsed(value, recent, distance) {
-    if (!value || distance <= 0) return false;
-    const scope = recent.slice(-distance);
-    return scope.includes(value);
-}
-
-function pickRotationTrack(pool, recent, prefs) {
-    if (!pool || !pool.items || pool.items.length === 0) return null;
-
-    if (pool.cursor >= pool.items.length) {
-        pool.items = shuffleArray([...pool.items]);
-        pool.cursor = 0;
-    }
-
-    const passes = [
-        track => {
-            if (track.isIdentifier) return !isRecentlyUsed(track.filePath, recent.paths, 2);
-            return !recent.paths.includes(track.filePath)
-                && (!prefs.checkArtist || !isRecentlyUsed(track.artistKey, recent.artists, prefs.sepArtist))
-                && (!prefs.checkTitle || !isRecentlyUsed(track.titleKey, recent.titles, prefs.sepTitle));
-        },
-        track => {
-            if (track.isIdentifier) return !isRecentlyUsed(track.filePath, recent.paths, 2);
-            return !recent.paths.includes(track.filePath)
-                && (!prefs.checkArtist || !isRecentlyUsed(track.artistKey, recent.artists, Math.floor(prefs.sepArtist / 2)))
-                && (!prefs.checkTitle || !isRecentlyUsed(track.titleKey, recent.titles, Math.floor(prefs.sepTitle / 2)));
-        },
-        track => {
-            if (track.isIdentifier) return true;
-            return !recent.paths.includes(track.filePath);
-        },
-        () => true
-    ];
-
-    for (const predicate of passes) {
-        for (let i = pool.cursor; i < pool.items.length; i++) {
-            const track = pool.items[i];
-            if (track.isIdentifier && recent.paths.includes(track.filePath)) continue;
-
-            if (predicate(track)) {
-                const temp = pool.items[pool.cursor];
-                pool.items[pool.cursor] = pool.items[i];
-                pool.items[i] = temp;
-
-                const pickedTrack = pool.items[pool.cursor];
-                pool.cursor++;
-                return isTimeLocutionTrack(pickedTrack) ? { ...pickedTrack } : { ...pickedTrack };
-            }
-        }
-    }
-
-    const fallbackTrack = pool.items[pool.cursor];
-    pool.cursor++;
-    return isTimeLocutionTrack(fallbackTrack) ? { ...fallbackTrack } : { ...fallbackTrack };
-}
-
-async function buildRotationPlan() {
-    const prefs = readRotationPrefsFromUi();
-    const categoryDefs = getRotationCategoryDefs();
-    const pattern = getRotationPatternCategories(prefs.pattern, categoryDefs);
-
-    if (!pattern || pattern.length === 0) {
-        throw new Error('El patron esta vacio o es invalido.');
-    }
-
-    const byCategory = getRotationCandidates(categoryDefs);
-    const emptyCategories = pattern.filter(p => !byCategory.has(p.category.id) || byCategory.get(p.category.id).length === 0);
-
-    if (emptyCategories.length > 0) {
-        const names = [...new Set(emptyCategories.map(p => p.category.name))];
-        throw new Error(`Faltan canciones: Las categorias [${names.join(', ')}] no tienen ninguna pista asignada en la biblioteca.`);
-    }
-
-    const recent = { paths: [], artists: [], titles: [], folders: [] };
-    const tracks = [];
-    const missing = new Map();
-    const targetSeconds = prefs.targetMinutes * 60;
-    let totalSeconds = 0;
-    let cursor = 0;
-    let attempts = 0;
-
-    // Use setTimeout to yield so the "Calculando..." UI update can paint
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    while (totalSeconds < targetSeconds && pattern.length > 0 && attempts < 1200) {
-        attempts++;
-        const item = pattern[cursor % pattern.length];
-        cursor++;
-        const pool = byCategory.get(item.category.id) || [];
-        const track = pickRotationTrack(pool, recent, prefs);
-
-        if (!track) {
-            missing.set(item.category.name, (missing.get(item.category.name) || 0) + 1);
-            if (Array.from(byCategory.values()).every(list => list.every(isTimeLocutionTrack))) break;
-            continue;
-        }
-
-        tracks.push({ ...track, category: item.category, rowType: track.rowType || 'normal' });
-        totalSeconds += track.duration;
-        recent.paths.push(track.filePath);
-        recent.artists.push(track.artistKey);
-        recent.titles.push(track.titleKey);
-        recent.folders.push(track.folderKey);
-
-        const maxMemory = Math.max(60, (prefs.sepArtist || 0) * 2, (prefs.sepTitle || 0) * 2);
-        if (recent.paths.length > maxMemory) recent.paths.shift();
-        if (recent.artists.length > maxMemory) recent.artists.shift();
-        if (recent.titles.length > maxMemory) recent.titles.shift();
-        if (recent.folders.length > maxMemory) recent.folders.shift();
-    }
-
-    return {
-        tracks,
-        totalSeconds,
-        missing: Object.fromEntries(missing)
-    };
-}
-
-function formatRotationDuration(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.round(seconds % 60).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
-}
-
 function updateRotationQuickSummary() {
     const summary = document.getElementById('rotation-summary');
     if (!summary) return;
     const prefs = readRotationPrefsFromUi();
-    const rawPattern = String(prefs.pattern || getDefaultRotationPattern());
+    const rawPattern = String(prefs.pattern || getPlaylistGenCore().getDefaultRotationPattern());
     const patternSteps = rawPattern.split(/[\n,>]+/).map(t => t.trim()).filter(Boolean).length;
     summary.textContent = `Patron: ${patternSteps} paso(s)\nObjetivo: ${prefs.targetMinutes} minuto(s)\nPulsa Preflight para calcular sin bloquear mientras editas.`;
 }
@@ -7849,9 +7720,9 @@ function updateRotationSummary(plan = null) {
     const missingItems = Array.isArray(plan.missing) ? plan.missing : Object.keys(plan.missing || {});
     const missingText = missingItems.length ? `\nAlertas: ${missingItems.join(', ')} sin suficientes canciones.` : '';
     const prefs = readRotationPrefsFromUi();
-    const rawPattern = String(prefs.pattern || getDefaultRotationPattern());
+    const rawPattern = String(prefs.pattern || getPlaylistGenCore().getDefaultRotationPattern());
     const patternSteps = rawPattern.split(/[\n,>]+/).map(t => t.trim()).filter(Boolean).length;
-    summary.textContent = `Patron: ${patternSteps} paso(s)\nGeneraria: ${plan.tracks.length} pista(s) / ${formatRotationDuration(plan.totalSeconds)}${missingText}`;
+    summary.textContent = `Patron: ${patternSteps} paso(s)\nGeneraria: ${plan.tracks.length} pista(s) / ${getPlaylistGenCore().formatRotationDuration(plan.totalSeconds)}${missingText}`;
 }
 
 function runRotationPreflight() {
@@ -7860,7 +7731,7 @@ function runRotationPreflight() {
     setTimeout(async () => {
         try {
             saveClockwheelPrefsFromUi();
-            updateRotationSummary(await buildRotationPlan());
+            updateRotationSummary(await getPlaylistGenCore().buildRotationPlan(readRotationPrefsFromUi()));
         } catch (err) {
             if (summary) summary.textContent = `No se pudo calcular: ${err.message}`;
         }
@@ -7874,7 +7745,7 @@ function populateRotationModal() {
     const titleEl = document.getElementById('rotation-sep-title');
     const artistCheck = document.getElementById('rotation-sep-artist-check');
     const titleCheck = document.getElementById('rotation-sep-title-check');
-    if (patternEl) patternEl.value = clockwheelPrefs.pattern || getDefaultRotationPattern();
+    if (patternEl) patternEl.value = clockwheelPrefs.pattern || getPlaylistGenCore().getDefaultRotationPattern();
     if (targetEl) targetEl.value = clockwheelPrefs.targetMinutes || 60;
     if (artistEl) artistEl.value = clockwheelPrefs.sepArtist ?? 4;
     if (titleEl) titleEl.value = clockwheelPrefs.sepTitle ?? 8;
@@ -7884,7 +7755,7 @@ function populateRotationModal() {
     const palette = document.getElementById('rotation-category-palette');
     if (palette) {
         palette.innerHTML = '';
-        getRotationCategoryDefs().forEach(cat => {
+        getPlaylistGenCore().getRotationCategoryDefs().forEach(cat => {
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'rotation-chip';
@@ -7921,7 +7792,7 @@ function closeRotationModal() {
 async function applyRotationPlanToPlaylist() {
     let plan;
     try {
-        plan = await buildRotationPlan();
+        plan = await getPlaylistGenCore().buildRotationPlan(readRotationPrefsFromUi());
     } catch (err) {
         uiAlerts.showAlert('alerts.rotation_generation_error', { error: err.message });
         return;
@@ -7999,7 +7870,7 @@ async function applyRotationPlanToPlaylist() {
             .join('\n');
         uiAlerts.showAlert('alerts.skipped_missing_files', { count: skippedMissing, list: missingList });
     }
-    recordIncident(`[CLOCKWHEEL] Rotacion generada: ${plan.tracks.length - skippedMissing} pista(s), ${formatRotationDuration(plan.totalSeconds)} en Playlist ${chosenTab + 1}.`, { category: 'system', level: 'success' });
+    recordIncident(`[CLOCKWHEEL] Rotacion generada: ${plan.tracks.length - skippedMissing} pista(s), ${getPlaylistGenCore().formatRotationDuration(plan.totalSeconds)} en Playlist ${chosenTab + 1}.`, { category: 'system', level: 'success' });
     updateRotationSummary(plan);
 
     // Cerrar modal y cambiar a la pestaña destino
@@ -8107,6 +7978,7 @@ function initRotationModal() {
     document.getElementById('btn-cancel-rotation')?.addEventListener('click', closeRotationModal);
     document.getElementById('btn-apply-rotation')?.addEventListener('click', applyRotationPlanToPlaylist);
     document.getElementById('btn-build-rotation')?.addEventListener('click', applyRotationPlanToPlaylist);
+    document.getElementById('btn-preview-rotation')?.addEventListener('click', runRotationPreflight);
     document.getElementById('rotation-pattern')?.addEventListener('input', () => updateRotationQuickSummary());
     document.getElementById('rotation-target-min')?.addEventListener('input', () => updateRotationQuickSummary());
     document.getElementById('rotation-sep-artist')?.addEventListener('input', () => updateRotationQuickSummary());
@@ -8114,6 +7986,78 @@ function initRotationModal() {
     document.getElementById('rotation-sep-artist-check')?.addEventListener('change', () => updateRotationQuickSummary());
     document.getElementById('rotation-sep-title-check')?.addEventListener('change', () => updateRotationQuickSummary());
 }
+
+// ── Generador de Playlist en ventana independiente ───────────────────────────
+// Construye el plan con el core (datos + carpetas de esta ventana principal) e
+// inserta en la playlist elegida. Reutiliza la inserción del modal.
+async function generatePlanIntoPlaylist(prefs, tab, clearList) {
+    let plan;
+    try { plan = await getPlaylistGenCore().buildRotationPlan(prefs || {}); }
+    catch (err) { return { error: err.message }; }
+    if (!plan.tracks.length) return { error: 'insufficient' };
+    const chosenTab = Number.isInteger(tab) ? tab : pgmTab;
+    const targetTbody = tbodys[chosenTab];
+    if (!targetTbody) return { error: 'no-tbody' };
+    const playingInsideTarget = currentPlayingRow && targetTbody.contains(currentPlayingRow);
+    if (clearList && playingInsideTarget) return { error: 'on-air' };
+    if (clearList) {
+        targetTbody.innerHTML = '';
+        if (queuedNextRow && !document.body.contains(queuedNextRow)) queuedNextRow = null;
+    }
+    let insertTarget = targetTbody.lastElementChild;
+    let skippedMissing = 0;
+    const chunkSize = 40;
+    for (let index = 0; index < plan.tracks.length; index += chunkSize) {
+        const chunk = plan.tracks.slice(index, index + chunkSize);
+        await ensureDbTracksLoaded(chunk.filter(t => t.rowType === 'normal').map(t => t.filePath));
+        beginBulkInsert();
+        try {
+            for (const track of chunk) {
+                const rowType = track.rowType || 'normal';
+                if (rowType === 'normal' && !fs.existsSync(track.filePath)) { skippedMissing++; continue; }
+                const row = createPlaylistRow(track.filePath, track.title, track.duration, rowType, insertTarget, 'bottom', targetTbody);
+                if (row) { row.dataset.rotationCategory = track.category?.id || ''; insertTarget = row; if (rowType === 'normal') ensurePreanalysisForTrack(track.filePath); }
+            }
+        } finally { endBulkInsert(); }
+        await nextTick();
+    }
+    if (!queuedNextRow && targetTbody.firstElementChild) queuedNextRow = resolveNextOperationalRow(targetTbody.firstElementChild, false);
+    calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot();
+    recordIncident(`[CLOCKWHEEL] Rotacion generada: ${plan.tracks.length - skippedMissing} pista(s), ${getPlaylistGenCore().formatRotationDuration(plan.totalSeconds)} en Playlist ${chosenTab + 1}.`, { category: 'system', level: 'success' });
+    return { ok: true, count: plan.tracks.length - skippedMissing, skipped: skippedMissing, totalSeconds: plan.totalSeconds };
+}
+
+ipcRenderer.on('pg-from-generator', async (e, msg) => {
+    const { id, action, payload } = msg || {};
+    let data = null;
+    try {
+        if (action === 'categories') {
+            await ensureGenreProfilesLoaded(true);
+            loadFileTypes();
+            data = getPlaylistGenCore().getRotationCategoryDefs();
+        } else if (action === 'default-pattern') {
+            data = getPlaylistGenCore().getDefaultRotationPattern();
+        } else if (action === 'saved-prefs') {
+            data = clockwheelPrefs;
+        } else if (action === 'save-prefs') {
+            clockwheelPrefs = { ...clockwheelPrefs, ...(payload || {}) };
+            saveConfig(clockwheelPrefsPath, clockwheelPrefs);
+            data = { ok: true };
+        } else if (action === 'preview') {
+            const plan = await getPlaylistGenCore().buildRotationPlan(payload || {});
+            data = { count: plan.tracks.length, totalSeconds: plan.totalSeconds, missing: plan.missing };
+        } else if (action === 'generate') {
+            data = await generatePlanIntoPlaylist((payload && payload.prefs) || {}, payload && payload.tab, payload && payload.clearList);
+        } else if (action === 'playing-tab') {
+            data = { pgmTab, playingTab: currentPlayingRow ? tbodys.indexOf(currentPlayingRow.closest('tbody')) : -1 };
+        } else if (action === 'file-types') {
+            await ensureGenreProfilesLoaded(true);
+            loadFileTypes();
+            data = fileTypesData;
+        }
+    } catch (err) { data = { error: err.message }; }
+    try { ipcRenderer.send('pg-reply', { id, data }); } catch (_) {}
+});
 
 function updateNextTrackVisuals() {
     // Si no hay una pista elegida manualmente, recalculamos dinámicamente cuál será la siguiente

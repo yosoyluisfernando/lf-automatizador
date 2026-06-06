@@ -112,7 +112,26 @@
                 </div>
                 <div class="prop-row">
                     <label for="type-color" data-i18n="file_types_manager.prop_color">Color (Lista):</label>
-                    <input type="color" id="type-color" value="#ffffff">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="color" id="type-color" value="#ffffff">
+                        <button class="btn" id="btn-reset-color" type="button" data-i18n="file_types_manager.reset_color">↺ Restablecer</button>
+                    </div>
+                </div>
+                <div class="prop-row" id="row-shortcut-root">
+                    <label data-i18n="file_types_manager.prop_root">Carpeta raíz:</label>
+                    <div style="display:flex; gap:6px; flex:1; align-items:center;">
+                        <input type="text" id="type-root" readonly placeholder="Sin carpeta raíz" style="flex:1;">
+                        <button class="btn" id="btn-pick-root" type="button" data-i18n="file_types_manager.pick_root">Seleccionar…</button>
+                        <button class="btn" id="btn-clear-root" type="button" data-i18n="file_types_manager.clear_root">Quitar</button>
+                    </div>
+                </div>
+                <div class="prop-row" id="row-show-shortcut">
+                    <label data-i18n="file_types_manager.prop_show_shortcut">Acceso directo:</label>
+                    <label style="display:flex; align-items:center; gap:6px; font-weight:normal;"><input type="checkbox" id="type-show-shortcut"> <span data-i18n="file_types_manager.show_shortcut_lbl">Mostrar en el explorador de la interfaz principal</span></label>
+                </div>
+                <div class="prop-row" id="row-shortcut-note" style="display:none;">
+                    <label></label>
+                    <span style="font-size:11px; color:#888;" data-i18n="file_types_manager.locution_note">Las locuciones se configuran en Ajustes; no se muestran como acceso directo.</span>
                 </div>
             </div>
 

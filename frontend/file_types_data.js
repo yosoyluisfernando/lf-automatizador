@@ -25,10 +25,10 @@ const defaultFadeProfile = {
 // (getCrossfadeConfig) y 'voice' marca el tipo como locucion (categoria de
 // historial). El Gestor no los expone en su interfaz, pero el dato persiste.
 const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
+    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, showShortcut: true, ...defaultFadeProfile },
     { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_pisador', name: 'Pisadores', color: '#b56ad9', identifier: 'pisador', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile }
+    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, showShortcut: true, ...defaultFadeProfile },
+    { id: 't_pisador', name: 'Pisadores', color: '#b56ad9', identifier: 'pisador', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, showShortcut: true, ...defaultFadeProfile }
 ];
 
 // Mezcla los tipos guardados en disco con los defaults: los readonly siempre

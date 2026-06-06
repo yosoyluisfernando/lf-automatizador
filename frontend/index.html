@@ -460,8 +460,8 @@
     <div id="explorer-folder-menu" class="context-menu" style="display: none;">
         <div class="context-item" id="ctx-add-random" data-i18n="context_menus.explorer_folder.add_random">🔀 Agregar carpeta como pista aleatoria</div>
         <div class="context-item" id="ctx-add-all" data-i18n="context_menus.explorer_folder.add_all">➕ Agregar todo el contenido normal</div>
-        <div class="context-separator"></div>
-        <div class="context-item has-submenu">
+        <div class="context-separator" id="ctx-folder-set-type-sep"></div>
+        <div class="context-item has-submenu" id="ctx-folder-set-type">
             <span style="display: flex; justify-content: space-between;"><span data-i18n="context_menus.explorer_folder.set_type">Establecer tipo de archivo</span> <span>▶</span></span>
             <div class="submenu" id="exp-folder-type-list" style="max-height: 250px; overflow-y: auto;"></div>
         </div>
@@ -516,6 +516,7 @@
         </div>
         <div class="context-separator"></div>
         <div class="context-item" id="pltm-reset" style="color:#aaa;" data-i18n="context_menus.pl_tab.reset">&#8634; Restablecer nombre</div>
+        <div class="context-item" id="pltm-reset-order" style="color:#aaa;" data-i18n="context_menus.pl_tab.reset_order">&#8634; Restablecer orden</div>
     </div>
 
     <!-- Modal para renombrar una playlist -->
