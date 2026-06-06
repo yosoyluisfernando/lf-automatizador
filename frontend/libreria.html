@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Biblioteca de Música - LF Automatizador</title>
+    <title data-i18n="library.title">Biblioteca de Música - LF Automatizador</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', sans-serif; background-color: #121212; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; user-select: none; }
@@ -169,29 +169,29 @@
     
     <div class="lib-header">
         <div class="lib-search-container">
-            <input type="text" id="lib-search-input" placeholder="🔍 Buscar en la base de datos... (Fuzzy Search)">
+            <input type="text" id="lib-search-input" data-i18n="[placeholder]library.search_placeholder" placeholder="🔍 Buscar en la base de datos... (Fuzzy Search)">
         </div>
-        <button id="btn-refresh" class="header-icon-btn" onclick="refreshHomeTree()" title="Refrescar unidades y reescanear carpetas cargadas">🔄</button>
-        <button id="btn-load-root" onclick="selectRootFolder()" title="Cargar la carpeta raíz configurada">📁 Mostrar Raíz</button>
-        <button id="btn-library-settings" class="header-icon-btn" onclick="openLibrarySettings()" title="Ajustes de Biblioteca">⚙</button>
+        <button id="btn-refresh" class="header-icon-btn" onclick="refreshHomeTree()" data-i18n="[title]library.refresh_btn" title="Refrescar unidades y reescanear carpetas cargadas">🔄</button>
+        <button id="btn-load-root" onclick="selectRootFolder()" data-i18n="[title]library.root_btn_title; library.root_btn_text" title="Cargar la carpeta raíz configurada">📁 Mostrar Raíz</button>
+        <button id="btn-library-settings" class="header-icon-btn" onclick="openLibrarySettings()" data-i18n="[title]library.settings_btn" title="Ajustes de Biblioteca">⚙</button>
         
-        <button id="btn-analyze-main" class="btn-progress" onclick="openAnalysisModal()" title="Ajustes de Procesamiento">
+        <button id="btn-analyze-main" class="btn-progress" onclick="openAnalysisModal()" data-i18n="[title]library.analyze_btn" title="Ajustes de Procesamiento">
             <div id="btn-analyze-fill" class="btn-progress-fill"></div>
-            <span id="btn-analyze-text" class="btn-progress-text">▶ Centro de Procesamiento</span>
+            <span id="btn-analyze-text" class="btn-progress-text" data-i18n="library.analyze_btn_text">▶ Centro de Procesamiento</span>
         </button>
     </div>
 
     <div class="lib-main">
         <aside class="lib-sidebar">
-            <div class="sidebar-title"><span>Navegador Local</span><span id="loader-icon" style="display: none; color: #00a8ff;">⏳</span></div>
+            <div class="sidebar-title"><span data-i18n="library.local_browser">Navegador Local</span><span id="loader-icon" style="display: none; color: #00a8ff;">⏳</span></div>
             <div class="folder-tree" id="lib-explorer"></div>
         </aside>
 
         <section class="lib-content" id="lib-dropzone">
             <div id="empty-queue" class="empty-queue-msg">
                 <span style="font-size: 35px; color: #333;">📥</span>
-                <span style="font-size: 14px; font-weight: bold;">Lista de Trabajo Vacía</span>
-                <span style="font-size: 11px;">Escribe en el buscador para ver canciones de tu base de datos o arrastra carpetas aquí.</span>
+                <span style="font-size: 14px; font-weight: bold;" data-i18n="library.empty_queue_title">Lista de Trabajo Vacía</span>
+                <span style="font-size: 11px;" data-i18n="library.empty_queue_desc">Escribe en el buscador para ver canciones de tu base de datos o arrastra carpetas aquí.</span>
             </div>
             
             <div class="table-header-container">
@@ -211,39 +211,39 @@
 
     <div class="lib-footer">
         <div class="status-container">
-            <span id="lib-status-count">Lista: 0 pistas</span>
-            <span id="lib-processing-status" class="status-text" style="display: none;">Procesando...</span>
-            <button id="btn-stop-inline" class="btn-stop-inline" onclick="stopBatchAnalysis()">⏹ Detener</button>
+            <span id="lib-status-count" data-i18n="library.track_count">Lista: 0 pistas</span>
+            <span id="lib-processing-status" class="status-text" style="display: none;" data-i18n="library.processing">Procesando...</span>
+            <button id="btn-stop-inline" class="btn-stop-inline" onclick="stopBatchAnalysis()" data-i18n="library.stop_btn">⏹ Detener</button>
         </div>
         <div class="footer-buttons" id="group-footer-btn">
-            <button id="btn-open-list" onclick="openLibraryList()">📂 Abrir Lista</button>
-            <button id="btn-save-list" onclick="saveLibraryList()">💾 Guardar Lista</button>
-            <button id="btn-clear-list" onclick="clearWorkQueue()" class="btn-danger">🧹 Vaciar</button>
+            <button id="btn-open-list" onclick="openLibraryList()" data-i18n="library.open_list_btn">📂 Abrir Lista</button>
+            <button id="btn-save-list" onclick="saveLibraryList()" data-i18n="library.save_list_btn">💾 Guardar Lista</button>
+            <button id="btn-clear-list" onclick="clearWorkQueue()" class="btn-danger" data-i18n="library.clear_list_btn">🧹 Vaciar</button>
         </div>
     </div>
 
     <div id="lib-context-menu" class="context-menu">
-        <div class="context-item" id="ctx-preview">🔊 Escucha previa</div>
-        <div class="context-item" id="ctx-add-playlist" style="color: #2ecc71;">➕ Añadir a la Playlist</div>
-        <div class="context-item" id="ctx-edit-audio" style="color: #00a8ff;">🎧 Editor de Pistas Avanzado</div>
+        <div class="context-item" id="ctx-preview" data-i18n="library.ctx.preview">🔊 Escucha previa</div>
+        <div class="context-item" id="ctx-add-playlist" style="color: #2ecc71;" data-i18n="library.ctx.add_playlist">➕ Añadir a la Playlist</div>
+        <div class="context-item" id="ctx-edit-audio" style="color: #00a8ff;" data-i18n="library.ctx.edit_audio">🎧 Editor de Pistas Avanzado</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="ctx-read-meta" style="color: #3498db;">🏷️ Leer Metadatos Locales</div>
-        <div class="context-item" id="ctx-embed-meta" style="color: #f39c12;">💾 Incrustar Metadatos al MP3</div>
+        <div class="context-item" id="ctx-read-meta" style="color: #3498db;" data-i18n="library.ctx.read_meta">🏷️ Leer Metadatos Locales</div>
+        <div class="context-item" id="ctx-embed-meta" style="color: #f39c12;" data-i18n="library.ctx.embed_meta">💾 Incrustar Metadatos al MP3</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="ctx-clear-cues" style="color: #e74c3c;">🧹 Eliminar puntos Inicio/Fin/Mix</div>
-        <div class="context-item" id="ctx-clear-meta" style="color: #e74c3c;">🧼 Eliminar Metadatos</div>
-        <div class="context-item" id="ctx-delete-db" style="color: #e74c3c;">🗑️ Eliminar todo de la Base de Datos</div>
+        <div class="context-item" id="ctx-clear-cues" style="color: #e74c3c;" data-i18n="library.ctx.clear_cues">🧹 Eliminar puntos Inicio/Fin/Mix</div>
+        <div class="context-item" id="ctx-clear-meta" style="color: #e74c3c;" data-i18n="library.ctx.clear_meta">🧼 Eliminar Metadatos</div>
+        <div class="context-item" id="ctx-delete-db" style="color: #e74c3c;" data-i18n="library.ctx.delete_db">🗑️ Eliminar todo de la Base de Datos</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="ctx-edit-genre" style="color: #2ecc71;">Editar genero / estilo</div>
-        <div class="context-item" id="ctx-sync-folder-genre" style="color: #2ecc71;">Genero desde carpeta</div>
-        <div class="context-item" id="ctx-edit-artist-card" style="color: #00d4ff;">Editar cedula de artista</div>
-        <div class="context-item" id="ctx-rebuild-artist-card" style="color: #00a8ff;">Actualizar cedula de artista</div>
+        <div class="context-item" id="ctx-edit-genre" style="color: #2ecc71;" data-i18n="library.ctx.edit_genre">Editar genero / estilo</div>
+        <div class="context-item" id="ctx-sync-folder-genre" style="color: #2ecc71;" data-i18n="library.ctx.sync_folder_genre">Genero desde carpeta</div>
+        <div class="context-item" id="ctx-edit-artist-card" style="color: #00d4ff;" data-i18n="library.ctx.edit_artist_card">Editar cedula de artista</div>
+        <div class="context-item" id="ctx-rebuild-artist-card" style="color: #00a8ff;" data-i18n="library.ctx.rebuild_artist_card">Actualizar cedula de artista</div>
     </div>
 
     <div id="import-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content import-box">
-            <h3 class="import-title">📥 Construyendo Biblioteca...</h3>
-            <p id="import-status-text" class="import-status">Leyendo miles de archivos, por favor espera. Esto evitará que la app se congele.</p>
+            <h3 class="import-title" data-i18n="library.import.title">📥 Construyendo Biblioteca...</h3>
+            <p id="import-status-text" class="import-status" data-i18n="library.import.status">Leyendo miles de archivos, por favor espera. Esto evitará que la app se congele.</p>
             <div class="progress-bar-bg">
                 <div class="progress-bar-fill" id="import-progress-fill" style="background-color: #00a8ff;"></div>
             </div>
@@ -254,30 +254,30 @@
     <div id="track-genre-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content track-genre-box">
             <div class="modal-header">
-                <h3>Editar genero / estilo</h3>
+                <h3 data-i18n="library.genre_modal.title">Editar genero / estilo</h3>
             </div>
             <div class="library-settings-body">
-                <div class="info-box" id="track-genre-summary">Aplica genero a las pistas seleccionadas.</div>
+                <div class="info-box" id="track-genre-summary" data-i18n="library.genre_modal.summary">Aplica genero a las pistas seleccionadas.</div>
                 <div class="config-texts" style="margin: 12px 0 6px;">
-                    <span class="config-title">Genero principal</span>
+                    <span class="config-title" data-i18n="library.genre_modal.main_genre">Genero principal</span>
                 </div>
                 <input type="text" id="track-genre-name" class="config-input" list="genre-options" style="width:100%; box-sizing:border-box;">
                 <div class="config-texts" style="margin: 12px 0 6px;">
-                    <span class="config-title">Subgenero / estilo</span>
+                    <span class="config-title" data-i18n="library.genre_modal.subgenre">Subgenero / estilo</span>
                 </div>
                 <input type="text" id="track-subgenre-name" class="config-input" list="genre-options" style="width:100%; box-sizing:border-box;">
                 <datalist id="genre-options"></datalist>
                 <div class="track-genre-picker">
                     <div class="track-genre-picker-head">
-                        <span>Generos guardados</span>
-                        <span>elige donde usarlo</span>
+                        <span data-i18n="library.genre_modal.saved">Generos guardados</span>
+                        <span data-i18n="library.genre_modal.choose">elige donde usarlo</span>
                     </div>
                     <div class="track-genre-picker-list" id="track-genre-picker-list"></div>
                 </div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeTrackGenreModal()" style="background-color:#444;">Cancelar</button>
-                <button onclick="applyTrackGenreModal()" style="background-color:#27ae60;">Aplicar a canciones</button>
+                <button onclick="closeTrackGenreModal()" style="background-color:#444;" data-i18n="library.genre_modal.cancel">Cancelar</button>
+                <button onclick="applyTrackGenreModal()" style="background-color:#27ae60;" data-i18n="library.genre_modal.apply">Aplicar a canciones</button>
             </div>
         </div>
     </div>
@@ -285,52 +285,52 @@
     <div id="library-settings-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content library-settings-box">
             <div class="modal-header">
-                <h3>⚙️ Ajustes de Biblioteca</h3>
+                <h3 data-i18n="library.settings_modal.title">⚙️ Ajustes de Biblioteca</h3>
             </div>
             <div class="library-settings-body">
-                <div class="info-box">
+                <div class="info-box" data-i18n="library.settings_modal.info1">
                     La carpeta raíz fija te permite tener una fuente principal de música lista para restaurarse sin depender de la lista temporal. Desde aquí decides si solo quieres tenerla guardada o si quieres que la biblioteca la cargue al abrir.
                 </div>
 
                 <div class="config-texts" style="margin-bottom: 10px;">
-                    <span class="config-title">Carpeta raíz de música</span>
+                    <span class="config-title" data-i18n="library.settings_modal.root_folder">Carpeta raíz de música</span>
                     <span class="config-desc" id="library-root-status">No hay una carpeta raíz fija configurada todavía.</span>
                 </div>
 
                 <div class="library-settings-path">
                     <input type="text" id="library-root-path" readonly placeholder="No se ha configurado ninguna carpeta raíz">
-                    <button onclick="pickPersistentRootFolder()">Examinar...</button>
-                    <button onclick="clearPersistentRootFolder()" class="btn-danger">Quitar</button>
+                    <button onclick="pickPersistentRootFolder()" data-i18n="library.settings_modal.browse">Examinar...</button>
+                    <button onclick="clearPersistentRootFolder()" class="btn-danger" data-i18n="library.settings_modal.remove">Quitar</button>
                 </div>
 
                 <label class="config-row">
                     <input type="checkbox" id="chk-lib-auto-root">
                     <div class="config-texts">
-                        <span class="config-title">Cargar la carpeta raíz al abrir la biblioteca</span>
-                        <span class="config-desc">Si la lista de trabajo está vacía, la biblioteca volverá a poblarla con esta carpeta.</span>
+                        <span class="config-title" data-i18n="library.settings_modal.auto_load">Cargar la carpeta raíz al abrir la biblioteca</span>
+                        <span class="config-desc" data-i18n="library.settings_modal.auto_load_desc">Si la lista de trabajo está vacía, la biblioteca volverá a poblarla con esta carpeta.</span>
                     </div>
                 </label>
 
                 <label class="config-row">
                     <input type="checkbox" id="chk-lib-root-rescan">
                     <div class="config-texts">
-                        <span class="config-title">Reescanear la carpeta raíz al abrir</span>
-                        <span class="config-desc">Detecta altas, bajas y reemplazos desde el inicio. Si tienes miles de canciones, puede tardar un poco más.</span>
+                        <span class="config-title" data-i18n="library.settings_modal.rescan">Reescanear la carpeta raíz al abrir</span>
+                        <span class="config-desc" data-i18n="library.settings_modal.rescan_desc">Detecta altas, bajas y reemplazos desde el inicio. Si tienes miles de canciones, puede tardar un poco más.</span>
                     </div>
                 </label>
 
-                <div class="library-settings-note">
-                    El botón <code>Refrescar</code> seguirá sincronizando las carpetas ya cargadas para detectar cambios. Si prefieres abrir más rápido, puedes dejar este reescaneo desactivado y usarlo solo cuando lo necesites.
+                <div class="library-settings-note" data-i18n="[html]library.settings_modal.note">
+                    El botón <code data-i18n="library.settings_modal.refresh">Refrescar</code> seguirá sincronizando las carpetas ya cargadas para detectar cambios. Si prefieres abrir más rápido, puedes dejar este reescaneo desactivado y usarlo solo cuando lo necesites.
                 </div>
-                <div class="info-box" style="margin-top: 16px;">
+                <div class="info-box" style="margin-top: 16px;" data-i18n="library.settings_modal.info2">
                     Primer uso: convierte carpetas de tu raiz musical en generos y subgeneros de la base de datos. El programa propone, pero el operador decide.
                 </div>
-                <button onclick="openGenreAssistant()" style="background-color:#2ecc71; margin-top: 10px;">Abrir asistente de generos</button>
+                <button onclick="openGenreAssistant()" style="background-color:#2ecc71; margin-top: 10px;" data-i18n="library.settings_modal.open_assistant">Abrir asistente de generos</button>
             </div>
             <div class="modal-footer">
-                <button onclick="closeLibrarySettings()" style="background-color: #444;">Cancelar</button>
-                <button onclick="loadPersistentRootNow()" style="background-color: #00a8ff;">Cargar Ahora</button>
-                <button onclick="applyLibrarySettings()" style="background-color: #27ae60;">Guardar</button>
+                <button onclick="closeLibrarySettings()" style="background-color: #444;" data-i18n="library.settings_modal.cancel">Cancelar</button>
+                <button onclick="loadPersistentRootNow()" style="background-color: #00a8ff;" data-i18n="library.settings_modal.load_now">Cargar Ahora</button>
+                <button onclick="applyLibrarySettings()" style="background-color: #27ae60;" data-i18n="library.settings_modal.save">Guardar</button>
             </div>
         </div>
     </div>
@@ -338,31 +338,31 @@
     <div id="genre-assistant-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content genre-assistant-box">
             <div class="modal-header">
-                <h3>Asistente de Generos (en desarrollo)</h3>
+                <h3 data-i18n="library.assistant_modal.title">Asistente de Generos (en desarrollo)</h3>
             </div>
             <div class="library-settings-body">
-                <div class="info-box">
+                <div class="info-box" data-i18n="library.assistant_modal.info">
                     Se muestran carpetas y subcarpetas de la carpeta raiz. Marca las que quieres usar como generos/subgeneros. Esto no mueve archivos: solo crea etiquetas en la base de datos.
                 </div>
                 <div class="genre-assistant-actions">
                     <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#d0d0d0;">
                         <input type="checkbox" id="genre-apply-to-tracks" checked>
-                        Aplicar tambien a las canciones dentro de esas carpetas
+                        <span data-i18n="library.assistant_modal.apply_tracks">Aplicar tambien a las canciones dentro de esas carpetas</span>
                     </label>
                     <div>
-                        <button onclick="selectAllGenreAssistant(true)">Seleccionar todo</button>
-                        <button onclick="selectAllGenreAssistant(false)" style="background:#444;">Limpiar</button>
+                        <button onclick="selectAllGenreAssistant(true)" data-i18n="library.assistant_modal.select_all">Seleccionar todo</button>
+                        <button onclick="selectAllGenreAssistant(false)" style="background:#444;" data-i18n="library.assistant_modal.clear">Limpiar</button>
                     </div>
                 </div>
                 <div class="genre-assistant-list">
                     <table class="genre-assistant-table">
                         <thead>
                             <tr>
-                                <th style="width:42px;">Usar</th>
-                                <th>Carpeta</th>
-                                <th style="width:150px;">Genero</th>
-                                <th style="width:150px;">Subgenero</th>
-                                <th style="width:70px;">Pistas</th>
+                                <th style="width:42px;" data-i18n="library.assistant_modal.use">Usar</th>
+                                <th data-i18n="library.assistant_modal.folder">Carpeta</th>
+                                <th style="width:150px;" data-i18n="library.assistant_modal.genre">Genero</th>
+                                <th style="width:150px;" data-i18n="library.assistant_modal.subgenre">Subgenero</th>
+                                <th style="width:70px;" data-i18n="library.assistant_modal.tracks">Pistas</th>
                             </tr>
                         </thead>
                         <tbody id="genre-assistant-body"></tbody>
@@ -371,8 +371,8 @@
                 <div class="genre-assistant-summary" id="genre-assistant-summary">Listo para leer la carpeta raiz.</div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeGenreAssistant()" style="background-color: #444;">Cancelar</button>
-                <button onclick="applyGenreAssistant()" style="background-color: #27ae60;">Guardar seleccion</button>
+                <button onclick="closeGenreAssistant()" style="background-color: #444;" data-i18n="library.assistant_modal.cancel">Cancelar</button>
+                <button onclick="applyGenreAssistant()" style="background-color: #27ae60;" data-i18n="library.assistant_modal.save">Guardar seleccion</button>
             </div>
         </div>
     </div>
@@ -380,35 +380,35 @@
     <div id="analysis-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>⚙️ Centro de Procesamiento Masivo</h3>
+                <h3 data-i18n="library.processing_modal.title">⚙️ Centro de Procesamiento Masivo</h3>
             </div>
             <div class="modal-tabs">
-                <button class="tab-btn active" id="tab-btn-audio" onclick="switchModalTab('audio')">🌊 Analizador Automático</button>
-                <button class="tab-btn" id="tab-btn-meta" onclick="switchModalTab('meta')">🏷️ Metadatos</button>
+                <button class="tab-btn active" id="tab-btn-audio" onclick="switchModalTab('audio')" data-i18n="library.processing_modal.tab_audio">🌊 Analizador Automático</button>
+                <button class="tab-btn" id="tab-btn-meta" onclick="switchModalTab('meta')" data-i18n="library.processing_modal.tab_meta">🏷️ Metadatos</button>
             </div>
 
             <div id="tab-audio" class="tab-content active">
                 <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
-                    <span class="config-title" style="color: #00a8ff;">Selecciona las tareas a realizar:</span>
+                    <span class="config-title" style="color: #00a8ff;" data-i18n="library.processing_modal.select_tasks">Selecciona las tareas a realizar:</span>
                     <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; color: #2ecc71; font-weight: bold; font-size: 13px;">
-                        <input type="checkbox" id="chk-master-all" class="config-input" onchange="toggleMasterCheck()"> Analizar Todo
+                        <input type="checkbox" id="chk-master-all" class="config-input" onchange="toggleMasterCheck()"> <span data-i18n="library.processing_modal.analyze_all">Analizar Todo</span>
                     </label>
                 </div>
 
                 <div style="margin-bottom: 14px;">
-                    <span class="config-title" style="display:block; margin-bottom: 8px; color:#00a8ff;">Motor de analisis:</span>
+                    <span class="config-title" style="display:block; margin-bottom: 8px; color:#00a8ff;" data-i18n="library.processing_modal.engine">Motor de analisis:</span>
                     <label class="config-row" style="margin-bottom: 5px; padding: 2px;">
                         <input type="radio" name="analysis_engine" id="analysis-engine-rust" value="rustAudio" checked class="config-input">
                         <div class="config-texts">
-                            <span class="config-title" style="font-weight: normal;">Motor Rust</span>
-                            <span class="config-desc">Usa el motor nativo para procesar la cola masiva.</span>
+                            <span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.engine_rust">Motor Rust</span>
+                            <span class="config-desc" data-i18n="library.processing_modal.engine_rust_desc">Usa el motor nativo para procesar la cola masiva.</span>
                         </div>
                     </label>
                     <label class="config-row" style="margin-bottom: 0; padding: 2px;">
                         <input type="radio" name="analysis_engine" id="analysis-engine-ffmpeg" value="ffmpeg" class="config-input">
                         <div class="config-texts">
-                            <span class="config-title" style="font-weight: normal;">FFmpeg</span>
-                            <span class="config-desc">Mantiene el analizador anterior para comparar resultados.</span>
+                            <span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.engine_ffmpeg">FFmpeg</span>
+                            <span class="config-desc" data-i18n="library.processing_modal.engine_ffmpeg_desc">Mantiene el analizador anterior para comparar resultados.</span>
                         </div>
                     </label>
                 </div>
@@ -416,21 +416,21 @@
                 <label class="config-row">
                     <input type="checkbox" id="chk-task-gain" class="config-input task-check" checked onchange="updateMasterCheck()">
                     <div class="config-texts">
-                        <span class="config-title">Analizar Volumen Promedio (dB)</span>
-                        <span class="config-desc">Calcula la energía de la canción solo como dato informativo.</span>
+                        <span class="config-title" data-i18n="library.processing_modal.analyze_vol">Analizar Volumen Promedio (dB)</span>
+                        <span class="config-desc" data-i18n="library.processing_modal.analyze_vol_desc">Calcula la energía de la canción solo como dato informativo.</span>
                     </div>
                 </label>
 
                 <label class="config-row">
                     <input type="checkbox" id="chk-task-cues" class="config-input task-check" checked onchange="updateMasterCheck()">
                     <div class="config-texts">
-                        <span class="config-title">Detectar Inicio, Fin y Punto Mix</span>
-                        <span class="config-desc">Corta silencios y detecta el cruce automático.</span>
+                        <span class="config-title" data-i18n="library.processing_modal.detect_cues">Detectar Inicio, Fin y Punto Mix</span>
+                        <span class="config-desc" data-i18n="library.processing_modal.detect_cues_desc">Corta silencios y detecta el cruce automático.</span>
                     </div>
                 </label>
                 
                 <label style="margin-left: 30px; font-size: 11px; color: #888; cursor: pointer; display: flex; align-items: center; gap: 5px; margin-bottom: 5px;">
-                    <input type="checkbox" id="chk-custom-db" class="config-input" onchange="toggleDbSettings()"> Modificar umbrales de detección (No recomendado)
+                    <input type="checkbox" id="chk-custom-db" class="config-input" onchange="toggleDbSettings()"> <span data-i18n="library.processing_modal.modify_thresholds">Modificar umbrales de detección (No recomendado)</span>
                 </label>
                 
                 <div id="panel-custom-db" class="sub-config-panel">
@@ -453,81 +453,81 @@
                 <label class="config-row">
                     <input type="checkbox" id="chk-task-bpm" class="config-input task-check" onchange="updateMasterCheck()">
                     <div class="config-texts">
-                        <span class="config-title">Analizar Ritmo (BPM)</span>
-                        <span class="config-desc">Escanea los picos rítmicos. <span style="color:#e74c3c">Consume altos recursos.</span></span>
+                        <span class="config-title" data-i18n="library.processing_modal.analyze_bpm">Analizar Ritmo (BPM)</span>
+                        <span class="config-desc" data-i18n="library.processing_modal.analyze_bpm_desc">Escanea los picos rítmicos. <span style="color:#e74c3c">Consume altos recursos.</span></span>
                     </div>
                 </label>
 
                 <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #333;">
-                    <span class="config-title" style="display: block; margin-bottom: 10px; color: #f39c12;">Comportamiento con pistas existentes:</span>
+                    <span class="config-title" style="display: block; margin-bottom: 10px; color: #f39c12;" data-i18n="library.processing_modal.behavior">Comportamiento con pistas existentes:</span>
                     <label class="config-row" style="margin-bottom: 5px; padding: 2px;">
                         <input type="radio" name="analyze_scope" id="scope-skip" value="skip" checked class="config-input">
-                        <div class="config-texts"><span class="config-title" style="font-weight: normal;">Omitir archivos que ya tienen datos (Recomendado)</span></div>
+                        <div class="config-texts"><span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.behavior_skip">Omitir archivos que ya tienen datos (Recomendado)</span></div>
                     </label>
                     <label class="config-row" style="margin-bottom: 0; padding: 2px;">
                         <input type="radio" name="analyze_scope" id="scope-force" value="force" class="config-input">
-                        <div class="config-texts"><span class="config-title" style="font-weight: normal;">Volver a analizar y sobreescribir toda la lista</span></div>
+                        <div class="config-texts"><span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.behavior_force">Volver a analizar y sobreescribir toda la lista</span></div>
                     </label>
                 </div>
             </div>
 
             <div id="tab-meta" class="tab-content">
-                <div class="info-box">Prioridad histórica: Se buscará la versión original más antigua en MusicBrainz. Si no se encuentra, se respaldará con iTunes. <br><b>Nota:</b> Los datos se guardarán temporalmente en la Base de Datos. Para incrustarlos físicamente, usa el Clic Derecho en la lista.</div>
+                <div class="info-box" data-i18n="[html]library.processing_modal.meta_info">Prioridad histórica: Se buscará la versión original más antigua en MusicBrainz. Si no se encuentra, se respaldará con iTunes. <br><b>Nota:</b> Los datos se guardarán temporalmente en la Base de Datos. Para incrustarlos físicamente, usa el Clic Derecho en la lista.</div>
                 
                 <div style="margin-bottom: 10px;">
-                    <span class="config-title" style="display:block; margin-bottom: 8px; color:#00a8ff;">Fuente de metadatos (solo una):</span>
+                    <span class="config-title" style="display:block; margin-bottom: 8px; color:#00a8ff;" data-i18n="library.processing_modal.meta_source">Fuente de metadatos (solo una):</span>
                     <label class="config-row" style="margin-bottom: 5px; padding: 2px;">
                         <input type="radio" name="meta_source" id="meta-source-internet" value="internet" checked class="config-input">
                         <div class="config-texts">
-                            <span class="config-title" style="font-weight: normal;">Buscar info original en Internet</span>
-                            <span class="config-desc">Recomendado si faltan Álbum/Año/Género. Evita resultados erróneos con filtro de coincidencia.</span>
+                            <span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.meta_internet">Buscar info original en Internet</span>
+                            <span class="config-desc" data-i18n="library.processing_modal.meta_internet_desc">Recomendado si faltan Álbum/Año/Género. Evita resultados erróneos con filtro de coincidencia.</span>
                         </div>
                     </label>
                     <label class="config-row" style="margin-bottom: 0; padding: 2px;">
                         <input type="radio" name="meta_source" id="meta-source-local" value="local" class="config-input">
                         <div class="config-texts">
-                            <span class="config-title" style="font-weight: normal;">Extraer desde archivos locales</span>
-                            <span class="config-desc">Lee etiquetas del archivo (MP3). No inventa BPM: solo usa lo que ya exista en el tag.</span>
+                            <span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.meta_local">Extraer desde archivos locales</span>
+                            <span class="config-desc" data-i18n="library.processing_modal.meta_local_desc">Lee etiquetas del archivo (MP3). No inventa BPM: solo usa lo que ya exista en el tag.</span>
                         </div>
                     </label>
                 </div>
 
                 <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #333;">
-                    <span class="config-title" style="display: block; margin-bottom: 10px; color: #f39c12;">Comportamiento con pistas existentes:</span>
+                    <span class="config-title" style="display: block; margin-bottom: 10px; color: #f39c12;" data-i18n="library.processing_modal.behavior">Comportamiento con pistas existentes:</span>
                     <label class="config-row" style="margin-bottom: 5px; padding: 2px;">
                         <input type="radio" name="analyze_scope_meta" id="scope-meta-skip" value="skip" checked class="config-input">
-                        <div class="config-texts"><span class="config-title" style="font-weight: normal;">Omitir archivos que ya tienen datos (Recomendado)</span></div>
+                        <div class="config-texts"><span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.behavior_skip">Omitir archivos que ya tienen datos (Recomendado)</span></div>
                     </label>
                     <label class="config-row" style="margin-bottom: 0; padding: 2px;">
                         <input type="radio" name="analyze_scope_meta" id="scope-meta-force" value="force" class="config-input">
-                        <div class="config-texts"><span class="config-title" style="font-weight: normal;">Volver a analizar y sobreescribir toda la lista</span></div>
+                        <div class="config-texts"><span class="config-title" style="font-weight: normal;" data-i18n="library.processing_modal.behavior_force">Volver a analizar y sobreescribir toda la lista</span></div>
                     </label>
                 </div>
             </div>
 
             <div id="modal-progress-section" class="modal-progress-container">
                 <div class="progress-labels">
-                    <span id="modal-progress-file">Preparando archivos...</span>
+                    <span id="modal-progress-file" data-i18n="library.processing_modal.prep_files">Preparando archivos...</span>
                     <span id="modal-progress-percent">0%</span>
                 </div>
                 <div class="progress-bar-bg">
                     <div class="progress-bar-fill" id="modal-progress-fill"></div>
                 </div>
-                <div style="font-size: 10px; color: #e74c3c; display: none;" id="modal-stop-warning">Deteniendo al terminar la pista actual... (Máximo 10s por pista)</div>
+                <div style="font-size: 10px; color: #e74c3c; display: none;" id="modal-stop-warning" data-i18n="library.processing_modal.stop_warning">Deteniendo al terminar la pista actual... (Máximo 10s por pista)</div>
             </div>
 
             <div class="modal-footer">
-                <button id="btn-modal-cancel" onclick="closeAnalysisModal()" style="background: transparent; color: #ccc; border-color: #555;">Cerrar</button>
-                <button id="btn-modal-hide" onclick="hideAnalysisModal()" style="display: none; background: transparent; color: #ccc; border-color: #555;">👁️ Ocultar ventana</button>
-                <button id="btn-modal-stop" onclick="stopBatchAnalysis()" class="btn-danger" style="display: none;">⏹ Detener Proceso</button>
-                <button id="btn-modal-start" onclick="executeBatchAnalysis()" class="btn-success" style="padding: 8px 20px;">▶ Iniciar Proceso</button>
+                <button id="btn-modal-cancel" onclick="closeAnalysisModal()" style="background: transparent; color: #ccc; border-color: #555;" data-i18n="library.processing_modal.close">Cerrar</button>
+                <button id="btn-modal-hide" onclick="hideAnalysisModal()" style="display: none; background: transparent; color: #ccc; border-color: #555;" data-i18n="library.processing_modal.hide">👁️ Ocultar ventana</button>
+                <button id="btn-modal-stop" onclick="stopBatchAnalysis()" class="btn-danger" style="display: none;" data-i18n="library.processing_modal.stop">⏹ Detener Proceso</button>
+                <button id="btn-modal-start" onclick="executeBatchAnalysis()" class="btn-success" style="padding: 8px 20px;" data-i18n="library.processing_modal.start">▶ Iniciar Proceso</button>
             </div>
         </div>
     </div>
 
     <script src="libreria.js"></script>
     <div id="db-header-menu" class="context-menu">
-        <div style="padding: 5px 10px; font-size: 10px; color: #888; font-weight: bold; text-transform: uppercase;">Visualización de dB</div>
+        <div style="padding: 5px 10px; font-size: 10px; color: #888; font-weight: bold; text-transform: uppercase;" data-i18n="library.db_menu.title">Visualización de dB</div>
         <div class="context-item" id="ctx-db-peak" onclick="setDbViewMode('peak')">✓ Modo DJ (Pico)</div>
         <div class="context-item" id="ctx-db-rms" onclick="setDbViewMode('rms')">&nbsp;&nbsp;&nbsp; Modo Estudio (Promedio)</div>
     </div>

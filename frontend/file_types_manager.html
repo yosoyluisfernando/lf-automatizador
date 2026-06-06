@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title data-i18n="file_types_manager.title_window">Gestor de Tipos de Archivo - LF Automatizador</title>
+    <style>
+        :root { --bg:#121212; --panel:#18181a; --header:#1a1a1c; --border:#333; --accent:#00a8ff; --text:#e0e0e0; --muted:#888; --active:#2ecc71; --danger:#e74c3c; --warning:#f39c12; }
+        * { box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",sans-serif; }
+        * { scrollbar-width:thin; scrollbar-color:#5a5f68 #141416; }
+        *::-webkit-scrollbar { width:10px; height:10px; }
+        *::-webkit-scrollbar-track { background:#141416; }
+        *::-webkit-scrollbar-thumb { background:#4a4f58; border:2px solid #141416; border-radius:10px; }
+        body { background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+        button, input, select { font:inherit; }
+        .header { background:var(--header); padding:12px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:14px; }
+        .logo-text { font-size:17px; font-weight:900; letter-spacing:1px; color:var(--accent); }
+        .header .sub { font-size:11px; color:var(--muted); }
+        .main { flex:1; display:flex; min-height:0; }
+        .sidebar { width:240px; background:var(--panel); border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; }
+        .sidebar h2 { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--accent); padding:14px 16px 8px; font-weight:800; }
+        .type-list { flex:1; overflow-y:auto; list-style:none; }
+        .type-list li { padding:9px 16px; font-size:14px; cursor:pointer; border-left:3px solid transparent; display:flex; align-items:center; gap:8px; }
+        .type-list li:hover { background:rgba(255,255,255,.04); }
+        .type-list li.selected { background:rgba(0,168,255,.12); border-left-color:var(--accent); }
+        .type-list .lock { margin-left:auto; font-size:11px; color:var(--muted); }
+        .sidebar-actions { display:flex; gap:8px; padding:10px 16px; border-top:1px solid var(--border); }
+        .icon-btn { width:32px; height:32px; border-radius:6px; border:1px solid var(--border); background:#222; color:#fff; font-size:18px; font-weight:900; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .icon-btn.add:hover:not(:disabled) { border-color:var(--active); color:var(--active); }
+        .icon-btn.del:hover:not(:disabled) { border-color:var(--danger); color:var(--danger); }
+        .icon-btn:disabled { opacity:.4; cursor:not-allowed; }
+        .panel { flex:1; overflow-y:auto; padding:20px 24px 24px; display:flex; flex-direction:column; gap:20px; min-width:0; }
+        .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:18px 20px; }
+        .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--accent); margin-bottom:14px; font-weight:800; }
+        .prop-row { display:grid; grid-template-columns:130px 1fr; gap:12px; align-items:center; font-size:13px; padding:7px 0; }
+        .prop-row label { color:#cfd3d8; }
+        .prop-row input[type="text"] { background:#0a0a0a; border:1px solid var(--border); border-radius:4px; color:#fff; padding:7px 9px; outline:none; width:100%; }
+        .prop-row input[type="text"]:focus { border-color:var(--accent); }
+        .prop-row input[type="text"]:disabled { opacity:.55; cursor:not-allowed; }
+        .prop-row input[type="color"] { width:46px; height:30px; background:#0a0a0a; border:1px solid var(--border); border-radius:4px; padding:2px; cursor:pointer; }
+        .prop-row input[type="color"]:disabled { opacity:.55; cursor:not-allowed; }
+        .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+        .btn { border:1px solid var(--border); background:#222; color:#fff; padding:8px 14px; border-radius:20px; font-weight:800; font-size:12px; cursor:pointer; }
+        .btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+        .btn:disabled { opacity:.45; cursor:not-allowed; }
+        .btn-add { border-color:#2c6; }
+        .btn-add:hover:not(:disabled) { border-color:var(--active); color:var(--active); }
+        .btn-save { background:#27ae60; border-color:#27ae60; color:#fff; }
+        .btn-save:hover:not(:disabled) { background:#27ae60; border-color:#2ecc71; }
+        .btn-danger:hover:not(:disabled) { border-color:var(--danger); color:var(--danger); }
+        table { width:100%; border-collapse:collapse; font-size:12px; }
+        thead th { text-align:left; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:1px; padding:6px 8px; border-bottom:1px solid var(--border); }
+        tbody td { padding:6px 8px; border-bottom:1px solid #202023; vertical-align:middle; }
+        tbody tr.selected { background:rgba(0,168,255,.10); }
+        tbody tr { cursor:pointer; }
+        .folder-path { font-family:Consolas,monospace; color:#cfd3d8; word-break:break-all; }
+        .badge { display:inline-block; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:700; }
+        .badge.folder { background:rgba(243,156,18,.15); color:#f6b14a; }
+        .badge.file { background:rgba(0,168,255,.15); color:#4ab6ff; }
+        .yes { color:var(--active); font-weight:700; }
+        .no { color:#777; }
+        .empty { color:var(--muted); font-size:12px; padding:16px 8px; text-align:center; }
+        .notice { background:rgba(243,156,18,.12); border:1px solid var(--warning); border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:12px; }
+        .notice-icon { font-size:18px; }
+        .notice-text { font-size:13px; color:#f6c66a; }
+        tbody tr.pending { box-shadow: inset 3px 0 0 var(--warning); }
+        .pending-tag { color:var(--warning); font-weight:700; margin-right:6px; }
+        .footer { background:var(--header); border-top:1px solid var(--border); padding:12px 18px; display:flex; justify-content:flex-end; gap:10px; }
+        /* Modal */
+        .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:9999; }
+        .modal-box { background:var(--panel); border:1px solid var(--border); border-radius:10px; width:460px; padding:22px 24px; display:flex; flex-direction:column; gap:14px; }
+        .modal-box h3 { margin:0; font-size:16px; color:var(--accent); }
+        .modal-target { font-size:12px; color:#9aa6b2; word-break:break-all; }
+        .modal-check { display:flex; align-items:center; gap:9px; font-size:13px; color:#ddd; cursor:pointer; }
+        .modal-check input { width:16px; height:16px; }
+        .modal-check.disabled { opacity:.4; cursor:not-allowed; }
+        .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo-text" data-i18n="file_types_manager.title_main">🗂️ Gestor de Tipos de Archivo</div>
+        <div class="sub" data-i18n="file_types_manager.subtitle">Asocia carpetas y archivos a cada tipo para aplicarles color, separación e historial automáticos.</div>
+    </div>
+
+    <div class="main">
+        <div class="sidebar">
+            <h2 data-i18n="file_types_manager.types_title">Tipos de Archivo</h2>
+            <ul class="type-list" id="type-list"></ul>
+            <div class="sidebar-actions">
+                <button class="icon-btn add" id="btn-add-type" title="Añadir tipo" data-i18n="[title]file_types_manager.add_type">+</button>
+                <button class="icon-btn del" id="btn-del-type" title="Eliminar tipo seleccionado" data-i18n="[title]file_types_manager.del_type" disabled>✕</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="notice" id="migrate-notice" style="display:none;">
+                <span class="notice-icon">⚠️</span>
+                <span class="notice-text" id="migrate-notice-text"></span>
+                <span style="flex:1;"></span>
+                <button class="btn" id="migrate-review" data-i18n="file_types_manager.migrate_review">Revisar</button>
+                <button class="btn" id="migrate-dismiss" data-i18n="file_types_manager.migrate_dismiss">Ahora no</button>
+            </div>
+            <div class="card">
+                <h2 data-i18n="file_types_manager.props_title">Propiedades del Tipo</h2>
+                <div class="prop-row">
+                    <label for="type-name" data-i18n="file_types_manager.prop_name">Nombre:</label>
+                    <input type="text" id="type-name" maxlength="40">
+                </div>
+                <div class="prop-row">
+                    <label for="type-identifier" data-i18n="file_types_manager.prop_identifier">Identificador:</label>
+                    <input type="text" id="type-identifier" placeholder="Ej: comercial">
+                </div>
+                <div class="prop-row">
+                    <label for="type-color" data-i18n="file_types_manager.prop_color">Color (Lista):</label>
+                    <input type="color" id="type-color" value="#ffffff">
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 data-i18n="file_types_manager.assign_title">Carpetas y Archivos Asignados</h2>
+                <div class="toolbar">
+                    <button class="btn btn-add" id="btn-add-folder" data-i18n="file_types_manager.add_folder">📁 Añadir carpeta</button>
+                    <button class="btn btn-add" id="btn-add-file" data-i18n="file_types_manager.add_file">🎵 Añadir archivo</button>
+                    <span style="flex:1;"></span>
+                    <button class="btn" id="btn-mod-assign" disabled data-i18n="file_types_manager.modify">Modificar</button>
+                    <button class="btn btn-danger" id="btn-del-assign" disabled data-i18n="file_types_manager.delete">Eliminar</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:46%;" data-i18n="file_types_manager.th_path">Ruta</th>
+                            <th data-i18n="file_types_manager.th_kind">Tipo</th>
+                            <th data-i18n="file_types_manager.th_subfolders">Subcarpetas</th>
+                            <th data-i18n="file_types_manager.th_ignore_sep">Ignora sep.</th>
+                            <th data-i18n="file_types_manager.th_history">Historial</th>
+                        </tr>
+                    </thead>
+                    <tbody id="assign-body"></tbody>
+                </table>
+                <div class="empty" id="assign-empty" data-i18n="file_types_manager.empty_assign">Este tipo no tiene carpetas ni archivos asignados. Usa los botones de arriba para añadir.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <button class="btn" id="btn-cancel" data-i18n="file_types_manager.btn_cancel">Cancelar</button>
+        <button class="btn" id="btn-apply" data-i18n="file_types_manager.btn_apply">Aplicar</button>
+        <button class="btn btn-save" id="btn-accept" data-i18n="file_types_manager.btn_accept">Aceptar y Cerrar</button>
+    </div>
+
+    <!-- Modal de opciones (Añadir / Modificar asignación) -->
+    <div class="modal-overlay" id="opt-modal">
+        <div class="modal-box">
+            <h3 id="opt-title" data-i18n="modals.assign_type.title">Asignar tipo de archivo</h3>
+            <div class="modal-target" id="opt-target"></div>
+            <label class="modal-check" id="opt-subfolders-row">
+                <input type="checkbox" id="opt-subfolders" checked>
+                <span data-i18n="modals.assign_type.include_subfolders">¿Incluir subcarpetas?</span>
+            </label>
+            <label class="modal-check">
+                <input type="checkbox" id="opt-ignore-sep" checked>
+                <span data-i18n="modals.assign_type.ignore_separation">¿Ignorar las reglas de separación musical?</span>
+            </label>
+            <label class="modal-check">
+                <input type="checkbox" id="opt-save-history" checked>
+                <span data-i18n="modals.assign_type.save_history">¿Guardar en el historial de reproducción?</span>
+            </label>
+            <div class="modal-actions">
+                <button class="btn" id="opt-cancel" data-i18n="modals.assign_type.cancel">Cancelar</button>
+                <button class="btn btn-save" id="opt-accept" data-i18n="modals.assign_type.accept">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="file_types_manager.js"></script>
+</body>
+</html>

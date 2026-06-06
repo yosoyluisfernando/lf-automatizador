@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Configurar Evento</title>
+    <title data-i18n="event_editor.title">Configurar Evento</title>
     <link rel="stylesheet" href="style.css">
     <style>
         body { display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1c; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; min-width: 760px; }
@@ -29,6 +29,7 @@
         /* ESTILOS PARA FUNCIONES EN DESARROLLO (GHOSTING) */
         .disabled-feature { opacity: 0.4; pointer-events: none; position: relative; filter: grayscale(100%); }
         .badge-soon { background: #e74c3c; color: white; font-size: 9px; padding: 2px 5px; border-radius: 3px; margin-left: 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-exp { background: #f39c12; color: #1a1a1a; font-size: 9px; padding: 2px 5px; border-radius: 3px; margin-left: 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
         
         .calendar-icon { cursor: pointer; transition: 0.2s; user-select: none; }
         .calendar-icon:hover { transform: scale(1.1); }
@@ -39,18 +40,18 @@
     <div class="editor-content">
         
         <div class="section-box">
-            <h4 class="section-title">1. Origen del Audio</h4>
+            <h4 class="section-title" data-i18n="event_editor.b1_title">1. Origen del Audio</h4>
             <div class="radio-group-horizontal" style="margin-bottom: 15px; flex-wrap: wrap; gap: 8px 20px;">
-                <label><input type="radio" name="ev-source-type" value="file" checked> 🎵 Archivo</label>
-                <label><input type="radio" name="ev-source-type" value="playlist"> 📄 Playlist</label>
-                <label><input type="radio" name="ev-source-type" value="folder"> 📁 Carpeta Rotativa</label>
-                <label><input type="radio" name="ev-source-type" value="commercial"> Comerciales</label>
-                <label><input type="radio" name="ev-source-type" value="stream_url"> 📡 Emisora (URL)</label>
-                <label><input type="radio" name="ev-source-type" value="locution"> 🎙 Locuciones</label>
-                <label class="disabled-feature" style="display:none;"><input type="radio" name="ev-source-type" value="macro"> ⚙️ Macro / Comando de Red <span class="badge-soon">Próximamente</span></label>
+                <label><input type="radio" name="ev-source-type" value="file" checked> <span data-i18n="event_editor.opt_file">🎵 Archivo</span></label>
+                <label><input type="radio" name="ev-source-type" value="playlist"> <span data-i18n="event_editor.opt_playlist">📄 Playlist</span></label>
+                <label><input type="radio" name="ev-source-type" value="folder"> <span data-i18n="event_editor.opt_folder">📁 Carpeta Rotativa</span></label>
+                <label><input type="radio" name="ev-source-type" value="stream_url"> <span data-i18n="event_editor.opt_url">📡 Emisora (URL)</span></label>
+                <label><input type="radio" name="ev-source-type" value="locution"> <span data-i18n="event_editor.opt_tts">🎙 Locuciones</span></label>
+                <label><input type="radio" name="ev-source-type" value="commercial"> <span data-i18n="event_editor.opt_com">Comerciales</span> <span class="badge-exp" data-i18n="event_editor.experimental">Experimental</span></label>
+                <label class="disabled-feature" style="display:none;"><input type="radio" name="ev-source-type" value="macro"> <span data-i18n="event_editor.opt_macro">⚙️ Macro / Comando de Red</span> <span class="badge-soon">Próximamente</span></label>
             </div>
             <div class="row-item" id="ev-filepath-row">
-                <input type="text" id="ev-filepath" class="input-text" placeholder="Selecciona la ruta de origen..." readonly>
+                <input type="text" id="ev-filepath" class="input-text" placeholder="Selecciona la ruta de origen..." data-i18n="[placeholder]event_editor.ph_filepath" readonly>
                 <select id="ev-commercial-block" class="input-text" style="display:none;"></select>
                 <button type="button" id="btn-browse" class="settings-btn">Examinar</button>
             </div>
@@ -59,16 +60,16 @@
             <div id="ev-stream-config" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px;">
                 <!-- URL -->
                 <div class="row-item" style="margin-bottom:0;">
-                    <label style="width:130px; flex-shrink:0;">URL de la emisora <span style="color:#e74c3c;">*</span></label>
-                    <input type="text" id="ev-stream-url" class="input-text" placeholder="https://stream.ejemplo.com/live">
+                    <label style="width:130px; flex-shrink:0;"><span data-i18n="event_editor.url_label">URL de la emisora</span> <span style="color:#e74c3c;">*</span></label>
+                    <input type="text" id="ev-stream-url" class="input-text" placeholder="https://stream.ejemplo.com/live" data-i18n="[placeholder]event_editor.ph_url">
                     <button type="button" id="btn-stream-verify" class="settings-btn" style="white-space:nowrap; padding:5px 10px;" title="Verificar conexión y detectar formato">🔍</button>
                 </div>
                 <div id="ev-stream-probe-result" style="font-size:11px; color:#888; padding-left:140px; min-height:14px;"></div>
 
                 <!-- Duración obligatoria (solo timer, indefinida bloqueada) -->
                 <div style="background:#222225; border-radius:3px; padding:10px 12px; display:flex; flex-direction:column; gap:6px;">
-                    <div style="font-size:12px; color:#f39c12; font-weight:bold;">⏱ Duración en la playlist <span style="color:#e74c3c; font-size:11px;">(requerida)</span></div>
-                    <div style="font-size:11px; color:#888; margin-bottom:4px;">Las emisoras requieren una duración definida. Se avanzará automáticamente al terminar.</div>
+                    <div style="font-size:12px; color:#f39c12; font-weight:bold;">⏱ <span data-i18n="event_editor.stream_dur">Duración en la playlist (requerida)</span></div>
+                    <div style="font-size:11px; color:#888; margin-bottom:4px;"><span data-i18n="event_editor.stream_info">Las emisoras requieren una duración definida. Se avanzará automáticamente al terminar.</span></div>
                     <div style="display:flex; align-items:center; gap:6px; font-size:12px; color:#ddd;">
                         <input type="number" id="ev-stream-hours" class="input-text" min="0" max="23" value="0" style="width:50px; text-align:center;">
                         <span style="color:#888;">h</span>
@@ -82,97 +83,97 @@
 
                 <!-- Avanzado: timeout + reintentos -->
                 <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; font-size:12px; color:#aaa;">
-                    <span style="color:#666;">⚙ Avanzado:</span>
+                    <span style="color:#666;" data-i18n="event_editor.adv_stream">⚙ Avanzado:</span>
                     <label style="display:flex; align-items:center; gap:5px;">
-                        Espera conexión
+                        <span data-i18n="event_editor.wait_conn">Espera conexión</span>
                         <input type="number" id="ev-stream-timeout" class="input-text" min="2" max="60" value="10" style="width:44px; text-align:center;">
                         <span style="color:#666; font-size:11px;">s</span>
                     </label>
                     <label style="display:flex; align-items:center; gap:5px;">
-                        Máx. reintentos
+                        <span data-i18n="event_editor.max_ret">Máx. reintentos</span>
                         <input type="number" id="ev-stream-retries" class="input-text" min="0" max="20" value="3" style="width:44px; text-align:center;">
                     </label>
                 </div>
 
                 <!-- Metadatos -->
                 <div style="display:flex; flex-direction:column; gap:5px; font-size:12px;">
-                    <label style="color:#aaa;">Metadatos enviados al encoder y NowPlaying.txt</label>
+                    <label style="color:#aaa;"><span data-i18n="event_editor.meta_sent">Metadatos enviados al encoder y NowPlaying.txt</span></label>
                     <select id="ev-stream-meta-mode" class="input-text" style="max-width:380px;">
-                        <option value="icy">📡 Metadatos de la emisora (StreamTitle en vivo)</option>
-                        <option value="station">🏷️ Solo el nombre de la emisora</option>
-                        <option value="custom">✏️ Texto personalizado...</option>
+                        <option value="icy" data-i18n="event_editor.meta_stream">📡 Metadatos de la emisora (StreamTitle en vivo)</option>
+                        <option value="station" data-i18n="event_editor.meta_name">🏷️ Solo el nombre de la emisora</option>
+                        <option value="custom" data-i18n="event_editor.meta_custom">✏️ Texto personalizado...</option>
                     </select>
-                    <input type="text" id="ev-stream-meta-custom" class="input-text" placeholder="Texto fijo que se enviará al encoder" style="display:none; max-width:380px;">
+                    <input type="text" id="ev-stream-meta-custom" class="input-text" placeholder="Texto fijo que se enviará al encoder" data-i18n="[placeholder]event_editor.ph_meta_custom" style="display:none; max-width:380px;">
                 </div>
             </div>
 
             <!-- ── Configuración de Locuciones ──────────────────────────── -->
             <div id="ev-locution-config" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px;">
                 <div class="row-item" style="margin-bottom:0;">
-                    <label style="width:130px; flex-shrink:0;">Tipo de Locución</label>
+                    <label style="width:130px; flex-shrink:0;" data-i18n="event_editor.tts_type">Tipo de Locución</label>
                     <select id="ev-locution-type" class="input-text" style="max-width:220px;">
-                        <option value="time">⏰ Hora</option>
-                        <option value="temperature">🌡️ Temperatura</option>
-                        <option value="humidity">💧 Humedad</option>
+                        <option value="time" data-i18n="event_editor.tts_time">⏰ Hora</option>
+                        <option value="temperature" data-i18n="event_editor.tts_temp">🌡️ Temperatura</option>
+                        <option value="humidity" data-i18n="event_editor.tts_hum">💧 Humedad</option>
                     </select>
                 </div>
             </div>
         </div>
 
         <div class="section-box">
-            <h4 class="section-title">2. Programación y Caducidad</h4>
+            <h4 class="section-title" data-i18n="event_editor.b2_title">2. Programación y Caducidad</h4>
             
             <div class="row-item">
-                <label>Hora de inicio:</label>
+                <label data-i18n="event_editor.start_time">Hora de inicio:</label>
                 <input type="time" id="ev-time" class="input-text" step="1" value="12:00:00" style="max-width: 150px; font-family: Consolas, monospace;">
             </div>
             
             <div style="margin-top: 15px; margin-bottom: 15px;">
                 <label style="font-size: 12px; font-weight: bold; cursor: pointer; color: #ccc;">
-                    <input type="checkbox" id="chk-other-hours"> Repetir en otras horas (Clona Minutos y Segundos)
+                    <input type="checkbox" id="chk-other-hours"> <span data-i18n="event_editor.repeat_other_hours">Repetir en otras horas (Clona Minutos y Segundos)</span>
                 </label>
                 <div id="other-hours-container" class="other-hours-grid" style="display: none;"></div>
             </div>
 
             <div class="radio-group-horizontal" style="margin-bottom: 10px; border-top: 1px solid #333; padding-top: 15px;">
-                <label><input type="radio" name="ev-days" value="once" checked> Una sola vez</label>
-                <label><input type="radio" name="ev-days" value="daily"> Diariamente</label>
-                <label><input type="radio" name="ev-days" value="specific"> Días de la Semana</label>
-                <label><input type="radio" name="ev-days" value="monthlyWeeks"> Semana del Mes</label>
+                <label><input type="radio" name="ev-days" value="once" checked> <span data-i18n="event_editor.once">Una sola vez</span></label>
+                <label><input type="radio" name="ev-days" value="daily"> <span data-i18n="event_editor.daily">Diariamente</span></label>
+                <label><input type="radio" name="ev-days" value="specific"> <span data-i18n="event_editor.days">Días de la Semana</span></label>
+                <label><input type="radio" name="ev-days" value="monthlyWeeks"> <span data-i18n="event_editor.weeks">Semana del Mes</span></label>
             </div>
             
             <div id="specific-days-container" class="days-grid" style="display: none;">
-                <label class="day-box"><input type="checkbox" class="chk-day" value="1"> Lun</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="2"> Mar</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="3"> Mié</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="4"> Jue</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="5"> Vie</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="6"> Sáb</label>
-                <label class="day-box"><input type="checkbox" class="chk-day" value="0"> Dom</label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="1"> <span data-i18n="event_editor.day_mon">Lun</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="2"> <span data-i18n="event_editor.day_tue">Mar</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="3"> <span data-i18n="event_editor.day_wed">Mié</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="4"> <span data-i18n="event_editor.day_thu">Jue</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="5"> <span data-i18n="event_editor.day_fri">Vie</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="6"> <span data-i18n="event_editor.day_sat">Sáb</span></label>
+                <label class="day-box"><input type="checkbox" class="chk-day" value="0"> <span data-i18n="event_editor.day_sun">Dom</span></label>
             </div>
 
             <div id="monthly-weeks-container" style="margin-top: 15px; display: none;">
-                <label style="font-size: 12px; font-weight: bold; color: #ccc;">Semanas del Mes:</label>
+                <label style="font-size: 12px; font-weight: bold; color: #ccc;" data-i18n="event_editor.week_title">Semanas del Mes:</label>
                 <div class="weeks-grid">
-                    <label class="day-box"><input type="checkbox" class="chk-week" value="1"> 1ra Semana</label>
-                    <label class="day-box"><input type="checkbox" class="chk-week" value="2"> 2da Semana</label>
-                    <label class="day-box"><input type="checkbox" class="chk-week" value="3"> 3ra Semana</label>
-                    <label class="day-box"><input type="checkbox" class="chk-week" value="4"> 4ta Semana</label>
-                    <label class="day-box"><input type="checkbox" class="chk-week" value="5"> Última Semana</label>
+                    <label class="day-box"><input type="checkbox" class="chk-week" value="1"> <span data-i18n="event_editor.week_1">1ra Semana</span></label>
+                    <label class="day-box"><input type="checkbox" class="chk-week" value="2"> <span data-i18n="event_editor.week_2">2da Semana</span></label>
+                    <label class="day-box"><input type="checkbox" class="chk-week" value="3"> <span data-i18n="event_editor.week_3">3ra Semana</span></label>
+                    <label class="day-box"><input type="checkbox" class="chk-week" value="4"> <span data-i18n="event_editor.week_4">4ta Semana</span></label>
+                    <label class="day-box"><input type="checkbox" class="chk-week" value="5"> <span data-i18n="event_editor.week_last">Última Semana</span></label>
                 </div>
             </div>
 
             <div class="row-item" style="margin-top: 15px;">
                 <label style="width: auto; margin-right: 10px; cursor: pointer; color: #ccc;">
-                    <input type="checkbox" id="chk-validity"> Rango de Validez:
+                    <input type="checkbox" id="chk-validity"> <span data-i18n="event_editor.valid_range">Rango de Validez:</span>
                 </label>
                 <div style="display: flex; gap: 10px; align-items: center; flex: 1; opacity: 0.5; transition: 0.2s;" id="validity-container">
-                    <span style="font-size: 11px; color:#888;">Desde:</span>
+                    <span style="font-size: 11px; color:#888;" data-i18n="event_editor.from">Desde:</span>
                     <div style="display: flex; align-items: center;">
                         <input type="date" id="ev-date-start" class="input-text" title="Doble clic para calendario" disabled>
                         <span class="calendar-icon" id="icon-date-start" title="Abrir Calendario" style="margin-left: 5px;">📆</span>
                     </div>
-                    <span style="font-size: 11px; color:#888; margin-left: 10px;">Hasta:</span>
+                    <span style="font-size: 11px; color:#888; margin-left: 10px;" data-i18n="event_editor.to">Hasta:</span>
                     <div style="display: flex; align-items: center;">
                         <input type="date" id="ev-date-end" class="input-text" title="Doble clic para calendario" disabled>
                         <span class="calendar-icon" id="icon-date-end" title="Abrir Calendario" style="margin-left: 5px;">📆</span>
@@ -182,39 +183,39 @@
 
             <div class="row-item" style="margin-top: 15px; border-top: 1px dashed #333; padding-top: 10px;">
                 <label style="width: auto; margin-right: 10px;">
-                    <input type="checkbox" id="chk-cyclic-active"> Repetición Cíclica:
+                    <input type="checkbox" id="chk-cyclic-active"> <span data-i18n="event_editor.cyclic">Repetición Cíclica:</span>
                 </label>
                 <div style="display: flex; gap: 5px; align-items: center; flex: 1;">
-                    <span style="font-size: 11px; color:#888;">Cada</span>
+                    <span style="font-size: 11px; color:#888;" data-i18n="event_editor.every">Cada</span>
                     <input type="number" id="ev-cyclic-interval" class="input-text" style="max-width: 45px;" disabled>
                     <select id="ev-cyclic-unit" class="input-text" style="max-width: 90px; padding: 4px;" disabled>
-                        <option value="minutes">Minutos</option>
-                        <option value="hours">Horas</option>
+                        <option value="minutes" data-i18n="event_editor.minutes">Minutos</option>
+                        <option value="hours" data-i18n="event_editor.hours">Horas</option>
                     </select>
-                    <span style="font-size: 11px; color:#888; margin-left: 5px;">Límite:</span>
+                    <span style="font-size: 11px; color:#888; margin-left: 5px;" data-i18n="event_editor.limit">Límite:</span>
                     <input type="number" id="ev-cyclic-limit" class="input-text" style="max-width: 45px;" disabled>
-                    <span style="font-size: 11px; color:#888;">veces.</span>
+                    <span style="font-size: 11px; color:#888;" data-i18n="event_editor.times">veces.</span>
                 </div>
             </div>
 
         </div>
 
         <div class="section-box">
-            <h4 class="section-title">3. Comportamiento en la Lista Principal</h4>
+            <h4 class="section-title" data-i18n="event_editor.b3_title">3. Comportamiento en la Lista Principal</h4>
             <div class="radio-group">
-                <label><input type="radio" name="ev-action" value="add" checked> ➕ Insertar a la playlist (Agregar como siguiente, después de la actual)</label>
-                <label><input type="radio" name="ev-action" value="temp"> ⏳ Temporal (Se borra al terminar, ideal para comerciales)</label>
-                <label id="ev-action-clear-label"><input type="radio" id="ev-action-clear" name="ev-action" value="clear"> 🗑️ Borrar toda la lista actual y cargar este evento</label>
-                <label><input type="radio" name="ev-action" value="append-end"> 🔽 Agregar al final de la lista</label>
+                <label><input type="radio" name="ev-action" value="add" checked> <span data-i18n="event_editor.insert">➕ Insertar a la playlist (Agregar como siguiente, después de la actual)</span></label>
+                <label><input type="radio" name="ev-action" value="temp"> <span data-i18n="event_editor.temp">⏳ Temporal (Se borra al terminar, ideal para comerciales)</span></label>
+                <label id="ev-action-clear-label"><input type="radio" id="ev-action-clear" name="ev-action" value="clear"> <span data-i18n="event_editor.clear">🗑️ Borrar toda la lista actual y cargar este evento</span></label>
+                <label><input type="radio" name="ev-action" value="append-end"> <span data-i18n="event_editor.append">🔽 Agregar al final de la lista</span></label>
                 
                 <label id="ev-action-ducking-label" style="margin-top: 8px; opacity:0.4; pointer-events:none; display:flex; align-items:center; gap:6px;">
                     <input type="radio" id="ev-action-ducking" name="ev-action" value="ducking" disabled>
-                    🎙️ Superposición / Pisador (Suena encima, no modifica la lista)
+                    <span data-i18n="event_editor.overlay">🎙️ Superposición / Pisador (Suena encima, no modifica la lista)</span>
                     <button type="button" id="btn-ducking-config" title="Configurar volumen del pisador" style="display:none; background:#333; border:1px solid #555; border-radius:3px; cursor:pointer; color:#aaa; font-size:13px; padding:1px 7px; line-height:1.4;">⚙</button>
                 </label>
                 <!-- Panel de configuración del pisador -->
                 <div id="ev-ducking-panel" style="display:none; flex-direction:column; gap:10px; background:#1a1a1c; border:1px solid #3a3a3c; border-radius:4px; padding:12px; margin-top:4px; margin-left:20px;">
-                    <div style="font-size:11px; color:#00a8ff; font-weight:bold; border-bottom:1px solid #333; padding-bottom:5px;">Configuración de Pisador</div>
+                    <div style="font-size:11px; color:#00a8ff; font-weight:bold; border-bottom:1px solid #333; padding-bottom:5px;" data-i18n="event_editor.overlay_config">Configuración de Pisador</div>
                     <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc;">
                         <label style="width:175px; flex-shrink:0;">Volumen Objetivo (BGM):</label>
                         <input type="range" id="ev-ducking-vol" min="0" max="100" value="20" style="flex:1; cursor:pointer;">
@@ -225,16 +226,16 @@
                         <input type="number" id="ev-ducking-fade" class="input-text" min="0" max="5000" step="50" value="500" style="width:80px; text-align:center;">
                     </div>
                 </div>
-                <label class="disabled-feature" style="display:none;"><input type="checkbox" disabled> Aplicar transiciones suaves (Fade In / Fade Out) <span class="badge-soon">Próximamente</span></label>
+                <label class="disabled-feature" style="display:none;"><input type="checkbox" disabled> <span data-i18n="event_editor.smooth_fade">Aplicar transiciones suaves (Fade In / Fade Out)</span> <span class="badge-soon">Próximamente</span></label>
             </div>
         </div>
 
         <div class="section-box">
-            <h4 class="section-title">4. Reglas de Ejecución</h4>
+            <h4 class="section-title" data-i18n="event_editor.b4_title">4. Reglas de Ejecución</h4>
             <div class="radio-group" id="ev-exec-group">
-                <label id="ev-exec-interrupt-label"><input type="radio" name="ev-exec" value="interrupt" checked> ⚡ Interrumpir Inmediatamente (Corta la canción actual)</label>
-                <label id="ev-exec-wait-label"><input type="radio" name="ev-exec" value="wait"> ⏳ Esperar a que finalice la canción actual</label>
-                <label id="ev-exec-maxdelay-label"><input type="radio" name="ev-exec" value="max-delay"> ⌛ Tiempo Máx de Espera (Tolerancia)</label>
+                <label id="ev-exec-interrupt-label"><input type="radio" name="ev-exec" value="interrupt" checked> <span data-i18n="event_editor.interrupt">⚡ Interrumpir Inmediatamente (Corta la canción actual)</span></label>
+                <label id="ev-exec-wait-label"><input type="radio" name="ev-exec" value="wait"> <span data-i18n="event_editor.wait">⏳ Esperar a que finalice la canción actual</span></label>
+                <label id="ev-exec-maxdelay-label"><input type="radio" name="ev-exec" value="max-delay"> <span data-i18n="event_editor.max_wait">⌛ Tiempo Máx de Espera (Tolerancia)</span></label>
             </div>
             <!-- Advertencia visible solo cuando fuente=stream_url + ejecución=interrupt -->
             <div id="ev-stream-interrupt-warning" style="display:none; margin-top:8px; background:#2c1a00; border-left:3px solid #e67e22; padding:8px 10px; border-radius:0 3px 3px 0; font-size:11px; color:#f0a050;">
@@ -243,31 +244,31 @@
 
             <div style="margin-top: 15px; border-top: 1px dashed #333; padding-top: 10px;">
                 <div class="row-item">
-                    <label style="width: auto; margin-right: 10px;">Tiempo Máx:</label>
+                    <label style="width: auto; margin-right: 10px;" data-i18n="event_editor.max_time">Tiempo Máx:</label>
                     <input type="number" id="ev-max-delay-minutes" class="input-text" style="max-width: 50px;" min="0" disabled>
                     <span style="font-size: 11px; color:#888;">min</span>
                     <input type="number" id="ev-max-delay-seconds" class="input-text" style="max-width: 50px;" min="0" max="59" disabled>
-                    <span style="font-size: 11px; color:#888; margin-left: 2px;">seg. Acción:</span>
+                    <span style="font-size: 11px; color:#888; margin-left: 2px;" data-i18n="event_editor.action_after">seg. Acción:</span>
                     <select id="ev-max-delay-action" class="input-text" style="max-width: 140px;" disabled>
-                        <option value="force">Forzar evento</option>
-                        <option value="omit">Omitir este evento</option>
+                        <option value="force" data-i18n="event_editor.force">Forzar evento</option>
+                        <option value="omit" data-i18n="event_editor.skip">Omitir este evento</option>
                     </select>
                 </div>
                 
                 <div class="row-item" style="margin-top: 10px;">
                     <label style="width: auto; margin-right: 10px;">
-                        <input type="checkbox" id="chk-require-playing"> No ejecutar si el reproductor está detenido.
+                        <input type="checkbox" id="chk-require-playing"> <span data-i18n="event_editor.no_exec_stop">No ejecutar si el reproductor está detenido.</span>
                     </label>
                 </div>
 
                 <div style="margin-top: 15px; border-top: 1px dashed #333; padding-top: 10px;">
                     <div class="row-item">
-                        <label style="width: auto; margin-right: 10px;">Nivel de Prioridad:</label>
+                        <label style="width: auto; margin-right: 10px;" data-i18n="event_editor.priority">Nivel de Prioridad:</label>
                         <select id="ev-priority" class="input-text" style="max-width: 130px;">
-                            <option value="low">Baja</option>
-                            <option value="normal" selected>Normal</option>
-                            <option value="high">Alta</option>
-                            <option value="critical">Critica</option>
+                            <option value="low" data-i18n="event_editor.p_low">Baja</option>
+                            <option value="normal" selected data-i18n="event_editor.p_normal">Normal</option>
+                            <option value="high" data-i18n="event_editor.p_high">Alta</option>
+                            <option value="critical" data-i18n="event_editor.p_critical">Critica</option>
                         </select>
                     </div>
                 </div>
@@ -275,51 +276,51 @@
         </div>
 
         <div class="section-box">
-            <h4 class="section-title">5. Apariencia y Organización</h4>
+            <h4 class="section-title" data-i18n="event_editor.b5_title">5. Apariencia y Organización</h4>
             <div class="row-item">
-                <label>Nombre del Evento:</label>
-                <input type="text" id="ev-name" class="input-text" placeholder="Ej: Bloque de Publicidad">
+                <label data-i18n="event_editor.event_name">Nombre del Evento:</label>
+                <input type="text" id="ev-name" class="input-text" placeholder="Ej: Bloque de Publicidad" data-i18n="[placeholder]event_editor.ph_name">
             </div>
             
             <div class="row-item">
-                <label>Grupo:</label>
+                <label data-i18n="event_editor.group">Grupo:</label>
                 <select id="ev-group" class="dark-select" style="flex: 1; background: #111; color: white; border: 1px solid #444; padding: 6px;"></select>
                 <button type="button" id="btn-edit-groups" class="settings-btn" title="Gestionar Grupos" style="margin-left: 5px;">⚙️</button>
             </div>
 
             <div class="row-item">
-                <label>Color de Texto:</label>
+                <label data-i18n="event_editor.txt_color">Color de Texto:</label>
                 <div style="display:flex; align-items:center; gap: 10px;">
                     <input type="color" id="ev-color-txt" class="color-picker-native" value="#ffffff">
                 </div>
             </div>
             
             <div class="row-item">
-                <label>Color de Fondo:</label>
+                <label data-i18n="event_editor.bg_color">Color de Fondo:</label>
                 <div style="display:flex; align-items:center; gap: 10px;">
                     <input type="color" id="ev-color-bg" class="color-picker-native" value="#1a1a1c">
-                    <small style="color: #777;">(Fondo para este evento)</small>
+                    <small style="color: #777;" data-i18n="event_editor.bg_desc">(Fondo para este evento)</small>
                 </div>
             </div>
 
             <div class="row-item" style="justify-content: flex-end; margin-top: -5px; margin-bottom: 15px;">
-                <button type="button" id="btn-reset-ev-colors" class="settings-btn" title="Restablecer a colores de fábrica">↺ Restablecer Colores</button>
+                <button type="button" id="btn-reset-ev-colors" class="settings-btn" title="Restablecer a colores de fábrica" data-i18n="[title]event_groups.btn_reset_title; event_editor.reset_colors">↺ Restablecer Colores</button>
             </div>
 
             <div class="info-note">
-                <strong>🚥 Sistema de Semáforo Activado:</strong> El color de fondo cambiará automáticamente en la lista principal según se acerque la hora de ejecución.<br>
-                • <strong>15 min:</strong> Naranja transparente<br>
-                • <strong>5 min:</strong> Naranja sólido<br>
-                • <strong>1 min:</strong> Rojo sólido<br>
-                • <strong>Modo Manual:</strong> Parpadeo por 10 segundos.
+                <strong data-i18n="event_editor.traffic_light">🚥 Sistema de Semáforo Activado:</strong> <span data-i18n="event_editor.traffic_desc">El color de fondo cambiará automáticamente en la lista principal según se acerque la hora de ejecución.</span><br>
+                • <strong data-i18n="[html]event_editor.min_15">15 min:</strong> Naranja transparente<br>
+                • <strong data-i18n="[html]event_editor.min_5">5 min:</strong> Naranja sólido<br>
+                • <strong data-i18n="[html]event_editor.min_1">1 min:</strong> Rojo sólido<br>
+                • <strong data-i18n="[html]event_editor.manual_mode">Modo Manual:</strong> Parpadeo por 10 segundos.
             </div>
         </div>
 
     </div> 
     
     <div class="bottom-buttons" style="padding: 15px; background: #222225; border-top: 1px solid #333; display: flex; justify-content: flex-end; gap: 10px;">
-        <button type="button" id="btn-cancel" class="settings-btn" style="background: #444;">Cancelar</button>
-        <button type="button" id="btn-save" class="settings-btn" style="background: #27ae60;">💾 Guardar Evento</button>
+        <button type="button" id="btn-cancel" class="settings-btn" style="background: #444;" data-i18n="event_editor.cancel">Cancelar</button>
+        <button type="button" id="btn-save" class="settings-btn" style="background: #27ae60;" data-i18n="event_editor.save">💾 Guardar Evento</button>
     </div>
 
     <script src="event_editor.js"></script>

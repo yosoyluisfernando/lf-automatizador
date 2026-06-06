@@ -121,42 +121,42 @@
 
     <div class="top-toolbar">
         <div class="toolbar-left-tools">
-            <button id="btn-top-clear" class="toolbar-btn" title="Limpiar Playlist (Ctrl+N)">📄</button>
-            <button id="btn-top-open" class="toolbar-btn" title="Abrir Playlist (Ctrl+O)">📂</button>
-            <button id="btn-top-save" class="toolbar-btn" title="Guardar Playlist (Ctrl+S)">💾</button>
+            <button id="btn-top-clear" class="toolbar-btn" title="Limpiar Playlist (Ctrl+N)" data-i18n="[title]main_window.toolbar.clear_playlist">📄</button>
+            <button id="btn-top-open" class="toolbar-btn" title="Abrir Playlist (Ctrl+O)" data-i18n="[title]main_window.toolbar.open_playlist">📂</button>
+            <button id="btn-top-save" class="toolbar-btn" title="Guardar Playlist (Ctrl+S)" data-i18n="[title]main_window.toolbar.save_playlist">💾</button>
         </div>
         <div class="toolbar-right-tools">
             <div id="monitor-toolbar-wrap" class="monitor-toolbar-wrap" style="display: none;">
-                <button id="btn-monitor-ui" class="toolbar-btn toolbar-btn-compact" title="Volumen de Monitores">&#128266;</button>
+                <button id="btn-monitor-ui" class="toolbar-btn toolbar-btn-compact" title="Volumen de Monitores" data-i18n="[title]main_window.toolbar.monitor_volume">&#128266;</button>
                 <div id="monitor-popover" class="monitor-popover" style="display: none;">
-                    <div class="monitor-popover-card" title="Volumen de Monitores">
+                    <div class="monitor-popover-card" title="Volumen de Monitores" data-i18n="[title]main_window.toolbar.monitor_volume">
                         <input type="range" id="monitor-volume-pop" min="0" max="100" value="100" orient="vertical">
                         <span class="fader-caption">MON</span>
                     </div>
                 </div>
             </div>
-            <button id="btn-open-settings" class="toolbar-btn" title="Configuración General">⚙️</button>
+            <button id="btn-open-settings" class="toolbar-btn" title="Configuración General" data-i18n="[title]main_window.toolbar.settings">⚙️</button>
         </div>
     </div>
 
     <div class="app-container">
         
         <div class="top-panel">
-            <div class="player-box box-dark" id="panel-aire" style="flex: 2; cursor: crosshair;" title="Clic derecho para adelantar/atrasar">
+            <div class="player-box box-dark" id="panel-aire" style="flex: 2; cursor: crosshair;" title="Clic derecho para adelantar/atrasar" data-i18n="[title]main_window.aire.seek_tooltip">
                 <canvas id="waveform-canvas"></canvas>
                 <div class="progress-bar-fill prog-normal" id="barra-progreso"></div>
                 
                 <div class="aire-text-container">
-                    <div class="header-title">En el aire - Reproduciendo ahora</div>
-                    <div class="track-title-large" id="txt-cancion">Esperando...</div>
+                    <div class="header-title" data-i18n="main_window.aire.on_air">En el aire - Reproduciendo ahora</div>
+                    <div class="track-title-large" id="txt-cancion" data-i18n="main_window.aire.waiting">Esperando...</div>
                     
                     <div class="aire-bottom-info">
                         
                         <div class="time-block time-block-primary">
                             <div class="time-readout-group">
-                                <span class="label" id="lbl-tiempo">Tiempo transcurrido</span>
+                                <span class="label" id="lbl-tiempo" data-i18n="main_window.aire.elapsed_time">Tiempo transcurrido</span>
                                 <div class="time-readout-row">
-                                    <span id="txt-tiempo" class="digital-time digital-time-main" style="cursor: pointer;" title="Clic para alternar Tiempo Restante / Transcurrido">00:00.0</span>
+                                    <span id="txt-tiempo" class="digital-time digital-time-main" style="cursor: pointer;" title="Clic para alternar Tiempo Restante / Transcurrido" data-i18n="[title]main_window.aire.toggle_time">00:00.0</span>
                                     <span id="txt-cue-countdown" class="digital-time cue-countdown-display"></span>
                                 </div>
                             </div>
@@ -174,7 +174,7 @@
                         </div>
 
                         <div class="time-block" style="margin-left: 15px;">
-                            <span class="label">Acaba a las</span>
+                            <span class="label" data-i18n="main_window.aire.ends_at">Acaba a las</span>
                             <span id="txt-acaba" class="digital-time">00:00:00</span>
                         </div>
                     </div>
@@ -194,12 +194,12 @@
 
             <div class="top-right-col" style="flex: 1.2;">
                 <div class="player-box box-dark" id="panel-siguiente" style="flex: 1;">
-                    <div class="header-title">Siguiente (Q)</div>
-                    <div class="track-title-next" id="txt-siguiente">(Vacío)</div>
+                    <div class="header-title" data-i18n="main_window.aire.next">Siguiente (Q)</div>
+                    <div class="track-title-next" id="txt-siguiente" data-i18n="main_window.aire.empty">(Vacío)</div>
                 </div>
                 
                 <div class="widgets-bar">
-                    <div class="widget-item clock-widget" id="btn-reloj" title="Clic Izquierdo: Lanzar Hora | Clic Derecho: Agregar a la Lista" style="cursor: pointer; transition: 0.2s;">
+                    <div class="widget-item clock-widget" id="btn-reloj" title="Clic Izquierdo: Lanzar Hora | Clic Derecho: Agregar a la Lista" data-i18n="[title]main_window.widgets.clock_tooltip" style="cursor: pointer; transition: 0.2s;">
                         <span id="clock-date" style="font-size: 11px; color: #aaa; display: block; margin-bottom: 2px;">Cargando...</span>
                         <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
                             <span style="font-size: 18px; color: #00a8ff;">⌚</span>
@@ -222,50 +222,50 @@
         <div class="bottom-panel">
             <div class="sidebar" id="left-sidebar">
                 <div class="tabs">
-                    <button class="active" id="tab-btn-explorador">Explorador</button>
-                    <button id="tab-btn-eventos" style="min-width: 85px; transition: background-color 0.4s ease;">Eventos</button>
-                    <button id="tab-btn-fx" style="padding-left: 6px; padding-right: 6px;">FX</button>
-                    <button id="btn-open-encoder" style="margin-left: auto; background: transparent; color: #e74c3c; font-size: 18px; border: none; cursor: pointer; padding: 0 5px; border-radius: 4px; transition: 0.3s;" title="Transmitir por Internet (Encoder)">📡</button>
+                    <button class="active" id="tab-btn-explorador" data-i18n="main_window.sidebar.explorer">Explorador</button>
+                    <button id="tab-btn-eventos" style="min-width: 85px; transition: background-color 0.4s ease;" data-i18n="main_window.sidebar.events">Eventos</button>
+                    <button id="tab-btn-fx" style="padding-left: 6px; padding-right: 6px;" data-i18n="main_window.sidebar.fx">FX</button>
+                    <button id="btn-open-encoder" style="margin-left: auto; background: transparent; color: #e74c3c; font-size: 18px; border: none; cursor: pointer; padding: 0 5px; border-radius: 4px; transition: 0.3s;" title="Transmitir por Internet (Encoder)" data-i18n="[title]main_window.sidebar.encoder">📡</button>
                 </div>
                 
                 <div class="sidebar-content active-content" id="content-explorador" style="display: flex;">
                     <div class="explorer-content" id="file-explorer">
-                        <p style="padding: 15px; color: #888; text-align: center;">Cargando directorios...</p>
+                        <p style="padding: 15px; color: #888; text-align: center;" data-i18n="main_window.sidebar.loading_dirs">Cargando directorios...</p>
                     </div>
                 </div>
 
                 <div class="sidebar-content" id="content-eventos" style="display: none; flex-direction: column;">
                     <div class="events-top-bar">
-                        <label title="Habilitar el disparador automático de eventos"><input type="checkbox" id="chk-events-master" checked> Activar Eventos</label>
-                        <label title="Los eventos no saltarán solos, requerirán clic en Ejecutar"><input type="checkbox" id="chk-events-manual"> Solo Manual</label>
-                        <button id="btn-events-exec" class="mini-btn" style="margin-left: auto;">▶ Ejecutar</button>
+                        <label title="Habilitar el disparador automático de eventos" data-i18n="[title]main_window.sidebar.events_tab.auto_trigger_title"><input type="checkbox" id="chk-events-master" checked> <span data-i18n="main_window.sidebar.events_tab.activate">Activar Eventos</span></label>
+                        <label title="Los eventos no saltarán solos, requerirán clic en Ejecutar" data-i18n="[title]main_window.sidebar.events_tab.manual_only_title"><input type="checkbox" id="chk-events-manual"> <span data-i18n="main_window.sidebar.events_tab.manual_only">Solo Manual</span></label>
+                        <button id="btn-events-exec" class="mini-btn" style="margin-left: auto;" data-i18n="main_window.sidebar.events_tab.execute">▶ Ejecutar</button>
                     </div>
                     <div class="events-top-bar event-prehold-bar" style="display: none;">
-                        <label title="Si una cancion termina poco antes de un evento, espera el evento en vez de arrancar otra pista"><input type="checkbox" id="chk-event-prehold"> Proteger antes de evento</label>
+                        <label title="Si una cancion termina poco antes de un evento, espera el evento en vez de arrancar otra pista" data-i18n="[title]main_window.sidebar.events_tab.prehold_title"><input type="checkbox" id="chk-event-prehold"> <span data-i18n="main_window.sidebar.events_tab.prehold">Proteger antes de evento</span></label>
                         <input type="number" id="event-prehold-seconds" class="settings-input" min="1" max="120" step="1" style="width: 52px; padding: 3px 5px;">
-                        <span style="font-size: 10px; color: #888;">seg.</span>
+                        <span style="font-size: 10px; color: #888;" data-i18n="main_window.sidebar.events_tab.sec">seg.</span>
                     </div>
                     <div class="events-list-container" style="flex: 1; overflow-y: auto; background: #111; transition: 0.3s;">
                         <ul id="events-list" class="event-ul"></ul>
                         <div id="events-emitted-container" class="events-emitted-container" style="display: none;">
-                            <div class="events-emitted-header">Emitidos recientemente</div>
+                            <div class="events-emitted-header" data-i18n="main_window.sidebar.events_tab.recently_emitted">Emitidos recientemente</div>
                             <ul id="events-list-emitted" class="event-ul"></ul>
                         </div>
                     </div>
                     <div class="events-bottom-bar">
-                        <button id="btn-events-add" class="mini-btn">Añadir</button>
-                        <button id="btn-events-mod" class="mini-btn" disabled>Modificar</button>
-                        <button id="btn-events-filter" class="mini-btn">Filtro ▼</button>
-                        <button id="btn-events-list" class="mini-btn" style="margin-left: auto;">Lista ▼</button>
+                        <button id="btn-events-add" class="mini-btn" data-i18n="main_window.sidebar.events_tab.add">Añadir</button>
+                        <button id="btn-events-mod" class="mini-btn" disabled data-i18n="main_window.sidebar.events_tab.modify">Modificar</button>
+                        <button id="btn-events-filter" class="mini-btn" data-i18n="main_window.sidebar.events_tab.filter">Filtro ▼</button>
+                        <button id="btn-events-list" class="mini-btn" style="margin-left: auto;" data-i18n="main_window.sidebar.events_tab.list">Lista ▼</button>
                     </div>
                 </div>
 
                 <div class="sidebar-content" id="content-fx" style="display: none; padding: 10px; flex-direction: column; gap: 10px; overflow-y: auto;">
                     <div class="events-top-bar" style="margin-bottom: 5px; justify-content: space-between; border: none; background: transparent; display: flex; align-items: center;">
-                        <span style="font-size: 11px; font-weight: bold; color: #00a8ff;" title="Arriba tiene mayor prioridad y se aplica al final de la cadena.">Orden de Efectos</span>
+                        <span style="font-size: 11px; font-weight: bold; color: #00a8ff;" title="Arriba tiene mayor prioridad y se aplica al final de la cadena." data-i18n="[title]main_window.sidebar.fx_tab.order_title; main_window.sidebar.fx_tab.order">Orden de Efectos</span>
                         <div style="display: flex; gap: 5px;">
-                            <button id="btn-fx-up" class="mini-btn" title="Subir Módulo seleccionado" style="padding: 2px 8px;">▲</button>
-                            <button id="btn-fx-down" class="mini-btn" title="Bajar Módulo seleccionado" style="padding: 2px 8px;">▼</button>
+                            <button id="btn-fx-up" class="mini-btn" title="Subir Módulo seleccionado" style="padding: 2px 8px;" data-i18n="[title]main_window.sidebar.fx_tab.up_title">▲</button>
+                            <button id="btn-fx-down" class="mini-btn" title="Bajar Módulo seleccionado" style="padding: 2px 8px;" data-i18n="[title]main_window.sidebar.fx_tab.down_title">▼</button>
                         </div>
                     </div>
                     
@@ -273,31 +273,31 @@
                         
                         <div class="fx-module" data-id="eq" style="cursor: pointer; border: 2px solid transparent; transition: 0.2s;">
                             <div class="fx-header" style="display: flex; align-items: center;">
-                                <span style="flex-grow: 1;">🎚️ Ecualizador Master</span>
+                                <span style="flex-grow: 1;" data-i18n="main_window.sidebar.fx_tab.eq_master">🎚️ Ecualizador Master</span>
                                 <label class="switch"><input type="checkbox" id="fx-eq-enable"> <span class="slider round"></span></label>
                             </div>
                             <div class="fx-body">
-                                <button id="btn-open-eq" class="settings-btn" style="width: 100%; margin-top: 8px;">🎛️ Abrir Panel Master</button>
+                                <button id="btn-open-eq" class="settings-btn" style="width: 100%; margin-top: 8px;" data-i18n="main_window.sidebar.fx_tab.open_master_panel">🎛️ Abrir Panel Master</button>
                             </div>
                         </div>
 
                         <div class="fx-module" data-id="comp" style="cursor: pointer; border: 2px solid transparent; transition: 0.2s;">
                             <div class="fx-header" style="display: flex; align-items: center;">
-                                <span style="flex-grow: 1;">🗜️ Compresor (AGC)</span>
+                                <span style="flex-grow: 1;" data-i18n="main_window.sidebar.fx_tab.compressor">🗜️ Compresor (AGC)</span>
                                 <label class="switch"><input type="checkbox" id="fx-comp-enable" class="fx-mut"> <span class="slider round"></span></label>
                             </div>
                             <div class="fx-body">
-                                <p style="font-size: 11px; color: #888; margin: 0; pointer-events: none;">Nivela el volumen automáticamente.</p>
+                                <p style="font-size: 11px; color: #888; margin: 0; pointer-events: none;" data-i18n="main_window.sidebar.fx_tab.compressor_hint">Nivela el volumen automáticamente.</p>
                             </div>
                         </div>
 
                         <div class="fx-module" data-id="limiter" style="cursor: pointer; border: 2px solid transparent; transition: 0.2s;">
                             <div class="fx-header" style="display: flex; align-items: center;">
-                                <span style="flex-grow: 1;">🛑 Limitador</span>
+                                <span style="flex-grow: 1;" data-i18n="main_window.sidebar.fx_tab.limiter">🛑 Limitador</span>
                                 <label class="switch"><input type="checkbox" id="fx-limiter-enable" class="fx-mut"> <span class="slider round"></span></label>
                             </div>
                             <div class="fx-body">
-                                <p style="font-size: 11px; color: #888; margin: 0; pointer-events: none;">Evita la saturación en picos altos.</p>
+                                <p style="font-size: 11px; color: #888; margin: 0; pointer-events: none;" data-i18n="main_window.sidebar.fx_tab.limiter_hint">Evita la saturación en picos altos.</p>
                             </div>
                         </div>
 
@@ -306,29 +306,29 @@
 
                 <div class="system-log incident-widget" id="incident-panel">
                     <div class="log-header">
-                        <span>Centro de Estado e Incidencias</span>
+                        <span data-i18n="main_window.incidents.center_title">Centro de Estado e Incidencias</span>
                         <span class="incident-counter" id="incident-auto-count">AUTO 0</span>
                     </div>
                     <div class="incident-status-bar">
                         <div class="incident-status-card" id="status-air">
-                            <span class="incident-status-label">Aire</span>
+                            <span class="incident-status-label" data-i18n="main_window.incidents.air">Aire</span>
                             <span class="incident-status-value">Detenido</span>
                         </div>
                         <div class="incident-status-card" id="status-events">
-                            <span class="incident-status-label">Eventos</span>
+                            <span class="incident-status-label" data-i18n="main_window.incidents.events">Eventos</span>
                             <span class="incident-status-value">Activos</span>
                         </div>
                         <div class="incident-status-card" id="status-encoder">
-                            <span class="incident-status-label">Encoder</span>
+                            <span class="incident-status-label" data-i18n="main_window.incidents.encoder">Encoder</span>
                             <span class="incident-status-value">Desconectado</span>
                         </div>
                         <div class="incident-status-card" id="status-session">
-                            <span class="incident-status-label">Sesion</span>
+                            <span class="incident-status-label" data-i18n="main_window.incidents.session">Sesion</span>
                             <span class="incident-status-value">Nueva</span>
                         </div>
                     </div>
                     <div class="incident-widget-actions">
-                        <button class="mini-btn" id="btn-open-reports" style="width: 100%;">Ver reportes</button>
+                        <button class="mini-btn" id="btn-open-reports" style="width: 100%;" data-i18n="main_window.incidents.view_reports">Ver reportes</button>
                     </div>
                 </div>
             </div>
@@ -338,17 +338,17 @@
             <div class="main-content">
                 <div class="controls-bar">
                     <div class="controls-buttons">
-                        <button id="btn-play">▶ Play (P)</button>
-                        <button id="btn-pause">⏸ Pausa</button>
-                        <button id="btn-stop">⏹ Stop (S)</button>
-                        <button id="btn-next">⏭ Sig (N)</button>
-                        <button id="btn-stop-after" style="transition: 0.2s;" title="Pausar reproducción al finalizar la actual (F)">⏸⏹ Pausar Fin (F)</button>
-                        <button id="btn-talk" class="talk-btn" title="MIC / Pulsar para hablar (Clic derecho para configurar)">🎤 MIC</button>
+                        <button id="btn-play" data-i18n="main_window.controls.play">▶ Play (P)</button>
+                        <button id="btn-pause" data-i18n="main_window.controls.pause">⏸ Pausa</button>
+                        <button id="btn-stop" data-i18n="main_window.controls.stop">⏹ Stop (S)</button>
+                        <button id="btn-next" data-i18n="main_window.controls.next">⏭ Sig (N)</button>
+                        <button id="btn-stop-after" style="transition: 0.2s;" title="Pausar reproducción al finalizar la actual (F)" data-i18n="[title]main_window.controls.stop_after_title; main_window.controls.stop_after">⏸⏹ Pausar Fin (F)</button>
+                        <button id="btn-talk" class="talk-btn" title="MIC / Pulsar para hablar (Clic derecho para configurar)" data-i18n="[title]main_window.controls.talk_title; main_window.controls.talk">🎤 MIC</button>
                     </div>
                     <div class="playback-modes">
-                        <button id="btn-mode-looplist" class="mode-btn" title="Reproducción Infinita">🔁</button>
-                        <button id="btn-mode-remove" class="mode-btn" title="Eliminar al terminar">🗑️</button>
-                        <button id="btn-mode-repeat" class="mode-btn" title="Repetir canción">🔂</button>
+                        <button id="btn-mode-looplist" class="mode-btn" title="Reproducción Infinita" data-i18n="[title]main_window.controls.loop_list_title; main_window.controls.loop_list">🔁</button>
+                        <button id="btn-mode-remove" class="mode-btn" title="Eliminar al terminar" data-i18n="[title]main_window.controls.remove_played_title; main_window.controls.remove_played">🗑️</button>
+                        <button id="btn-mode-repeat" class="mode-btn" title="Repetir canción" data-i18n="[title]main_window.controls.repeat_track_title; main_window.controls.repeat_track">🔂</button>
                     </div>
                 </div>
 
@@ -363,19 +363,19 @@
                     <table class="playlist-table" id="playlist-table">
                         <thead>
                             <tr>
-                                <th>Hora</th>
-                                <th>Título</th>
-                                <th>Duración</th>
-                                <th>Intro</th>
-                                <th>Outro</th>
+                                <th data-i18n="main_window.playlist.col_time">Hora</th>
+                                <th data-i18n="main_window.playlist.col_title">Título</th>
+                                <th data-i18n="main_window.playlist.col_duration">Duración</th>
+                                <th data-i18n="main_window.playlist.col_intro">Intro</th>
+                                <th data-i18n="main_window.playlist.col_outro">Outro</th>
                             </tr>
                         </thead>
                     </table>
                 </div>
 
                 <div class="playlist-footer" style="display: flex; justify-content: space-between; align-items: center;">
-                    <div class="controls-info">Duración Lista Activa: <span id="txt-duracion-total">00:00:00</span></div>
-                    <div id="footer-events-warning" style="display: none; color: #e74c3c; font-weight: bold; font-size: 13px;">⛔️ Eventos desactivados</div>
+                    <div class="controls-info"><span data-i18n="main_window.controls.active_list_duration">Duración Lista Activa:</span> <span id="txt-duracion-total">00:00:00</span></div>
+                    <div id="footer-events-warning" style="display: none; color: #e74c3c; font-weight: bold; font-size: 13px;" data-i18n="main_window.controls.events_disabled">⛔️ Eventos desactivados</div>
                 </div>
             </div>
 
@@ -444,202 +444,225 @@
                 </div>
             </div>
 
-            <p style="font-size: 12px; color: #888; margin-bottom: 15px; text-align: center;">Haz doble clic en cualquier perilla para llevarla a 0.</p>
+            <p style="font-size: 12px; color: #888; margin-bottom: 15px; text-align: center;" data-i18n="modals.eq.hint">Haz doble clic en cualquier perilla para llevarla a 0.</p>
             <div class="eq-container" id="eq-bands-container" style="height: 140px; margin-bottom: 25px; padding: 0 10px;"></div>
             
             <div style="display: flex; justify-content: space-between; border-top: 1px solid #333; padding-top: 15px;">
-                <button id="btn-eq-reset" class="settings-btn" style="background-color: #d35400; color: white;">↺ Restablecer Todo</button>
+                <button id="btn-eq-reset" class="settings-btn" style="background-color: #d35400; color: white;" data-i18n="modals.eq.reset">↺ Restablecer Todo</button>
                 <div style="display: flex; gap: 10px;">
-                    <button id="btn-eq-cancel" class="settings-btn" style="background-color: #c0392b; color: white;">❌ Cancelar</button>
-                    <button id="btn-eq-save" class="settings-btn" style="background-color: #27ae60; color: white;">💾 Guardar Cambios</button>
+                    <button id="btn-eq-cancel" class="settings-btn" style="background-color: #c0392b; color: white;" data-i18n="modals.eq.cancel">❌ Cancelar</button>
+                    <button id="btn-eq-save" class="settings-btn" style="background-color: #27ae60; color: white;" data-i18n="modals.eq.save">💾 Guardar Cambios</button>
                 </div>
             </div>
         </div>
     </div>
 
     <div id="explorer-folder-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="ctx-add-random">🔀 Agregar carpeta como pista aleatoria</div>
-        <div class="context-item" id="ctx-add-all">➕ Agregar todo el contenido normal</div>
+        <div class="context-item" id="ctx-add-random" data-i18n="context_menus.explorer_folder.add_random">🔀 Agregar carpeta como pista aleatoria</div>
+        <div class="context-item" id="ctx-add-all" data-i18n="context_menus.explorer_folder.add_all">➕ Agregar todo el contenido normal</div>
         <div class="context-separator"></div>
         <div class="context-item has-submenu">
-            <span style="display: flex; justify-content: space-between;">Establecer tipo de archivo <span>▶</span></span>
+            <span style="display: flex; justify-content: space-between;"><span data-i18n="context_menus.explorer_folder.set_type">Establecer tipo de archivo</span> <span>▶</span></span>
             <div class="submenu" id="exp-folder-type-list" style="max-height: 250px; overflow-y: auto;"></div>
         </div>
     </div>
 
     <div id="explorer-file-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="ctx-file-add">➕ Agregar a la lista</div>
-        <div class="context-item" id="ctx-file-preview">🔊 Escucha previa</div>
+        <div class="context-item" id="ctx-file-add" data-i18n="context_menus.explorer_file.add">➕ Agregar a la lista</div>
+        <div class="context-item" id="ctx-file-preview" data-i18n="context_menus.explorer_file.preview">🔊 Escucha previa</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="ctx-file-edit" style="color: #00a8ff;">🎧 Editor de Pistas Avanzado</div>
+        <div class="context-item" id="ctx-file-edit" style="color: #00a8ff;" data-i18n="context_menus.explorer_file.advanced_edit">🎧 Editor de Pistas Avanzado</div>
     </div>
 
     <div id="playlist-context-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="pm-stream-edit" style="display:none;">📡 Editar emisora... (Beta)</div>
-        <div class="context-item" id="pm-preview">🔊 Escucha previa</div>
+        <div class="context-item" id="pm-stream-edit" style="display:none;" data-i18n="context_menus.playlist.stream_edit">📡 Editar emisora... (Beta)</div>
+        <div class="context-item" id="pm-preview" data-i18n="context_menus.playlist.preview">🔊 Escucha previa</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="pm-cut">Cortar</div>
-        <div class="context-item" id="pm-copy">Copiar</div>
-        <div class="context-item" id="pm-paste">Pegar</div>
+        <div class="context-item" id="pm-cut" data-i18n="context_menus.playlist.cut">Cortar</div>
+        <div class="context-item" id="pm-copy" data-i18n="context_menus.playlist.copy">Copiar</div>
+        <div class="context-item" id="pm-paste" data-i18n="context_menus.playlist.paste">Pegar</div>
         <div class="context-separator"></div>
         <div class="context-item has-submenu" id="pm-tools">
-            <span style="display: flex; justify-content: space-between;">Herramientas <span>▶</span></span>
+            <span style="display: flex; justify-content: space-between;"><span data-i18n="context_menus.playlist.tools">Herramientas</span> <span>▶</span></span>
             <div class="submenu submenu-tools">
-                <div class="context-item" id="pm-advanced-edit" style="color: #00a8ff;">🎧 Editor de Pistas Avanzado</div>
-                <div class="context-item" id="pm-transition-edit" style="color: #2ecc71;">🔀 Editar Transición Musical</div>
-                <div class="context-item" id="pm-jingle-edit" style="color: #f39c12;">🎙️ Editar Cruce con Pisador</div>
-                <div class="context-item" id="pm-auto-pisador" style="color: #b56ad9;">Pisadores automaticos...</div>
+                <div class="context-item" id="pm-advanced-edit" style="color: #00a8ff;" data-i18n="context_menus.playlist.advanced_edit">🎧 Editor de Pistas Avanzado</div>
+                <div class="context-item" id="pm-transition-edit" style="color: #2ecc71;" data-i18n="context_menus.playlist.transition_edit">🔀 Editar Transición Musical</div>
+                <div class="context-item" id="pm-jingle-edit" style="color: #f39c12;" data-i18n="context_menus.playlist.jingle_edit">🎙️ Editar Cruce con Pisador</div>
+                <div class="context-item" id="pm-auto-pisador" style="color: #b56ad9;" data-i18n="context_menus.playlist.auto_pisador">Pisadores automaticos...</div>
                 <div class="context-separator"></div>
-                <div class="context-item" id="pm-edit-name">Editar archivo y metadatos...</div>
-                <div class="context-item" id="pm-show-folder">Mostrar en carpeta</div>
+                <div class="context-item" id="pm-edit-name" data-i18n="context_menus.playlist.edit_name">Editar archivo y metadatos...</div>
+                <div class="context-item" id="pm-show-folder" data-i18n="context_menus.playlist.show_folder">Mostrar en carpeta</div>
                 <div class="context-item has-submenu" id="pm-set-type">
-                    <span style="display: flex; justify-content: space-between;">Establecer tipo de archivo <span>▶</span></span>
+                    <span style="display: flex; justify-content: space-between;"><span data-i18n="context_menus.playlist.set_type">Establecer tipo de archivo</span> <span>▶</span></span>
                     <div class="submenu" id="pm-type-list" style="max-height: 250px; overflow-y: auto;"></div>
                 </div>
             </div>
         </div>
         <div class="context-separator"></div>
-        <div class="context-item" id="pm-toggle-temp" style="display:flex;justify-content:space-between;align-items:center;">&#9203; Marcar / Desmarcar Temporal<span class="cm-sc" data-action-id="playlist.toggle_temp"></span></div>
-        <div class="context-item" id="pm-shuffle" style="display:flex;justify-content:space-between;align-items:center;">&#128256; Mezclar lista<span class="cm-sc" data-action-id="playlist.shuffle"></span></div>
-        <div class="context-item" id="pm-set-next" style="display:flex;justify-content:space-between;align-items:center;">Agregar como siguiente<span class="cm-sc" data-action-id="playlist.set_next"></span></div>
+        <div class="context-item" id="pm-toggle-temp" style="display:flex;justify-content:space-between;align-items:center;"><span data-i18n="context_menus.playlist.toggle_temp">&#9203; Marcar / Desmarcar Temporal</span><span class="cm-sc" data-action-id="playlist.toggle_temp"></span></div>
+        <div class="context-item" id="pm-shuffle" style="display:flex;justify-content:space-between;align-items:center;"><span data-i18n="context_menus.playlist.shuffle">&#128256; Mezclar lista</span><span class="cm-sc" data-action-id="playlist.shuffle"></span></div>
+        <div class="context-item" id="pm-set-next" style="display:flex;justify-content:space-between;align-items:center;"><span data-i18n="context_menus.playlist.set_next">Agregar como siguiente</span><span class="cm-sc" data-action-id="playlist.set_next"></span></div>
         <div class="context-separator"></div>
-        <div class="context-item" id="pm-clear" style="display:flex;justify-content:space-between;align-items:center;">&#128465;&#65039; Borrar toda la lista<span class="cm-sc" data-action-id="insert.clear_playlist"></span></div>
-        <div class="context-item" id="pm-delete" style="color:#e74c3c;display:flex;justify-content:space-between;align-items:center;">&#10060; Borrar cancion actual<span class="cm-sc" data-action-id="playlist.delete_selected"></span></div>
+        <div class="context-item" id="pm-clear" style="display:flex;justify-content:space-between;align-items:center;"><span data-i18n="context_menus.playlist.clear">&#128465;&#65039; Borrar toda la lista</span><span class="cm-sc" data-action-id="insert.clear_playlist"></span></div>
+        <div class="context-item" id="pm-delete" style="color:#e74c3c;display:flex;justify-content:space-between;align-items:center;"><span data-i18n="context_menus.playlist.delete">&#10060; Borrar cancion actual</span><span class="cm-sc" data-action-id="playlist.delete_selected"></span></div>
+    </div>
+
+    <!-- Menú contextual de las pestañas de playlist (clic derecho sobre Playlist 1-4) -->
+    <div id="pl-tab-context-menu" class="context-menu" style="display: none; z-index: 3000;">
+        <div class="context-item" id="pltm-rename" data-i18n="context_menus.pl_tab.rename">&#9999;&#65039; Renombrar playlist...</div>
+        <div class="context-separator"></div>
+        <div class="context-item" id="pltm-toggle-reorder" style="display:flex;justify-content:space-between;align-items:center;gap:14px;">
+            <span data-i18n="context_menus.pl_tab.toggle_reorder">&#8596;&#65039; Permitir reorganizar</span><span id="pltm-reorder-check" style="color:#2ecc71;"></span>
+        </div>
+        <div class="context-separator"></div>
+        <div class="context-item" id="pltm-reset" style="color:#aaa;" data-i18n="context_menus.pl_tab.reset">&#8634; Restablecer nombre</div>
+    </div>
+
+    <!-- Modal para renombrar una playlist -->
+    <div id="pl-rename-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="width: 340px;">
+            <h3 style="margin: 0 0 14px; color:#00a8ff;" data-i18n="context_menus.pl_tab.rename">Renombrar playlist</h3>
+            <input type="text" id="pl-rename-input" class="settings-input" maxlength="40" spellcheck="false" style="width:100%; box-sizing:border-box;" placeholder="Nombre de la playlist" data-i18n="[placeholder]modals.pl_rename.placeholder">
+            <div class="playlist-note-actions" style="margin-top:16px; display:flex; justify-content:flex-end; gap:8px;">
+                <button id="btn-cancel-pl-rename" class="settings-btn" style="background: #444;" data-i18n="modals.pl_rename.cancel">Cancelar</button>
+                <button id="btn-accept-pl-rename" class="settings-btn" style="background: #27ae60;" data-i18n="modals.pl_rename.accept">Aceptar</button>
+            </div>
+        </div>
     </div>
 
     <div id="events-list-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="em-calendar">🗓️ Abrir Calendario Semanal</div>
+        <div class="context-item" id="em-calendar" data-i18n="context_menus.events_list.calendar">🗓️ Abrir Calendario Semanal</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="em-load">Cargar Evento...</div>
+        <div class="context-item" id="em-load" data-i18n="context_menus.events_list.load">Cargar Evento...</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="em-save-all">Guardar Todo (Respaldo General)</div>
+        <div class="context-item" id="em-save-all" data-i18n="context_menus.events_list.save_all">Guardar Todo (Respaldo General)</div>
     </div>
 
     <div id="events-filter-menu" class="context-menu" style="display: none; padding-bottom: 8px;">
-        <div class="context-item" id="ef-all">Todo</div>
-        <div class="context-item" id="ef-today">Hoy</div>
-        <div class="context-item" id="ef-3h">Próximas 3 horas</div>
-        <div class="context-item" id="ef-6h">Próximas 6 horas</div>
-        <div class="context-item" id="ef-12h">Próximas 12 horas</div>
+        <div class="context-item" id="ef-all" data-i18n="context_menus.events_filter.all">Todo</div>
+        <div class="context-item" id="ef-today" data-i18n="context_menus.events_filter.today">Hoy</div>
+        <div class="context-item" id="ef-3h" data-i18n="context_menus.events_filter.next_3h">Próximas 3 horas</div>
+        <div class="context-item" id="ef-6h" data-i18n="context_menus.events_filter.next_6h">Próximas 6 horas</div>
+        <div class="context-item" id="ef-12h" data-i18n="context_menus.events_filter.next_12h">Próximas 12 horas</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="ef-sort-next">🔳 Próximo a emitir primero</div>
-        <div class="context-item" id="ef-show-emitted" title="Separa los eventos ya emitidos en su apartado. Solo aplica a las vistas de hoy; en 'Todo' y en otros días siempre se ven todos.">🔳 Separar emitidos hoy</div>
+        <div class="context-item" id="ef-sort-next">🔳 <span data-i18n="context_menus.events_filter.sort_next_raw">Próximo a emitir primero</span></div>
+        <div class="context-item" id="ef-show-emitted" title="Separa los eventos ya emitidos en su apartado. Solo aplica a las vistas de hoy; en 'Todo' y en otros días siempre se ven todos." data-i18n="[title]context_menus.events_filter.show_emitted_title">🔳 <span data-i18n="context_menus.events_filter.show_emitted_raw">Separar emitidos hoy</span></div>
         <div class="context-separator"></div>
-        <div style="padding: 4px 10px; font-size: 11px; color: #888;">Día Específico:</div>
+        <div style="padding: 4px 10px; font-size: 11px; color: #888;" data-i18n="context_menus.events_filter.specific_day">Día Específico:</div>
         <div id="events-filter-days" style="display: flex; gap: 4px; padding: 4px 10px; justify-content: space-between;">
-            <button class="mini-btn" data-day="1" title="Lunes">L</button>
-            <button class="mini-btn" data-day="2" title="Martes">M</button>
-            <button class="mini-btn" data-day="3" title="Miércoles">X</button>
-            <button class="mini-btn" data-day="4" title="Jueves">J</button>
-            <button class="mini-btn" data-day="5" title="Viernes">V</button>
-            <button class="mini-btn" data-day="6" title="Sábado">S</button>
-            <button class="mini-btn" data-day="0" title="Domingo">D</button>
+            <button class="mini-btn" data-day="1" title="Lunes" data-i18n="[title]context_menus.events_filter.days.mon_title; context_menus.events_filter.days.mon">L</button>
+            <button class="mini-btn" data-day="2" title="Martes" data-i18n="[title]context_menus.events_filter.days.tue_title; context_menus.events_filter.days.tue">M</button>
+            <button class="mini-btn" data-day="3" title="Miércoles" data-i18n="[title]context_menus.events_filter.days.wed_title; context_menus.events_filter.days.wed">X</button>
+            <button class="mini-btn" data-day="4" title="Jueves" data-i18n="[title]context_menus.events_filter.days.thu_title; context_menus.events_filter.days.thu">J</button>
+            <button class="mini-btn" data-day="5" title="Viernes" data-i18n="[title]context_menus.events_filter.days.fri_title; context_menus.events_filter.days.fri">V</button>
+            <button class="mini-btn" data-day="6" title="Sábado" data-i18n="[title]context_menus.events_filter.days.sat_title; context_menus.events_filter.days.sat">S</button>
+            <button class="mini-btn" data-day="0" title="Domingo" data-i18n="[title]context_menus.events_filter.days.sun_title; context_menus.events_filter.days.sun">D</button>
         </div>
     </div>
 
     <div id="event-item-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="eim-exec">&#9654; Ejecutar ahora</div>
-        <div class="context-item" id="eim-ignore" title="Omitir solo el pase actual de la hora">&#9940; Ignorar este pase</div>
+        <div class="context-item" id="eim-exec" data-i18n="context_menus.event_item.exec">&#9654; Ejecutar ahora</div>
+        <div class="context-item" id="eim-ignore" title="Omitir solo el pase actual de la hora" data-i18n="[title]context_menus.event_item.ignore_title; context_menus.event_item.ignore">&#9940; Ignorar este pase</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="eim-mod" style="color: #00a8ff;">&#9999;&#65039; Modificar evento</div>
+        <div class="context-item" id="eim-mod" style="color: #00a8ff;" data-i18n="context_menus.event_item.mod">&#9999;&#65039; Modificar evento</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="eim-del" style="color: #e74c3c;">&#128465;&#65039; Eliminar evento</div>
+        <div class="context-item" id="eim-del" style="color: #e74c3c;" data-i18n="context_menus.event_item.del">&#128465;&#65039; Eliminar evento</div>
     </div>
 
     <div id="group-context-menu" class="context-menu" style="display: none;">
-        <div class="context-item" id="gm-edit">&#9999;&#65039; Editar Grupo...</div>
+        <div class="context-item" id="gm-edit" data-i18n="context_menus.group.edit">&#9999;&#65039; Editar Grupo...</div>
     </div>
 
     <div id="cw-context-menu" class="context-menu" style="display: none; z-index: 3000;">
-        <div class="context-item" id="menu-editar">&#9999;&#65039; Editar...</div>
-        <div class="context-item" id="menu-limpiar">&#128465;&#65039; Limpiar</div>
+        <div class="context-item" id="menu-editar" data-i18n="context_menus.cw.edit">&#9999;&#65039; Editar...</div>
+        <div class="context-item" id="menu-limpiar" data-i18n="context_menus.cw.clear">&#128465;&#65039; Limpiar</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="menu-bucle"><span id="check-bucle" style="display:inline-block; width:15px; color:#2ecc71;"></span> &#128257; Bucle</div>
-        <div class="context-item" id="menu-overlap"><span id="check-overlap" style="display:inline-block; width:15px; color:#2ecc71;"></span> &#128256; Superposici&oacute;n</div>
-        <div class="context-item" id="menu-restart"><span id="check-restart" style="display:inline-block; width:15px; color:#2ecc71;"></span> &#8634; Reiniciar al hacer clic</div>
-        <div class="context-item" id="menu-detener"><span id="check-detener" style="display:inline-block; width:15px; color:#2ecc71;"></span> &#9209; Detener otros</div>
+        <div class="context-item" id="menu-bucle"><span id="check-bucle" style="display:inline-block; width:15px; color:#2ecc71;"></span> <span data-i18n="context_menus.cw.loop">&#128257; Bucle</span></div>
+        <div class="context-item" id="menu-overlap"><span id="check-overlap" style="display:inline-block; width:15px; color:#2ecc71;"></span> <span data-i18n="context_menus.cw.overlap">&#128256; Superposici&oacute;n</span></div>
+        <div class="context-item" id="menu-restart"><span id="check-restart" style="display:inline-block; width:15px; color:#2ecc71;"></span> <span data-i18n="context_menus.cw.restart">&#8634; Reiniciar al hacer clic</span></div>
+        <div class="context-item" id="menu-detener"><span id="check-detener" style="display:inline-block; width:15px; color:#2ecc71;"></span> <span data-i18n="context_menus.cw.stop_others">&#9209; Detener otros</span></div>
         <div class="context-separator"></div>
-        <div class="context-item" id="menu-previa">&#127911; Escucha previa</div>
+        <div class="context-item" id="menu-previa" data-i18n="context_menus.cw.preview">&#127911; Escucha previa</div>
     </div>
 
     <div id="cw-tab-context-menu" class="context-menu" style="display: none; z-index: 3000;">
-        <div class="context-item" id="tab-menu-editar">&#9999;&#65039; Editar Botonera...</div>
+        <div class="context-item" id="tab-menu-editar" data-i18n="context_menus.cw_tab.edit">&#9999;&#65039; Editar Botonera...</div>
         <div class="context-separator"></div>
-        <div class="context-item" id="tab-menu-eliminar" style="color: #e74c3c;">&#10060; Eliminar Botonera</div>
+        <div class="context-item" id="tab-menu-eliminar" style="color: #e74c3c;" data-i18n="context_menus.cw_tab.delete">&#10060; Eliminar Botonera</div>
     </div>
     <div id="talk-config-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content" style="width: 380px;">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0; color:#00a8ff;">Pulsar para Hablar</h3>
+                <h3 style="margin: 0; color:#00a8ff;" data-i18n="modals.talk_config.title">Pulsar para Hablar</h3>
             </div>
             <div class="modal-body" style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
                 <div class="setting-row">
-                    <label style="flex: 1;">Volumen Objetivo (PGM):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.target_vol">Volumen Objetivo (PGM):</label>
                     <input type="range" id="talk-target-vol" min="0" max="100" value="20" style="flex: 1; margin: 0 10px;">
                     <span id="talk-target-vol-label" style="width: 30px; text-align:right;">20%</span>
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Tiempo de Fundido (ms):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.fade_ms">Tiempo de Fundido (ms):</label>
                     <input type="number" id="talk-fade-ms" class="dark-number" min="0" step="100" value="500" style="width: 80px;">
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Modo de Acción:</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.action_mode">Modo de Acción:</label>
                     <select id="talk-mode-select" class="dark-select" style="width: 170px;">
-                        <option value="hold">Mantener Presionado</option>
-                        <option value="toggle">Click On/Off</option>
+                        <option value="hold" data-i18n="modals.talk_config.action_hold">Mantener Presionado</option>
+                        <option value="toggle" data-i18n="modals.talk_config.action_toggle">Click On/Off</option>
                     </select>
                 </div>
                 <hr style="border: 0; border-top: 1px solid #333; margin: 5px 0;">
                 <div class="setting-row" style="margin-top: 5px;">
-                    <label style="flex: 1; color: #b56ad9; font-weight: bold;">Activar Auto-Ducking (Voz):</label>
+                    <label style="flex: 1; color: #b56ad9; font-weight: bold;" data-i18n="modals.talk_config.auto_ducking">Activar Auto-Ducking (Voz):</label>
                     <label class="switch"><input type="checkbox" id="talk-auto-ducking-enable"> <span class="slider round"></span></label>
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Dispositivo de Entrada:</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.input_device">Dispositivo de Entrada:</label>
                     <select id="talk-auto-ducking-device" class="dark-select" style="width: 170px;">
-                        <option value="default">Predeterminado</option>
+                        <option value="default" data-i18n="modals.talk_config.device_default">Predeterminado</option>
                     </select>
                 </div>
                 <div class="setting-row" style="align-items: center;">
-                    <label style="flex: 1;">Nivel de Entrada (Prueba):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.input_level">Nivel de Entrada (Prueba):</label>
                     <div class="vu-channel" style="flex: 1; margin: 0 10px; height: 12px;">
                         <div class="vu-bar-bg"><div class="vu-gradient"></div><div class="vu-cover" id="talk-auto-ducking-vu-cover"></div></div>
                     </div>
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Umbral de Detección (dB):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.threshold">Umbral de Detección (dB):</label>
                     <input type="range" id="talk-auto-ducking-threshold" min="-60" max="-5" value="-30" style="flex: 1; margin: 0 10px;">
                     <span id="talk-auto-ducking-threshold-label" style="width: 45px; text-align:right;">-30 dB</span>
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Tiempo de Ataque (ms):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.attack">Tiempo de Ataque (ms):</label>
                     <input type="number" id="talk-auto-ducking-attack" class="dark-number" min="0" step="50" value="200" style="width: 80px;" title="Tiempo de voz continua para activar">
                 </div>
                 <div class="setting-row">
-                    <label style="flex: 1;">Tiempo de Liberación (ms):</label>
+                    <label style="flex: 1;" data-i18n="modals.talk_config.release">Tiempo de Liberación (ms):</label>
                     <input type="number" id="talk-auto-ducking-release" class="dark-number" min="0" step="100" value="1000" style="width: 80px;" title="Tiempo de silencio para desactivar">
                 </div>
             </div>
             <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
-                <button id="btn-talk-config-cancel" class="settings-btn mode-options-cancel" type="button">Cancelar</button>
-                <button id="btn-talk-config-save" class="settings-btn mode-options-save" type="button">Guardar</button>
+                <button id="btn-talk-config-cancel" class="settings-btn mode-options-cancel" type="button" data-i18n="modals.talk_config.cancel">Cancelar</button>
+                <button id="btn-talk-config-save" class="settings-btn mode-options-save" type="button" data-i18n="modals.talk_config.save">Guardar</button>
             </div>
         </div>
     </div>
 
     <div id="cw-profile-modal" class="modal-overlay" style="display: none; z-index: 3000;">
         <div class="modal-content" style="width: 320px;">
-            <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 id="cw-profile-modal-title" style="margin: 0; color:#00a8ff;">Nuevo Perfil</h3></div>
+            <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 id="cw-profile-modal-title" style="margin: 0; color:#00a8ff;" data-i18n="modals.cw_profile.title">Nuevo Perfil</h3></div>
             <div class="modal-body" style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-                <label style="font-size: 12px; color:#aaa;">Nombre del Perfil:</label>
+                <label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_profile.name">Nombre del Perfil:</label>
                 <input type="text" id="cw-profile-name" class="settings-input">
                 <div style="display: flex; gap: 10px;">
-                    <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Color Texto:</label><input type="color" id="cw-profile-text-color" class="color-picker-native" value="#ffffff"></div>
+                    <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_profile.text_color">Color Texto:</label><input type="color" id="cw-profile-text-color" class="color-picker-native" value="#ffffff"></div>
                 </div>
             </div>
             <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
-                <button id="btn-cancel-cw-profile" class="settings-btn" style="background: #c0392b;">Cancelar</button>
-                <button id="btn-save-cw-profile" class="settings-btn" style="background: #27ae60;">Guardar Perfil</button>
+                <button id="btn-cancel-cw-profile" class="settings-btn" style="background: #c0392b;" data-i18n="modals.cw_profile.cancel">Cancelar</button>
+                <button id="btn-save-cw-profile" class="settings-btn" style="background: #27ae60;" data-i18n="modals.cw_profile.save">Guardar Perfil</button>
             </div>
         </div>
     </div>
@@ -648,61 +671,85 @@
 
     <div id="auto-pisador-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content" style="width: 430px; display:flex; flex-direction:column; gap:10px;">
-            <h3 style="margin:0; color:#b56ad9;">Pisador automatico</h3>
-            <label style="font-size:12px; color:#aaa;">Origen</label>
+            <h3 style="margin:0; color:#b56ad9;" data-i18n="modals.auto_pisador.title">Pisador automatico</h3>
+            <label style="font-size:12px; color:#aaa;" data-i18n="modals.auto_pisador.origin">Origen</label>
             <select id="auto-pisador-source-kind" class="dark-select">
-                <option value="file">Archivo especifico</option>
-                <option value="folder">Carpeta aleatoria</option>
-                <option value="time">Locucion de hora</option>
-                <option value="temperature">Temperatura</option>
-                <option value="humidity">Humedad</option>
+                <option value="file" data-i18n="modals.auto_pisador.origin_file">Archivo especifico</option>
+                <option value="folder" data-i18n="modals.auto_pisador.origin_folder">Carpeta aleatoria</option>
+                <option value="time" data-i18n="modals.auto_pisador.origin_time">Locucion de hora</option>
+                <option value="temperature" data-i18n="modals.auto_pisador.origin_temp">Temperatura</option>
+                <option value="humidity" data-i18n="modals.auto_pisador.origin_hum">Humedad</option>
             </select>
             <div id="auto-pisador-path-row" style="display:flex; gap:6px;">
                 <input id="auto-pisador-source-path" class="settings-input" style="flex:1;" readonly>
                 <button id="auto-pisador-browse" class="settings-btn">...</button>
             </div>
-            <label style="font-size:12px; color:#aaa;">Inicia en <input id="auto-pisador-start" class="settings-input" type="number" min="0" step="0.01" value="0" style="width:80px;"> segundos</label>
+            <label style="font-size:12px; color:#aaa;"><span data-i18n="modals.auto_pisador.start_in">Inicia en</span> <input id="auto-pisador-start" class="settings-input" type="number" min="0" step="0.01" value="0" style="width:80px;"> <span data-i18n="modals.auto_pisador.seconds">segundos</span></label>
             <div id="auto-pisador-loaded-scope" style="font-size:11px; color:#9aa6b2;"></div>
-            <label style="font-size:12px; color:#aaa;">Editor Avanzado</label>
+            <label style="font-size:12px; color:#aaa;" data-i18n="modals.auto_pisador.advanced_editor">Editor Avanzado</label>
             <select id="auto-pisador-advanced-policy" class="dark-select">
-                <option value="respect">Respetar pisadores del Editor Avanzado</option>
-                <option value="ignore">Ignorar pisadores del Editor Avanzado</option>
+                <option value="respect" data-i18n="modals.auto_pisador.adv_respect">Respetar pisadores del Editor Avanzado</option>
+                <option value="ignore" data-i18n="modals.auto_pisador.adv_ignore">Ignorar pisadores del Editor Avanzado</option>
             </select>
             <div id="auto-pisador-scope-row" style="display:flex; flex-direction:column; gap:6px;">
-                <label style="font-size:12px; color:#aaa;">Aplicar regla</label>
+                <label style="font-size:12px; color:#aaa;" data-i18n="modals.auto_pisador.apply_rule">Aplicar regla</label>
                 <select id="auto-pisador-scope" class="dark-select">
-                    <option value="row">Solo esta fila de playlist</option>
-                    <option value="path">Cada vez que se vuelva a anadir esta carpeta aleatoria</option>
+                    <option value="row" data-i18n="modals.auto_pisador.rule_row">Solo esta fila de playlist</option>
+                    <option value="path" data-i18n="modals.auto_pisador.rule_path">Cada vez que se vuelva a anadir esta carpeta aleatoria</option>
                 </select>
             </div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
-                <button id="auto-pisador-clear" class="settings-btn" style="margin-right:auto;">Eliminar</button>
-                <button id="auto-pisador-cancel" class="settings-btn" style="background:#444;">Cancelar</button>
-                <button id="auto-pisador-save" class="settings-btn" style="background:#27ae60;">Guardar</button>
+                <button id="auto-pisador-clear" class="settings-btn" style="margin-right:auto;" data-i18n="modals.auto_pisador.del">Eliminar</button>
+                <button id="auto-pisador-cancel" class="settings-btn" style="background:#444;" data-i18n="modals.auto_pisador.cancel">Cancelar</button>
+                <button id="auto-pisador-save" class="settings-btn" style="background:#27ae60;" data-i18n="modals.auto_pisador.save">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mini-modal: opciones al asignar un tipo de archivo desde la interfaz principal -->
+    <div id="file-type-assign-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="width: 440px; display:flex; flex-direction:column; gap:12px;">
+            <h3 style="margin:0; color:#3399ff;" data-i18n="modals.assign_type.title">Asignar tipo de archivo</h3>
+            <div id="fta-target-label" style="font-size:12px; color:#9aa6b2; word-break:break-all;"></div>
+            <label id="fta-subfolders-row" style="display:flex; align-items:center; gap:8px; font-size:13px; color:#ddd; cursor:pointer;">
+                <input type="checkbox" id="fta-subfolders" checked>
+                <span data-i18n="modals.assign_type.include_subfolders">¿Incluir subcarpetas?</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#ddd; cursor:pointer;">
+                <input type="checkbox" id="fta-ignore-sep" checked>
+                <span data-i18n="modals.assign_type.ignore_separation">¿Ignorar las reglas de separación musical?</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#ddd; cursor:pointer;">
+                <input type="checkbox" id="fta-save-history" checked>
+                <span data-i18n="modals.assign_type.save_history">¿Guardar en el historial de reproducción?</span>
+            </label>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+                <button id="fta-cancel" class="settings-btn" style="background:#444;" data-i18n="modals.assign_type.cancel">Cancelar</button>
+                <button id="fta-accept" class="settings-btn" style="background:#27ae60;" data-i18n="modals.assign_type.accept">Aceptar</button>
             </div>
         </div>
     </div>
 
     <div id="playlist-note-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content playlist-note-modal-content">
-            <h3>Escribe tu nota</h3>
+            <h3 data-i18n="modals.playlist_note.title">Escribe tu nota</h3>
             <textarea id="playlist-note-input" class="settings-input playlist-note-input" spellcheck="true"></textarea>
             <div class="playlist-note-actions">
-                <button id="btn-cancel-playlist-note" class="settings-btn" style="background: #444;">Cancelar</button>
-                <button id="btn-accept-playlist-note" class="settings-btn" style="background: #27ae60;">Aceptar</button>
+                <button id="btn-cancel-playlist-note" class="settings-btn" style="background: #444;" data-i18n="modals.playlist_note.cancel">Cancelar</button>
+                <button id="btn-accept-playlist-note" class="settings-btn" style="background: #27ae60;" data-i18n="modals.playlist_note.accept">Aceptar</button>
             </div>
         </div>
     </div>
 
     <div id="playlist-event-modal" class="modal-overlay" style="display: none; z-index: 9999;">
         <div class="modal-content playlist-event-modal-content">
-            <h3>Seleccionar evento</h3>
+            <h3 data-i18n="modals.playlist_event.title">Seleccionar evento</h3>
             <div class="playlist-event-list-wrap">
                 <ul id="playlist-event-list" class="event-ul playlist-event-list"></ul>
             </div>
             <div class="playlist-note-actions">
-                <button id="btn-cancel-playlist-event" class="settings-btn" style="background: #444;">Cancelar</button>
-                <button id="btn-accept-playlist-event" class="settings-btn" style="background: #27ae60;">Aceptar</button>
+                <button id="btn-cancel-playlist-event" class="settings-btn" style="background: #444;" data-i18n="modals.playlist_event.cancel">Cancelar</button>
+                <button id="btn-accept-playlist-event" class="settings-btn" style="background: #27ae60;" data-i18n="modals.playlist_event.accept">Aceptar</button>
             </div>
         </div>
     </div>
@@ -711,89 +758,89 @@
         <div class="modal-content rotation-modal-content">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h3 style="margin: 0; color:#00a8ff;">Generador de Playlists (en desarrollo)</h3>
-                    <p style="margin: 4px 0 0; color:#8f96a3; font-size: 12px;">Usa tipos de archivo, generos de biblioteca y reglas de separacion.</p>
+                    <h3 style="margin: 0; color:#00a8ff;" data-i18n="modals.rotation.title">Generador de Playlists (en desarrollo)</h3>
+                    <p style="margin: 4px 0 0; color:#8f96a3; font-size: 12px;" data-i18n="modals.rotation.desc">Usa tipos de archivo, generos de biblioteca y reglas de separacion.</p>
                 </div>
                 <button id="btn-close-rotation" class="close-btn" style="background:transparent; border:none; color:white; cursor:pointer;">X</button>
             </div>
             <div class="rotation-grid">
                 <div class="rotation-panel">
-                    <label class="rotation-label">Patron del reloj</label>
+                    <label class="rotation-label" data-i18n="modals.rotation.pattern_label">Patron del reloj</label>
                     <textarea id="rotation-pattern" class="settings-input rotation-pattern" spellcheck="false"></textarea>
                     <div id="rotation-category-palette" class="rotation-category-palette"></div>
                 </div>
                 <div class="rotation-panel">
-                    <label class="rotation-label">Duracion objetivo</label>
-                    <div class="rotation-row"><input type="text" id="rotation-target-min" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="60"><span>minutos</span></div>
-                    <label class="rotation-label">Separacion minima</label>
+                    <label class="rotation-label" data-i18n="modals.rotation.target_dur">Duracion objetivo</label>
+                    <div class="rotation-row"><input type="text" id="rotation-target-min" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="60"><span data-i18n="modals.rotation.minutes">minutos</span></div>
+                    <label class="rotation-label" data-i18n="modals.rotation.min_sep">Separacion minima</label>
                     <div class="rotation-row">
-                        <label><input type="checkbox" id="rotation-sep-artist-check" checked> Artista</label>
-                        <input type="text" id="rotation-sep-artist" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="4"><span>pistas</span>
+                        <label><input type="checkbox" id="rotation-sep-artist-check" checked> <span data-i18n="modals.rotation.artist">Artista</span></label>
+                        <input type="text" id="rotation-sep-artist" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="4"><span data-i18n="modals.rotation.tracks">pistas</span>
                     </div>
                     <div class="rotation-row">
-                        <label><input type="checkbox" id="rotation-sep-title-check" checked> Titulo</label>
-                        <input type="text" id="rotation-sep-title" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="8"><span>pistas</span>
+                        <label><input type="checkbox" id="rotation-sep-title-check" checked> <span data-i18n="modals.rotation.title_label">Titulo</span></label>
+                        <input type="text" id="rotation-sep-title" class="dark-number" inputmode="numeric" pattern="[0-9]*" value="8"><span data-i18n="modals.rotation.tracks">pistas</span>
                     </div>
-                    <div id="rotation-summary" class="rotation-summary">Listo para construir una hora musical.</div>
+                    <div id="rotation-summary" class="rotation-summary" data-i18n="modals.rotation.summary">Listo para construir una hora musical.</div>
                 </div>
             </div>
             <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
-                <button id="btn-cancel-rotation" class="settings-btn" style="background: #c0392b; color: white;">Cancelar</button>
-                <button id="btn-preview-rotation" class="settings-btn">Preflight</button>
-                <button id="btn-build-rotation" class="settings-btn" style="background: #27ae60;">Generar en playlist</button>
+                <button id="btn-cancel-rotation" class="settings-btn" style="background: #c0392b; color: white;" data-i18n="modals.rotation.cancel">Cancelar</button>
+                <button id="btn-preview-rotation" class="settings-btn" data-i18n="modals.rotation.preview">Preflight</button>
+                <button id="btn-build-rotation" class="settings-btn" style="background: #27ae60;" data-i18n="modals.rotation.build">Generar en playlist</button>
             </div>
         </div>
     </div>
 
     <div id="cw-edit-modal" class="modal-overlay" style="display: none; z-index: 3000;">
         <div class="modal-content" style="width: 320px;">
-        <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 style="margin: 0; color:#00a8ff;">Editar Efecto</h3></div>
+        <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 style="margin: 0; color:#00a8ff;" data-i18n="modals.cw_edit.title">Editar Efecto</h3></div>
         <div class="modal-body" style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-            <label style="font-size: 12px; color:#aaa;">Ruta del archivo:</label>
+            <label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_edit.filepath">Ruta del archivo:</label>
             <div style="display: flex; gap: 5px;">
                 <input type="text" id="cw-edit-filepath" class="settings-input" style="flex:1;" readonly>
-                <select id="cw-edit-type" class="dark-select" title="Tipo de efecto" style="width: 30px; padding: 4px;">
-                    <option value="audio">Audio</option>
-                    <option value="time">Locución de hora</option>
-                    <option value="temperature">Temperatura</option>
-                    <option value="humidity">Humedad</option>
+                <select id="cw-edit-type" class="dark-select" title="Tipo de efecto" data-i18n="[title]modals.cw_edit.type" style="width: 30px; padding: 4px;">
+                    <option value="audio" data-i18n="modals.cw_edit.type_audio">Audio</option>
+                    <option value="time" data-i18n="modals.cw_edit.type_time">Locución de hora</option>
+                    <option value="temperature" data-i18n="modals.cw_edit.type_temp">Temperatura</option>
+                    <option value="humidity" data-i18n="modals.cw_edit.type_hum">Humedad</option>
                 </select>
                 <button id="btn-select-file" class="settings-btn">...</button>
             </div>
             <div style="display: flex; gap: 10px;">
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Nombre:</label><input type="text" id="cw-edit-name" class="settings-input" style="width: 100%; box-sizing: border-box;"></div>
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Volumen:</label><input type="range" id="cw-edit-volume" min="0" max="1" step="0.01" value="1" style="width: 100%;"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_edit.name">Nombre:</label><input type="text" id="cw-edit-name" class="settings-input" style="width: 100%; box-sizing: border-box;"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_edit.volume">Volumen:</label><input type="range" id="cw-edit-volume" min="0" max="1" step="0.01" value="1" style="width: 100%;"></div>
             </div>
             <div style="display: flex; gap: 10px;">
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Color de fondo:</label><input type="color" id="cw-edit-bg-color" class="color-picker-native" value="#444444"></div>
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Color de texto:</label><input type="color" id="cw-edit-text-color" class="color-picker-native" value="#FFFFFF"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_edit.bg_color">Color de fondo:</label><input type="color" id="cw-edit-bg-color" class="color-picker-native" value="#444444"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_edit.text_color">Color de texto:</label><input type="color" id="cw-edit-text-color" class="color-picker-native" value="#FFFFFF"></div>
             </div>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
-            <button id="btn-cancel-cw-edit" class="settings-btn" style="background: #444;">Cancelar</button>
-            <button id="btn-save-cw-edit" class="settings-btn" style="background: #27ae60;">Aceptar</button>
+            <button id="btn-cancel-cw-edit" class="settings-btn" style="background: #444;" data-i18n="modals.cw_edit.cancel">Cancelar</button>
+            <button id="btn-save-cw-edit" class="settings-btn" style="background: #27ae60;" data-i18n="modals.cw_edit.accept">Aceptar</button>
         </div>
         </div>
     </div>
 
     <div id="cw-tab-modal" class="modal-overlay" style="display: none; z-index: 3000;">
         <div class="modal-content" style="width: 320px;">
-        <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 id="cw-tab-modal-title" style="margin: 0; color:#00a8ff;">Configurar Botonera</h3></div>
+        <div class="modal-header" style="display: flex; justify-content: space-between;"><h3 id="cw-tab-modal-title" style="margin: 0; color:#00a8ff;" data-i18n="modals.cw_tab.title">Configurar Botonera</h3></div>
         <div class="modal-body" style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-            <label style="font-size: 12px; color:#aaa;">Nombre de la botonera:</label>
+            <label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_tab.name">Nombre de la botonera:</label>
             <input type="text" id="cw-tab-name" class="settings-input">
             <div style="display: flex; gap: 10px;">
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Vertical (Filas):</label><input type="number" id="cw-tab-v" class="settings-input" min="1" max="20" value="5" style="width: 100%; box-sizing: border-box;"></div>
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Horizontal (Col):</label><input type="number" id="cw-tab-h" class="settings-input" min="1" max="20" value="5" style="width: 100%; box-sizing: border-box;"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_tab.vertical">Vertical (Filas):</label><input type="number" id="cw-tab-v" class="settings-input" min="1" max="20" value="5" style="width: 100%; box-sizing: border-box;"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_tab.horizontal">Horizontal (Col):</label><input type="number" id="cw-tab-h" class="settings-input" min="1" max="20" value="5" style="width: 100%; box-sizing: border-box;"></div>
             </div>
             <div style="display: flex; gap: 10px;">
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Color Fondo:</label><input type="color" id="cw-tab-bg-color" class="color-picker-native" value="#3a3f44"></div>
-                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;">Color Texto:</label><input type="color" id="cw-tab-text-color" class="color-picker-native" value="#cccccc"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_tab.bg_color">Color Fondo:</label><input type="color" id="cw-tab-bg-color" class="color-picker-native" value="#3a3f44"></div>
+                <div style="flex:1;"><label style="font-size: 12px; color:#aaa;" data-i18n="modals.cw_tab.text_color">Color Texto:</label><input type="color" id="cw-tab-text-color" class="color-picker-native" value="#cccccc"></div>
             </div>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
-            <button id="btn-cancel-cw-tab" class="settings-btn" style="background: #c0392b;">Cancelar</button>
-            <button id="btn-save-cw-tab" class="settings-btn" style="background: #27ae60;">Aceptar</button>
+            <button id="btn-cancel-cw-tab" class="settings-btn" style="background: #c0392b;" data-i18n="modals.cw_tab.cancel">Cancelar</button>
+            <button id="btn-save-cw-tab" class="settings-btn" style="background: #27ae60;" data-i18n="modals.cw_tab.accept">Aceptar</button>
         </div>
         </div>
     </div>

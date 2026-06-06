@@ -2,52 +2,52 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Gestor de Grupos de Eventos</title>
+    <title data-i18n="event_groups.title">Gestor de Grupos de Eventos</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body style="display: flex; flex-direction: column; height: 100vh; margin: 0; background: #1a1a1c; overflow: hidden;">
     
     <div style="flex: 1; overflow-y: auto; padding: 20px;">
-        <h3 class="tab-title" style="margin-top: 0;">Gestión de Perfiles de Grupos</h3>
+        <h3 class="tab-title" style="margin-top: 0;" data-i18n="event_groups.tab_title">Gestión de Perfiles de Grupos</h3>
         
         <div class="file-types-layout">
             <div class="file-types-list-col" style="flex: 0 0 40%;">
                 <ul id="groups-list" class="dark-list" style="overflow-x: auto; white-space: nowrap;"></ul>
                 <div class="list-actions">
-                    <button type="button" id="btn-add-group" class="icon-btn" title="Añadir nuevo">➕</button>
-                    <button type="button" id="btn-del-group" class="icon-btn" title="Eliminar seleccionado" style="color:#e74c3c;">❌</button>
+                    <button type="button" id="btn-add-group" class="icon-btn" data-i18n="[title]event_groups.btn_add" title="Añadir nuevo">➕</button>
+                    <button type="button" id="btn-del-group" class="icon-btn" data-i18n="[title]event_groups.btn_del" title="Eliminar seleccionado" style="color:#e74c3c;">❌</button>
                 </div>
             </div>
 
             <div class="file-types-details-col" style="flex: 1;">
                 <fieldset class="fieldset-dark" style="margin-bottom: 0;">
-                    <legend>Apariencia del Grupo</legend>
+                    <legend data-i18n="event_groups.legend_app">Apariencia del Grupo</legend>
                     
                     <div class="setting-row" style="margin-bottom: 20px;">
-                        <label style="width: 140px;">Nombre del Grupo:</label>
+                        <label style="width: 140px;" data-i18n="event_groups.label_name">Nombre del Grupo:</label>
                         <input type="text" id="grp-name" class="settings-input" style="flex: 1;">
                     </div>
                     
                     <div class="setting-row">
-                        <label style="width: 140px;">Color de Fondo:</label>
+                        <label style="width: 140px;" data-i18n="event_groups.label_bg">Color de Fondo:</label>
                         <div style="display:flex; gap:10px; align-items:center; flex: 1;">
                             <input type="color" id="grp-color-bg" class="color-picker-native" value="#222225">
                         </div>
                     </div>
 
                     <div class="setting-row" style="margin-top: 15px;">
-                        <label style="width: 140px;">Color de Texto (Título):</label>
+                        <label style="width: 140px;" data-i18n="event_groups.label_txt">Color de Texto (Título):</label>
                         <div style="display:flex; gap:10px; align-items:center; flex: 1;">
                             <input type="color" id="grp-color-txt" class="color-picker-native" value="#00a8ff">
                         </div>
                     </div>
 
                     <div class="setting-row" style="margin-top: 15px; justify-content: flex-end;">
-                        <button type="button" id="btn-reset-colors" class="settings-btn" title="Restablecer a colores de fábrica LF">↺ Restablecer Colores</button>
+                        <button type="button" id="btn-reset-colors" class="settings-btn" data-i18n="[title]event_groups.btn_reset_title; event_groups.btn_reset" title="Restablecer a colores de fábrica LF">↺ Restablecer Colores</button>
                     </div>
 
                     <div id="preview-box" style="margin-top: 25px; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-weight: bold; border: 1px solid #333;">
-                        <span id="preview-text">Vista Previa del Grupo</span>
+                        <span id="preview-text" data-i18n="event_groups.preview_txt">Vista Previa del Grupo</span>
                         <span id="preview-arrow" style="transition: transform 0.2s;">▼</span>
                     </div>
                 </fieldset>
@@ -56,8 +56,8 @@
     </div>
 
     <div class="bottom-buttons" style="padding: 15px; background: #222225; border-top: 1px solid #333; display: flex; justify-content: flex-end; gap: 10px;">
-        <button type="button" id="btn-cancel" class="settings-btn" style="background: #444;">Cerrar</button>
-        <button type="button" id="btn-save" class="settings-btn" style="background: #27ae60;">💾 Guardar Cambios</button>
+        <button type="button" id="btn-cancel" class="settings-btn" style="background: #444;" data-i18n="event_groups.btn_close">Cerrar</button>
+        <button type="button" id="btn-save" class="settings-btn" style="background: #27ae60;" data-i18n="event_groups.btn_save">💾 Guardar Cambios</button>
     </div>
 
     <script src="event_groups.js"></script>

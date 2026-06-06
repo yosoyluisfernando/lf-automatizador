@@ -8,42 +8,41 @@
 <body class="settings-window-body">
     <div class="settings-layout">
         <div class="settings-sidebar">
-            <button class="settings-tab active" data-target="tab-fades">Excepciones Mezclar</button>
-            <button class="settings-tab" data-target="tab-types">Tipos de Archivos</button>
-            <button class="settings-tab" data-target="tab-audio">Salidas de Audio</button>
-            <button class="settings-tab" data-target="tab-interface">Sistema e Interfaz</button>
-            <button class="settings-tab" data-target="tab-time">Hora y Clima</button>
-            <button class="settings-tab" data-target="tab-ducking">Pisadores (Ducking)</button>
-            <button class="settings-tab" data-target="tab-cartwall">Perfiles Cartwall</button>
-            <button class="settings-tab" data-target="tab-shortcuts">Atajos y Comportamiento</button>
+            <button class="settings-tab active" data-target="tab-fades" data-i18n="settings_window.tabs.fades">Excepciones Mezclar</button>
+            <button class="settings-tab" data-target="tab-audio" data-i18n="settings_window.tabs.audio">Salidas de Audio</button>
+            <button class="settings-tab" data-target="tab-interface" data-i18n="settings_window.tabs.interface">Sistema e Interfaz</button>
+            <button class="settings-tab" data-target="tab-time" data-i18n="settings_window.tabs.time">Hora y Clima</button>
+            <button class="settings-tab" data-target="tab-ducking" data-i18n="settings_window.tabs.ducking">Pisadores (Ducking)</button>
+            <button class="settings-tab" data-target="tab-cartwall" data-i18n="settings_window.tabs.cartwall">Perfiles Cartwall</button>
+            <button class="settings-tab" data-target="tab-shortcuts" data-i18n="settings_window.tabs.shortcuts">Atajos y Comportamiento</button>
         </div>
 
         <div class="settings-content">
             <div id="tab-fades" class="tab-pane active">
-                <h3 class="tab-title">Excepciones de Faders por Tipo</h3>
+                <h3 class="tab-title" data-i18n="settings_window.titles.fades">Excepciones de Faders por Tipo</h3>
 
                 <div class="settings-group">
-                    <label>Seleccionar Tipo de Archivo:</label>
+                    <label data-i18n="settings_window.dynamic.fades_select_type">Seleccionar Tipo de Archivo:</label>
                     <select id="sel-tipo-archivo" class="dark-select"></select>
                 </div>
 
                 <div style="display: flex; gap: 20px; margin-top: 15px;">
                     <fieldset class="fieldset-dark" style="flex: 1;">
-                        <legend>Entrada (Fade In)</legend>
+                        <legend data-i18n="settings_window.dynamic.fades_fadein">Entrada (Fade In)</legend>
                         <div class="setting-row">
-                            <label><input type="checkbox" id="chk-fadein"> Activar</label>
+                            <label><input type="checkbox" id="chk-fadein"> <span data-i18n="settings_window.dynamic.fades_activate">Activar</span></label>
                             <input type="number" id="num-fadein" class="dark-number" step="0.1" min="0" value="0"> seg
                         </div>
                     </fieldset>
 
                     <fieldset class="fieldset-dark" style="flex: 1;">
-                        <legend>Salida (Fade Out) Manual</legend>
+                        <legend data-i18n="settings_window.dynamic.fades_fadeout_manual">Salida (Fade Out) Manual</legend>
                         <div class="setting-row">
-                            <label title="Fade Out al detener (STOP)"><input type="checkbox" id="chk-fadeout-stop"> Al Stop</label>
+                            <label title="Fade Out al detener (STOP)"><input type="checkbox" id="chk-fadeout-stop"> <span data-i18n="settings_window.dynamic.fades_on_stop">Al Stop</span></label>
                             <input type="number" id="num-fadeout-stop" class="dark-number" step="0.1" min="0" value="0"> seg
                         </div>
                         <div class="setting-row" style="margin-top: 10px;">
-                            <label title="Fade Out al avanzar manualmente (NEXT)"><input type="checkbox" id="chk-fadeout-next"> Al Siguiente</label>
+                            <label title="Fade Out al avanzar manualmente (NEXT)"><input type="checkbox" id="chk-fadeout-next"> <span data-i18n="settings_window.dynamic.fades_on_next">Al Siguiente</span></label>
                             <input type="number" id="num-fadeout-next" class="dark-number" step="0.1" min="0" value="0"> seg
                         </div>
                     </fieldset>
@@ -51,257 +50,224 @@
 
                 <div style="display: flex; gap: 20px;">
                     <fieldset class="fieldset-dark" style="flex: 1;">
-                        <legend>Punto de Mezcla (MIX)</legend>
+                        <legend data-i18n="settings_window.dynamic.fades_mix_point">Punto de Mezcla (MIX)</legend>
                         <div class="setting-row">
-                            <label title="Tiempo fijo antes del final de la cancion"><input type="checkbox" id="chk-mix"> Fijo</label>
+                            <label title="Tiempo fijo antes del final de la cancion"><input type="checkbox" id="chk-mix"> <span data-i18n="settings_window.dynamic.fades_fixed">Fijo</span></label>
                             <input type="number" id="num-mix" class="dark-number" step="0.1" min="0" value="0"> seg
                         </div>
                         <div class="setting-row" style="margin-top: 10px;">
-                            <label title="Usa el nivel de decibelios para calcular el corte"><input type="checkbox" id="chk-mix-db"> Inteligente (dB)</label>
+                            <label title="Usa el nivel de decibelios para calcular el corte"><input type="checkbox" id="chk-mix-db"> <span data-i18n="settings_window.dynamic.fades_smart_db">Inteligente (dB)</span></label>
                             <input type="number" id="num-mix-db" class="dark-number" step="1" max="0" value="-14"> dB
                         </div>
                     </fieldset>
 
                     <fieldset class="fieldset-dark" style="flex: 1;">
-                        <legend>Fade Out de Mezcla</legend>
+                        <legend data-i18n="settings_window.dynamic.fades_mix_fadeout">Fade Out de Mezcla</legend>
                         <div class="setting-row">
-                            <label title="Baja la cola automaticamente desde el MIX hasta el FIN"><input type="checkbox" id="chk-mix-fadeout"> Activar</label>
+                            <label title="Baja la cola automaticamente desde el MIX hasta el FIN"><input type="checkbox" id="chk-mix-fadeout"> <span data-i18n="settings_window.dynamic.fades_activate">Activar</span></label>
                         </div>
-                        <p style="font-size: 12px; color: #888; margin: 10px 0 0;">Si está activo, la bajada usa el tiempo restante entre MIX y FIN. Si está desactivado, la cola sigue completa hasta FIN.</p>
+                        <p style="font-size: 12px; color: #888; margin: 10px 0 0;" data-i18n="settings_window.dynamic.fades_mix_hint">Si está activo, la bajada usa el tiempo restante entre MIX y FIN. Si está desactivado, la cola sigue completa hasta FIN.</p>
                     </fieldset>
-                </div>
-            </div>
-
-            <div id="tab-types" class="tab-pane">
-                <h3 class="tab-title">Gestion de Tipos de Archivo</h3>
-                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Anade identificadores (nombres de carpeta o sufijos en las canciones) para aplicarles comportamientos y colores automaticos.</p>
-
-                <div class="file-types-layout">
-                    <div class="file-types-list-col">
-                        <ul id="file-types-list" class="dark-list"></ul>
-                        <div class="list-actions">
-                            <button id="btn-add-type" class="icon-btn" title="Anadir nuevo">+</button>
-                            <button id="btn-del-type" class="icon-btn" title="Eliminar seleccionado" style="color:#e74c3c;">X</button>
-                        </div>
-                    </div>
-
-                    <div class="file-types-details-col">
-                        <fieldset class="fieldset-dark" style="margin-bottom: 0;">
-                            <legend>Propiedades del Tipo</legend>
-
-                            <div class="setting-row">
-                                <label style="width: 120px;">Nombre:</label>
-                                <input type="text" id="type-name" class="settings-input" style="flex: 1;">
-                            </div>
-
-                            <div class="setting-row">
-                                <label style="width: 120px;">Identificador:</label>
-                                <input type="text" id="type-identifier" class="settings-input" style="flex: 1;" placeholder="Ej: _comercial">
-                            </div>
-
-                            <div class="setting-row">
-                                <label style="width: 120px;">Color (Lista):</label>
-                                <div style="display:flex; gap:10px; align-items:center; flex: 1;">
-                                    <input type="color" id="type-color" class="color-picker-native">
-                                </div>
-                            </div>
-
-                            <div class="setting-row" style="margin-top: 15px;">
-                                <label style="width: 120px;" title="Ajuste de ganancia automatico">Nivel (Amp):</label>
-                                <input type="number" id="type-amp" class="dark-number" step="1" value="0"> <span style="font-size: 12px; color: #888;">dB</span>
-                            </div>
-
-                            <div class="setting-row">
-                                <label><input type="checkbox" id="type-voice"> Es Locucion/Voz (Atenua la musica de fondo)</label>
-                            </div>
-                        </fieldset>
-                    </div>
                 </div>
             </div>
 
             <div id="tab-audio" class="tab-pane">
-                <h3 class="tab-title">Motor y Salidas de Audio</h3>
-                <p class="settings-intro">El <code>Master</code> sigue siendo la salida principal al aire. Desde aqui puedes activar monitoreo, decidir como salen las playlists y elegir a donde va la botonera sin dejar reproductores residuales cargando el sistema.</p>
+                <h3 class="tab-title" data-i18n="settings_window.titles.audio">Motor y Salidas de Audio</h3>
+                <p class="settings-intro" data-i18n="settings_window.fields.audio_intro">El <code>Master</code> sigue siendo la salida principal al aire. Desde aqui puedes activar monitoreo, decidir como salen las playlists y elegir a donde va la botonera sin dejar reproductores residuales cargando el sistema.</p>
 
                 <div class="audio-settings-grid">
                     <fieldset class="fieldset-dark audio-card">
-                        <legend>Motor</legend>
+                        <legend data-i18n="settings_window.fields.engine">Motor</legend>
                         <div class="setting-row setting-row-compact">
-                            <label style="width: 220px;">Motor activo:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.active_engine">Motor activo:</label>
                             <select id="sel-audio-engine-mode" class="dark-select" style="flex: 1;">
-                                <option value="rustAudio">Rust Audio (motor principal)</option>
+                                <option value="rustAudio" data-i18n="settings_window.fields.rust_audio">Rust Audio (motor principal)</option>
                             </select>
                         </div>
-                        <p class="audio-hint" id="audio-engine-hint">El motor Rust enumera y controla las tarjetas de sonido. El modo WebAudio fue retirado del programa.</p>
+                        <p class="audio-hint" id="audio-engine-hint" data-i18n="settings_window.fields.engine_hint">El motor Rust enumera y controla las tarjetas de sonido. El modo WebAudio fue retirado del programa.</p>
                     </fieldset>
 
                     <fieldset class="fieldset-dark audio-card">
-                        <legend>Ruta Principal</legend>
+                        <legend data-i18n="settings_window.fields.main_route">Ruta Principal</legend>
                         <div class="setting-row setting-row-compact">
-                            <label style="width: 220px;">Salida Master (Aire):</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.master_output">Salida Master (Aire):</label>
                             <select id="sel-out-main" class="dark-select" style="flex: 1;"></select>
                         </div>
                         <div class="setting-row setting-row-block">
-                            <label><input type="checkbox" id="chk-monitor-enabled"> Activar salida de monitores</label>
+                            <label><input type="checkbox" id="chk-monitor-enabled"> <span data-i18n="settings_window.fields.enable_monitor">Activar salida de monitores</span></label>
                         </div>
                         <div class="setting-row setting-row-compact" id="monitor-output-row">
-                            <label style="width: 220px;">Salida de Monitores:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.monitor_output">Salida de Monitores:</label>
                             <select id="sel-out-monitor" class="dark-select" style="flex: 1;"></select>
                         </div>
                         <div class="setting-row setting-row-compact" id="monitor-source-row">
-                            <label style="width: 220px;">Escucha de monitor:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.monitor_listen">Escucha de monitor:</label>
                             <select id="sel-monitor-source-mode" class="dark-select" style="flex: 1;">
-                                <option value="postFx">Post-FX / salida master</option>
-                                <option value="preFx">Pre-FX / mezcla limpia</option>
+                                <option value="postFx" data-i18n="settings_window.fields.post_fx">Post-FX / salida master</option>
+                                <option value="preFx" data-i18n="settings_window.fields.pre_fx">Pre-FX / mezcla limpia</option>
                             </select>
                         </div>
                         <div class="setting-row setting-row-block" id="monitor-volume-ui-toggle-row">
-                            <label><input type="checkbox" id="chk-monitor-volume-ui"> Mostrar control de volumen MON en la ventana principal</label>
+                            <label><input type="checkbox" id="chk-monitor-volume-ui"> <span data-i18n="settings_window.fields.show_mon_volume">Mostrar control de volumen MON en la ventana principal</span></label>
                         </div>
                         <div class="setting-row setting-row-compact" id="monitor-volume-ui-mode-row">
-                            <label style="width: 220px;">Ubicacion del control MON:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.mon_volume_location">Ubicacion del control MON:</label>
                             <select id="sel-monitor-volume-ui-mode" class="dark-select" style="flex: 1;">
-                                <option value="inline">Junto al fader Master</option>
-                                <option value="icon">Como icono desplegable arriba</option>
+                                <option value="inline" data-i18n="settings_window.fields.inline_master">Junto al fader Master</option>
+                                <option value="icon" data-i18n="settings_window.fields.top_icon">Como icono desplegable arriba</option>
                             </select>
                         </div>
-                        <p class="audio-hint">El monitoreo sale apagado por defecto. Al activarlo, puede escuchar el <code>Master</code> ya procesado o la mezcla limpia antes de efectos.</p>
+                        <p class="audio-hint" data-i18n="settings_window.fields.monitor_hint">El monitoreo sale apagado por defecto. Al activarlo, puede escuchar el <code>Master</code> ya procesado o la mezcla limpia antes de efectos.</p>
                     </fieldset>
 
                     <fieldset class="fieldset-dark audio-card">
-                        <legend>Preescucha y Editores</legend>
+                        <legend data-i18n="settings_window.fields.prelisten_editors">Preescucha y Editores</legend>
                         <div class="setting-row setting-row-compact">
-                            <label style="width: 220px;">Salida CUE / Preescucha:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.cue_output">Salida CUE / Preescucha:</label>
                             <select id="sel-out-cue" class="dark-select" style="flex: 1;"></select>
                         </div>
-                        <p class="audio-hint">La escucha previa y los tres editores usan esta misma ruta para que todo el trabajo de chequeo salga junto por la preescucha.</p>
+                        <p class="audio-hint" data-i18n="settings_window.fields.cue_hint">La escucha previa y los tres editores usan esta misma ruta para que todo el trabajo de chequeo salga junto por la preescucha.</p>
                     </fieldset>
 
                     <fieldset class="fieldset-dark audio-card audio-card-span">
-                        <legend>Playlists</legend>
+                        <legend data-i18n="settings_window.fields.playlists">Playlists</legend>
                         <div class="setting-row setting-row-compact">
-                            <label style="width: 260px;">Modo de salida auxiliar:</label>
+                            <label style="width: 260px;" data-i18n="settings_window.fields.aux_output_mode">Modo de salida auxiliar:</label>
                             <select id="sel-playlist-output-mode" class="dark-select" style="flex: 1;">
-                                <option value="disabled">Desactivado</option>
-                                <option value="shared">Todas por la misma tarjeta</option>
-                                <option value="independent">Una tarjeta por playlist</option>
+                                <option value="disabled" data-i18n="settings_window.fields.disabled">Desactivado</option>
+                                <option value="shared" data-i18n="settings_window.fields.shared">Todas por la misma tarjeta</option>
+                                <option value="independent" data-i18n="settings_window.fields.independent">Una tarjeta por playlist</option>
                             </select>
                         </div>
 
                         <div id="playlist-shared-output-wrap" class="audio-stack">
                             <div class="setting-row setting-row-compact">
-                                <label style="width: 260px;">Salida compartida playlists:</label>
+                                <label style="width: 260px;" data-i18n="settings_window.fields.shared_playlist_output">Salida compartida playlists:</label>
                                 <select id="sel-playlist-shared" class="dark-select" style="flex: 1;"></select>
                             </div>
                         </div>
 
                         <div id="playlist-independent-output-wrap" class="audio-stack">
                             <div class="setting-row setting-row-compact">
-                                <label style="width: 260px;">Playlist 1:</label>
+                                <label style="width: 260px;" data-i18n="settings_window.fields.playlist_1">Playlist 1:</label>
                                 <select id="sel-pl-out-1" class="dark-select" style="flex: 1;"></select>
                             </div>
                             <div class="setting-row setting-row-compact">
-                                <label style="width: 260px;">Playlist 2:</label>
+                                <label style="width: 260px;" data-i18n="settings_window.fields.playlist_2">Playlist 2:</label>
                                 <select id="sel-pl-out-2" class="dark-select" style="flex: 1;"></select>
                             </div>
                             <div class="setting-row setting-row-compact">
-                                <label style="width: 260px;">Playlist 3:</label>
+                                <label style="width: 260px;" data-i18n="settings_window.fields.playlist_3">Playlist 3:</label>
                                 <select id="sel-pl-out-3" class="dark-select" style="flex: 1;"></select>
                             </div>
                             <div class="setting-row setting-row-compact" style="margin-bottom: 0;">
-                                <label style="width: 260px;">Playlist 4:</label>
+                                <label style="width: 260px;" data-i18n="settings_window.fields.playlist_4">Playlist 4:</label>
                                 <select id="sel-pl-out-4" class="dark-select" style="flex: 1;"></select>
                             </div>
                         </div>
 
-                        <p class="audio-hint">Estas salidas son auxiliares para flujo de trabajo y monitoreo. Las playlists siguen conectadas al <code>Master</code> para mantener la emision continua.</p>
+                        <p class="audio-hint" data-i18n="settings_window.fields.playlist_hint">Estas salidas son auxiliares para flujo de trabajo y monitoreo. Las playlists siguen conectadas al <code>Master</code> para mantener la emision continua.</p>
                     </fieldset>
 
                     <fieldset class="fieldset-dark audio-card">
-                        <legend>Botonera / Cartwall</legend>
+                        <legend data-i18n="settings_window.fields.cartwall">Botonera / Cartwall</legend>
                         <div class="setting-row setting-row-compact">
-                            <label style="width: 220px;">Destino del cartwall:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.cartwall_dest">Destino del cartwall:</label>
                             <select id="sel-cartwall-mode" class="dark-select" style="flex: 1;">
-                                <option value="master">Master (aire)</option>
-                                <option value="monitor">Monitores</option>
-                                <option value="cue">CUE / Preescucha</option>
-                                <option value="device">Tarjeta dedicada</option>
+                                <option value="master" data-i18n="settings_window.fields.master_air">Master (aire)</option>
+                                <option value="monitor" data-i18n="settings_window.fields.monitors">Monitores</option>
+                                <option value="cue" data-i18n="settings_window.fields.cue_listen">CUE / Preescucha</option>
+                                <option value="device" data-i18n="settings_window.fields.dedicated_card">Tarjeta dedicada</option>
                             </select>
                         </div>
                         <div class="setting-row setting-row-compact" id="cartwall-device-row">
-                            <label style="width: 220px;">Tarjeta dedicada:</label>
+                            <label style="width: 220px;" data-i18n="settings_window.fields.dedicated_card_label">Tarjeta dedicada:</label>
                             <select id="sel-out-cartwall" class="dark-select" style="flex: 1;"></select>
                         </div>
-                        <p class="audio-hint">Los sonidos temporales del cartwall se liberan al terminar, evitando acumulacion de reproductores en memoria.</p>
+                        <p class="audio-hint" data-i18n="settings_window.fields.cartwall_hint">Los sonidos temporales del cartwall se liberan al terminar, evitando acumulacion de reproductores en memoria.</p>
                     </fieldset>
                 </div>
             </div>
 
             <div id="tab-interface" class="tab-pane">
-                <h3 class="tab-title">Sistema e Interfaz</h3>
+                <h3 class="tab-title" data-i18n="settings_window.titles.interface">Sistema e Interfaz</h3>
 
                 <fieldset class="fieldset-dark" style="margin-bottom: 25px;">
-                    <legend>Sistema</legend>
+                    <legend data-i18n="settings_window.fields.language_req">Idioma (Requiere reiniciar)</legend>
+                    <div class="setting-row">
+                        <label style="width: 250px;" data-i18n="settings_window.fields.interface_lang">Idioma de la interfaz:</label>
+                        <select id="sel-language" class="dark-select" style="flex: 1;">
+                            <option value="es">Español</option>
+                            <option value="en">English (Inglés)</option>
+                            <option value="pt-BR">Português - Brasil</option>
+                            <option value="pt-PT">Português - Portugal</option>
+                        </select>
+                    </div>
+                    <p id="lbl-lang-warning" style="font-size: 12px; color: #f39c12; margin-top: 8px; margin-bottom: 0; display: none;"></p>
+                </fieldset>
+
+                <fieldset class="fieldset-dark" style="margin-bottom: 25px;">
+                    <legend data-i18n="settings_window.fields.system">Sistema</legend>
                     <p style="font-size: 12px; color: #888; margin-bottom: 12px;">Opciones de arranque automático. Todas están desactivadas por defecto; actívalas solo si tu equipo trabaja de forma desatendida (emisoras automáticas, reinicios tras cortes eléctricos, operación remota).</p>
                     <div class="setting-row" style="margin-bottom: 10px;">
                         <label style="flex: 1; cursor: pointer;">
                             <input type="checkbox" id="chk-autostart-system" style="margin-right: 8px;">
-                            Iniciar al arrancar el sistema
+                            <span data-i18n="settings_window.fields.autostart_system">Iniciar al arrancar el sistema</span>
                         </label>
                     </div>
                     <div class="setting-row" style="margin-bottom: 10px;">
                         <label style="flex: 1; cursor: pointer;">
                             <input type="checkbox" id="chk-autoplay-onstart" style="margin-right: 8px;">
-                            Iniciar reproducción automáticamente al iniciar
+                            <span data-i18n="settings_window.fields.autoplay_start">Iniciar reproducción automáticamente al iniciar</span>
                         </label>
                     </div>
                     <div class="setting-row">
                         <label style="flex: 1; cursor: pointer;">
                             <input type="checkbox" id="chk-encoder-on-autoplay" style="margin-right: 8px;">
-                            Iniciar el encoder al comenzar la reproducción automática
+                            <span data-i18n="settings_window.fields.start_encoder">Iniciar el encoder al comenzar la reproducción automática</span>
                         </label>
                     </div>
-                    <p style="font-size: 11px; color: #777; margin-top: 8px;">El encoder conectará únicamente los servidores que hayas marcado como "Auto-conectar al iniciar" en la ventana del Emisor.</p>
+                    <p style="font-size: 11px; color: #777; margin-top: 8px;" data-i18n="settings_window.fields.encoder_hint">El encoder conectará únicamente los servidores que hayas marcado como "Auto-conectar al iniciar" en la ventana del Emisor.</p>
                     <p id="hint-autostart-dev" style="display: none; font-size: 11px; color: #e0a040; margin-top: 8px;"></p>
                 </fieldset>
 
-                <h4 style="margin: 0 0 10px 0; color: #ccc; font-weight: 600;">Personalización de Interfaz</h4>
-                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Arrastra los elementos para cambiar su orden, o desmárcalos para ocultarlos. Los cambios se reflejarán en la ventana principal inmediatamente a modo de vista previa.</p>
+                <h4 style="margin: 0 0 10px 0; color: #ccc; font-weight: 600;" data-i18n="settings_window.fields.ui_personalization">Personalización de Interfaz</h4>
+                <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.ui_hint">Arrastra los elementos para cambiar su orden, o desmárcalos para ocultarlos. Los cambios se reflejarán en la ventana principal inmediatamente a modo de vista previa.</p>
 
                 <div class="setting-row" style="margin-bottom: 15px;">
-                    <label style="width: 250px;">Posición general de los controles:</label>
+                    <label style="width: 250px;" data-i18n="settings_window.fields.controls_pos">Posición general de los controles:</label>
                     <select id="sel-controls-pos" class="dark-select" style="flex: 1;">
-                        <option value="top">Arriba</option>
-                        <option value="bottom">Abajo</option>
+                        <option value="top" data-i18n="settings_window.fields.top">Arriba</option>
+                        <option value="bottom" data-i18n="settings_window.fields.bottom">Abajo</option>
                     </select>
                 </div>
 
                 <div style="display: flex; gap: 20px;">
                     <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
                         <fieldset class="fieldset-dark">
-                            <legend>Controles de Reproducción</legend>
+                            <legend data-i18n="settings_window.fields.playback_controls">Controles de Reproducción</legend>
                             <ul id="list-controls-order" class="dark-list draggable-list"></ul>
                         </fieldset>
                         <fieldset class="fieldset-dark" style="margin-bottom: 0;">
-                            <legend>Columnas de Playlist</legend>
+                            <legend data-i18n="settings_window.fields.playlist_columns">Columnas de Playlist</legend>
                             <ul id="list-playlist-order" class="dark-list draggable-list"></ul>
                         </fieldset>
                     </div>
 
                     <div style="flex: 1; display: flex; flex-direction: column; gap: 20px;">
                         <fieldset class="fieldset-dark">
-                            <legend>Modos de Reproducción</legend>
+                            <legend data-i18n="settings_window.fields.playback_modes">Modos de Reproducción</legend>
                             <ul id="list-modes-order" class="dark-list draggable-list"></ul>
                         </fieldset>
                         <fieldset class="fieldset-dark" style="margin-bottom: 0;">
-                            <legend>Hora y Clima</legend>
+                            <legend data-i18n="settings_window.fields.time_weather">Hora y Clima</legend>
                             <ul id="list-widgets-order" class="dark-list draggable-list"></ul>
                         </fieldset>
                         
                         <div class="setting-row" style="margin-top: 5px;">
                             <label style="flex: 1; cursor: pointer; color: #aaa;">
                                 <input type="checkbox" id="chk-fit-to-window" style="margin-right: 8px;">
-                                Ajustar columnas a la ventana
+                                <span data-i18n="settings_window.fields.fit_columns">Ajustar columnas a la ventana</span>
                             </label>
                         </div>
                     </div>
@@ -309,73 +275,73 @@
             </div>
 
             <div id="tab-time" class="tab-pane">
-                <h3 class="tab-title">Hora y Clima</h3>
+                <h3 class="tab-title" data-i18n="settings_window.titles.time">Hora y Clima</h3>
                 
                 <fieldset class="fieldset-dark" style="margin-bottom: 20px;">
-                    <legend>Locucion Horaria</legend>
-                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Selecciona la carpeta donde se encuentran los archivos de voz para la hora (Ejemplo: HRS01.mp3, MIN15.mp3).</p>
+                    <legend data-i18n="settings_window.fields.time_locution">Locucion Horaria</legend>
+                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.time_hint">Selecciona la carpeta donde se encuentran los archivos de voz para la hora (Ejemplo: HRS01.mp3, MIN15.mp3).</p>
 
                     <div class="setting-row">
-                        <label style="width: 120px;">Ruta de audios:</label>
-                        <input type="text" id="txt-time-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly placeholder="No se ha configurado ninguna carpeta">
-                        <button id="btn-browse-time" class="settings-btn" style="margin-left: 10px;">Examinar...</button>
+                        <label style="width: 120px;" data-i18n="settings_window.fields.audio_path">Ruta de audios:</label>
+                        <input type="text" id="txt-time-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly data-i18n="[placeholder]settings_window.fields.no_folder" placeholder="No se ha configurado ninguna carpeta">
+                        <button id="btn-browse-time" class="settings-btn" style="margin-left: 10px;" data-i18n="settings_window.fields.browse">Examinar...</button>
                     </div>
                 </fieldset>
 
                 <fieldset class="fieldset-dark">
-                    <legend>Locucion de Clima (Temperatura y Humedad)</legend>
-                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Escribe tu ciudad para obtener la temperatura y humedad actual automaticamente.</p>
+                    <legend data-i18n="settings_window.dynamic.weather_legend_weather">Locucion de Clima (Temperatura y Humedad)</legend>
+                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.weather_hint">Escribe tu ciudad para obtener la temperatura y humedad actual automaticamente.</p>
                     
                     <div class="setting-row" style="margin-bottom: 15px;">
-                        <label style="width: 120px;">Ciudad/Municipio:</label>
-                        <input type="text" id="txt-weather-city" list="weather-city-suggestions" class="settings-input" style="flex: 1;" placeholder="Ejemplo: Lima, PE o Madrid, ES" autocomplete="off">
+                        <label style="width: 120px;" data-i18n="settings_window.fields.city">Ciudad/Municipio:</label>
+                        <input type="text" id="txt-weather-city" list="weather-city-suggestions" class="settings-input" style="flex: 1;" data-i18n="[placeholder]settings_window.fields.city_placeholder" placeholder="Ejemplo: Lima, PE o Madrid, ES" autocomplete="off">
                         <datalist id="weather-city-suggestions"></datalist>
-                        <button id="btn-weather-fetch" class="settings-btn" style="margin-left: 10px;">Comprobar</button>
+                        <button id="btn-weather-fetch" class="settings-btn" style="margin-left: 10px;" data-i18n="settings_window.fields.check_weather">Comprobar</button>
                     </div>
 
                     <div class="setting-row" style="margin-bottom: 15px;">
-                        <label style="width: 120px;">Unidad:</label>
+                        <label style="width: 120px;" data-i18n="settings_window.fields.unit">Unidad:</label>
                         <select id="sel-weather-unit" class="dark-select" style="flex: 1;">
-                            <option value="metric">Centigrados (°C)</option>
-                            <option value="imperial">Fahrenheit (°F)</option>
+                            <option value="C" data-i18n="settings_window.fields.metric">Centigrados (°C)</option>
+                            <option value="F" data-i18n="settings_window.fields.imperial">Fahrenheit (°F)</option>
                         </select>
                     </div>
 
                     <div class="setting-row" style="margin-bottom: 5px; border-top: 1px solid #333; padding-top: 15px;">
-                        <label style="width: 120px;">Dato actual:</label>
+                        <label style="width: 120px;" data-i18n="settings_window.fields.current_data">Dato actual:</label>
                         <span id="lbl-weather-temp" style="font-size: 18px; font-weight: bold; color: #2ecc71;">-- °C</span>
-                        <label style="width: 80px; margin-left: 20px;">Humedad:</label>
+                        <label style="width: 80px; margin-left: 20px;" data-i18n="settings_window.fields.humidity">Humedad:</label>
                         <span id="lbl-weather-humidity" style="font-size: 18px; font-weight: bold; color: #3498db;">-- %</span>
                     </div>
                     <div class="setting-row" style="margin-bottom: 15px;">
                         <label style="width: 120px;"></label>
-                        <span id="lbl-weather-updated" style="font-size: 11px; color: #888;">Última actualización: Nunca</span>
+                        <span id="lbl-weather-updated" style="font-size: 11px; color: #888;" data-i18n="settings_window.fields.last_update_never">Última actualización: Nunca</span>
                     </div>
 
                     <div class="setting-row" style="margin-top: 15px; border-top: 1px solid #333; padding-top: 15px;">
-                        <label style="width: 120px;">Temperatura:</label>
-                        <input type="text" id="txt-weather-temp-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly placeholder="Carpeta de audios TMP / TMPN">
-                        <button id="btn-browse-weather-temp" class="settings-btn" style="margin-left: 10px;">Examinar...</button>
+                        <label style="width: 120px;" data-i18n="settings_window.fields.temperature">Temperatura:</label>
+                        <input type="text" id="txt-weather-temp-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly data-i18n="[placeholder]settings_window.fields.tmp_folder" placeholder="Carpeta de audios TMP / TMPN">
+                        <button id="btn-browse-weather-temp" class="settings-btn" style="margin-left: 10px;" data-i18n="settings_window.fields.browse">Examinar...</button>
                     </div>
 
                     <div class="setting-row" style="margin-top: 10px;">
-                        <label style="width: 120px;">Humedad:</label>
-                        <input type="text" id="txt-weather-hum-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly placeholder="Carpeta de audios HUM">
-                        <button id="btn-browse-weather-hum" class="settings-btn" style="margin-left: 10px;">Examinar...</button>
+                        <label style="width: 120px;" data-i18n="settings_window.dynamic.weather_humidity">Humedad:</label>
+                        <input type="text" id="txt-weather-hum-folder" class="settings-input" style="flex: 1; color: #aaa;" readonly data-i18n="[placeholder]settings_window.fields.hum_folder" placeholder="Carpeta de audios HUM">
+                        <button id="btn-browse-weather-hum" class="settings-btn" style="margin-left: 10px;" data-i18n="settings_window.fields.browse">Examinar...</button>
                     </div>
                 </fieldset>
             </div>
 
             <div id="tab-ducking" class="tab-pane">
-                <h3 class="tab-title">Configuracion de Pisadores / Superposicion</h3>
-                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Ajusta como se comporta la musica principal cuando lanzas la Locucion de Hora, marcadores Overlay (P1, P2) o audios desde el Cartwall.</p>
+                <h3 class="tab-title" data-i18n="settings_window.titles.ducking">Configuracion de Pisadores / Superposicion</h3>
+                <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.ducking_hint">Ajusta como se comporta la musica principal cuando lanzas la Locucion de Hora, marcadores Overlay (P1, P2) o audios desde el Cartwall.</p>
                 <div class="fieldset-dark">
                     <div class="setting-row">
-                        <label style="width: 250px;">Volumen de la musica de fondo:</label>
+                        <label style="width: 250px;" data-i18n="settings_window.dynamic.ducking_vol">Volumen de la musica de fondo:</label>
                         <input type="number" id="num-duck-vol" class="dark-number" min="0" max="100" value="20"> %
                     </div>
                     <div class="setting-row" style="margin-top: 15px;">
-                        <label style="width: 250px;">Tiempo de fundido al subir/bajar (Fade):</label>
+                        <label style="width: 250px;" data-i18n="settings_window.dynamic.ducking_fade">Tiempo de fundido al subir/bajar (Fade):</label>
                         <input type="number" id="num-duck-fade" class="dark-number" step="0.1" min="0.1" value="1.0"> seg
                     </div>
 
@@ -383,41 +349,41 @@
             </div>
 
             <div id="tab-cartwall" class="tab-pane">
-                <h3 class="tab-title">Perfiles de la Botonera (Cartwall)</h3>
-                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">Crea y organiza multiples perfiles de botonera. Util si varios locutores usan el mismo programa.</p>
+                <h3 class="tab-title" data-i18n="settings_window.titles.cartwall">Perfiles de la Botonera (Cartwall)</h3>
+                <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.cartwall_prof_hint">Crea y organiza multiples perfiles de botonera. Util si varios locutores usan el mismo programa.</p>
 
                 <div class="file-types-layout">
                     <div class="file-types-list-col">
                         <ul id="cw-profile-list" class="dark-list"></ul>
                         <div class="list-actions" style="display: flex; gap: 5px; flex-wrap: wrap;">
-                            <button id="btn-cw-add" class="icon-btn" title="Nuevo Perfil">+</button>
-                            <button id="btn-cw-del" class="icon-btn" title="Eliminar Perfil" style="color:#e74c3c;">X</button>
-                            <button id="btn-cw-import" class="icon-btn" title="Importar">IMP</button>
-                            <button id="btn-cw-export" class="icon-btn" title="Exportar">EXP</button>
+                            <button id="btn-cw-add" class="icon-btn" title="Nuevo Perfil" data-i18n="[title]settings_window.dynamic.cw_new">+</button>
+                            <button id="btn-cw-del" class="icon-btn" title="Eliminar Perfil" data-i18n="[title]settings_window.dynamic.cw_delete" style="color:#e74c3c;">X</button>
+                            <button id="btn-cw-import" class="icon-btn" title="Importar" data-i18n="[title]settings_window.dynamic.cw_import">IMP</button>
+                            <button id="btn-cw-export" class="icon-btn" title="Exportar" data-i18n="[title]settings_window.dynamic.cw_export">EXP</button>
                         </div>
                     </div>
 
                     <div class="file-types-details-col">
                         <fieldset class="fieldset-dark" style="margin-bottom: 0;">
-                            <legend>Propiedades del Perfil</legend>
+                            <legend data-i18n="settings_window.fields.profile_properties">Propiedades del Perfil</legend>
 
                             <div class="setting-row" style="margin-bottom: 15px;">
-                                <label style="width: 100px;">Nombre:</label>
+                                <label style="width: 100px;" data-i18n="settings_window.fields.name">Nombre:</label>
                                 <input type="text" id="cw-prof-name" class="settings-input" style="flex: 1;">
                             </div>
 
                             <div class="setting-row">
-                                <label style="width: 100px;">Color Fondo:</label>
+                                <label style="width: 100px;" data-i18n="settings_window.fields.bg_color">Color Fondo:</label>
                                 <input type="color" id="cw-prof-bg" class="color-picker-native" value="#008c3a">
                             </div>
 
                             <div class="setting-row">
-                                <label style="width: 100px;">Color Texto:</label>
+                                <label style="width: 100px;" data-i18n="settings_window.fields.text_color">Color Texto:</label>
                                 <input type="color" id="cw-prof-text" class="color-picker-native" value="#ffffff">
                             </div>
 
                             <div style="text-align: right; margin-top: 10px;">
-                                <button id="btn-cw-activate" class="settings-btn" style="background-color: #00a8ff; color: white;">Activar este Perfil</button>
+                                <button id="btn-cw-activate" class="settings-btn" style="background-color: #00a8ff; color: white;" data-i18n="settings_window.fields.activate_profile">Activar este Perfil</button>
                             </div>
                         </fieldset>
                     </div>
@@ -425,65 +391,65 @@
             </div>
 
             <div id="tab-shortcuts" class="tab-pane">
-                <h3 class="tab-title">Atajos y Comportamiento</h3>
+                <h3 class="tab-title" data-i18n="settings_window.titles.shortcuts">Atajos y Comportamiento</h3>
 
                 <!-- SECCIÓN A: Comportamiento de clic en playlist -->
                 <fieldset class="fieldset-dark" style="margin-bottom: 20px;">
-                    <legend>Comportamiento de clic en Playlist</legend>
-                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;">
+                    <legend data-i18n="settings_window.fields.playlist_click_behavior">Comportamiento de clic en Playlist</legend>
+                    <p style="font-size: 12px; color: #888; margin-bottom: 15px;" data-i18n="settings_window.fields.playlist_click_hint">
                         Define qué acción se ejecuta al hacer doble clic o Ctrl+doble clic sobre una canción en la lista de reproducción.
                     </p>
 
                     <div class="setting-row" style="margin-bottom: 14px;">
-                        <label style="width: 200px;">Doble clic:</label>
+                        <label style="width: 200px;" data-i18n="settings_window.fields.double_click">Doble clic:</label>
                         <select id="sel-dbl-click-action" class="dark-select" style="flex: 1;">
-                            <option value="mark_next">Marcar como siguiente</option>
-                            <option value="smart_play">Arrancar o encolar</option>
-                            <option value="smart_skip">Arrancar o adelantar</option>
-                            <option value="preview">Escucha previa</option>
+                            <option value="mark_next" data-i18n="settings_window.fields.mark_next">Marcar como siguiente</option>
+                            <option value="smart_play" data-i18n="settings_window.fields.smart_play">Arrancar o encolar</option>
+                            <option value="smart_skip" data-i18n="settings_window.fields.smart_skip">Arrancar o adelantar</option>
+                            <option value="preview" data-i18n="settings_window.fields.preview">Escucha previa</option>
                         </select>
                     </div>
 
                     <div class="setting-row">
                         <label style="width: 200px;">Ctrl + doble clic:</label>
                         <select id="sel-ctrl-dbl-click-action" class="dark-select" style="flex: 1;">
-                            <option value="mark_next">Marcar como siguiente</option>
-                            <option value="smart_play">Arrancar o encolar</option>
-                            <option value="smart_skip">Arrancar o adelantar</option>
-                            <option value="preview">Escucha previa</option>
+                            <option value="mark_next" data-i18n="settings_window.fields.mark_next">Marcar como siguiente</option>
+                            <option value="smart_play" data-i18n="settings_window.fields.smart_play">Arrancar o encolar</option>
+                            <option value="smart_skip" data-i18n="settings_window.fields.smart_skip">Arrancar o adelantar</option>
+                            <option value="preview" data-i18n="settings_window.fields.preview">Escucha previa</option>
                         </select>
                     </div>
 
                     <div style="margin-top: 14px; padding: 10px 12px; background: #1a1a1c; border-radius: 4px; font-size: 12px; color: #888; line-height: 1.7;">
-                        <strong style="color: #aaa;">Arrancar o encolar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, la encola como siguiente canción.<br>
-                        <strong style="color: #aaa;">Arrancar o adelantar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, salta a esta canción ahora mismo.
+                        <span data-i18n="settings_window.fields.smart_play_hint"><strong style="color: #aaa;">Arrancar o encolar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, la encola como siguiente canción.</span><br>
+                        <span data-i18n="settings_window.fields.smart_skip_hint"><strong style="color: #aaa;">Arrancar o adelantar:</strong> si la lista está libre reproduce de inmediato; si hay algo en aire, salta a esta canción ahora mismo.</span>
                     </div>
                 </fieldset>
 
                 <!-- SECCIÓN B: Atajos de teclado -->
                 <fieldset class="fieldset-dark">
-                    <legend>Atajos de Teclado</legend>
+                    <legend data-i18n="settings_window.fields.keyboard_shortcuts">Atajos de Teclado</legend>
 
                     <div class="setting-row" style="margin-bottom: 8px;">
-                        <label style="width: 200px;">Alcance de los atajos:</label>
+                        <label style="width: 200px;" data-i18n="settings_window.fields.shortcut_scope">Alcance de los atajos:</label>
                         <select id="sel-keyboard-shortcut-scope" class="dark-select" style="flex: 1;">
-                            <option value="contextual">Contextual seguro (recomendado)</option>
-                            <option value="main-window">Ventana principal</option>
-                            <option value="application">Aplicacion completa (avanzado)</option>
+                            <option value="contextual" data-i18n="settings_window.fields.contextual">Contextual seguro (recomendado)</option>
+                            <option value="main-window" data-i18n="settings_window.fields.main_window">Ventana principal</option>
+                            <option value="application" data-i18n="settings_window.fields.application">Aplicacion completa (avanzado)</option>
                         </select>
                     </div>
                     <p id="keyboard-shortcut-scope-hint" style="font-size:12px;color:#888;margin:0 0 14px;line-height:1.5;"></p>
 
                     <div class="shortcuts-toolbar">
                         <span id="shortcuts-status" class="shortcuts-status-msg"></span>
-                        <button id="btn-shortcuts-reset" class="settings-btn" style="font-size:11px;padding:4px 10px;margin-left:auto;">Restaurar predeterminados</button>
+                        <button id="btn-shortcuts-reset" class="settings-btn" style="font-size:11px;padding:4px 10px;margin-left:auto;" data-i18n="settings_window.fields.restore_defaults">Restaurar predeterminados</button>
                     </div>
 
                     <div id="shortcuts-general-container"></div>
 
                     <div style="margin-top:18px;border-top:1px solid #2a2a2c;padding-top:14px;">
-                        <h4 style="margin:0 0 6px;font-size:13px;color:#aaa;font-weight:600;">Botonera de Efectos (Cartwall)</h4>
-                        <p style="font-size:12px;color:#666;margin:0 0 10px;">Asigna teclas a los botones del perfil activo. Un mismo atajo funciona en todas las botoneras simultáneamente.</p>
+                        <h4 style="margin:0 0 6px;font-size:13px;color:#aaa;font-weight:600;" data-i18n="settings_window.dynamic.shortcuts_cartwall_title">Botonera de Efectos (Cartwall)</h4>
+                        <p style="font-size:12px;color:#666;margin:0 0 10px;" data-i18n="settings_window.fields.cartwall_shortcuts_hint">Asigna teclas a los botones del perfil activo. Un mismo atajo funciona en todas las botoneras simultáneamente.</p>
                         <div id="shortcuts-cartwall-container"></div>
                     </div>
                 </fieldset>
@@ -492,9 +458,9 @@
     </div>
 
     <div class="settings-footer-buttons">
-        <button id="btn-cancel" class="settings-btn" style="background-color: #444;">Cancelar</button>
-        <button id="btn-apply" class="settings-btn">Aplicar</button>
-        <button id="btn-accept" class="settings-btn" style="background-color: #27ae60;">Aceptar y Cerrar</button>
+        <button id="btn-cancel" class="settings-btn" style="background-color: #444;" data-i18n="settings_window.buttons.cancel">Cancelar</button>
+        <button id="btn-apply" class="settings-btn" data-i18n="settings_window.buttons.apply">Aplicar</button>
+        <button id="btn-accept" class="settings-btn" style="background-color: #27ae60;" data-i18n="settings_window.buttons.accept">Aceptar y Cerrar</button>
     </div>
 
     <script src="settings.js"></script>

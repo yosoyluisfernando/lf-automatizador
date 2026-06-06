@@ -6,6 +6,7 @@ const path = require('path');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { normalizeAudioPrefs } = require('./audio_prefs');
 const musicSeparation = require('./music_separation_rules');
+const i18n = require('./i18n');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 const generalPrefsPath = path.join(configDir, 'general_settings.json');
@@ -81,7 +82,7 @@ function renderFolderTable() {
         songInput.type = 'number';
         songInput.min = String(musicSeparation.SONG_MIN_HOURS);
         songInput.max = String(musicSeparation.SONG_MAX_HOURS);
-        songInput.placeholder = 'global';
+        songInput.placeholder = i18n.t('music_separation.placeholder_global') || 'global';
         if (entry.songHours != null) songInput.value = entry.songHours;
         songInput.addEventListener('change', () => {
             clampField(songInput, musicSeparation.SONG_MIN_HOURS, musicSeparation.SONG_MAX_HOURS);
@@ -104,7 +105,7 @@ function renderFolderTable() {
         artistInput.type = 'number';
         artistInput.min = String(musicSeparation.ARTIST_MIN_HOURS);
         artistInput.max = String(musicSeparation.ARTIST_MAX_HOURS);
-        artistInput.placeholder = 'global';
+        artistInput.placeholder = i18n.t('music_separation.placeholder_global') || 'global';
         if (entry.artistHours != null) artistInput.value = entry.artistHours;
         artistInput.addEventListener('change', () => {
             clampField(artistInput, musicSeparation.ARTIST_MIN_HOURS, musicSeparation.ARTIST_MAX_HOURS);
@@ -187,5 +188,15 @@ byId('btn-cancel').addEventListener('click', () => window.close());
 // reflejamos los valores globales (no pisa ediciones de la tabla por carpeta).
 ipcRenderer.on('settings-updated', () => loadGlobal());
 
-loadGlobal();
-loadFolderRules();
+(async function initLang() {
+    try {
+        const prefs = normalizeAudioPrefs(readJson(generalPrefsPath, {}));
+        await i18n.init(prefs.language || 'es');
+        i18n.applyToDOM();
+        
+        loadGlobal();
+        loadFolderRules();
+    } catch (err) {
+        alert("CRITICAL ERROR: " + err.message + "\n" + err.stack);
+    }
+})();

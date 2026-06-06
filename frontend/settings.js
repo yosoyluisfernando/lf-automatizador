@@ -6,6 +6,7 @@ const { getConfigDir } = require('../backend/utils/app_paths');
 const { COMMANDS, DEFAULT_SHORTCUTS, MANDATORY_ACTIONS, ALWAYS_RESERVED, COMMAND_CATEGORIES } = require('./command_registry');
 const { buildComboString } = require('./shortcut_manager');
 const { wireSystemPrefs, collectSystemPrefs } = require('./system_prefs_ui');
+const i18n = require('./i18n');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 
@@ -28,52 +29,7 @@ function saveConfig(filePath, data) {
     try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2)); } catch(e) {}
 }
 
-const defaultFadeProfile = {
-    fadeinActive: false,
-    fadein: 0,
-    mixActive: true,
-    mix: 0.6,
-    mixDbActive: true,
-    mixDb: -14,
-    fadeoutStopActive: true,
-    fadeoutStop: 2,
-    fadeoutNextActive: true,
-    fadeoutNext: 0.6,
-    mixFadeoutActive: false
-};
-
-const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile }
-];
-
-function normalizeFileTypes(types) {
-    const loadedTypes = Array.isArray(types) ? types : [];
-    const byId = new Map(loadedTypes.map(typeData => [typeData.id, typeData]));
-    const builtInIds = new Set(defaultFileTypes.map(typeData => typeData.id));
-    const normalized = defaultFileTypes.map(defaultType => {
-        const stored = byId.get(defaultType.id) || {};
-        const migrated = {
-            ...defaultType,
-            ...stored,
-            name: defaultType.name,
-            identifier: defaultType.identifier,
-            aliases: defaultType.aliases || [],
-            readonly: true,
-            mixFadeoutActive: stored.mixFadeoutActive === true
-        };
-        delete migrated.mixFadeout;
-        return migrated;
-    });
-    loadedTypes.forEach(typeData => {
-        if (!typeData?.id || builtInIds.has(typeData.id)) return;
-        const migrated = { ...typeData, mixFadeoutActive: typeData.mixFadeoutActive === true };
-        delete migrated.mixFadeout;
-        normalized.push(migrated);
-    });
-    return normalized;
-}
+const { defaultFileTypes, normalizeFileTypes } = require('./file_types_data');
 
 let fileTypesData = normalizeFileTypes(loadConfig(fileTypesPath, defaultFileTypes));
 let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, {
@@ -90,6 +46,9 @@ let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, {
     autoStartWithSystem: false, autoPlayOnStart: false, startEncoderOnAutoPlay: false
 }));
 delete generalPrefs.num_mus_mix_fadeout;
+
+i18n.init(generalPrefs.language || 'es');
+i18n.applyToDOM();
 
 let uiPrefs = loadConfig(uiPrefsPath, { 
     controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82],
@@ -117,46 +76,22 @@ document.querySelectorAll('.settings-tab').forEach(tab => {
 });
 
 const selTipoArchivo = document.getElementById('sel-tipo-archivo');
-const fileTypesList = document.getElementById('file-types-list');
 
+// La pestaña "Excepciones Mezclar" solo elige un tipo (o Música por defecto)
+// para editar sus fades/mezcla. La gestion de tipos (alta/baja/nombre/color/
+// asignaciones) vive ahora en la ventana "Gestor de Tipos de Archivo".
 function renderLists() {
     selTipoArchivo.innerHTML = '<option value="default">Música (Predeterminado General)</option>';
-    fileTypesList.innerHTML = '';
     fileTypesData.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t.id; opt.text = t.name;
         selTipoArchivo.appendChild(opt);
-        const li = document.createElement('li');
-        li.innerText = t.name;
-        li.style.color = t.color;
-        if (t.id === currentSelectedTypeId) li.classList.add('selected');
-        li.addEventListener('click', () => { currentSelectedTypeId = t.id; renderLists(); loadTypeDetails(t.id); loadExceptionFades(t.id); });
-        fileTypesList.appendChild(li);
     });
     selTipoArchivo.value = currentSelectedTypeId;
 }
 
-function loadTypeDetails(id) {
-    const t = fileTypesData.find(x => x.id === id);
-    if(!t) return;
-    document.getElementById('type-name').value = t.name;
-    document.getElementById('type-name').disabled = t.readonly;
-    document.getElementById('type-identifier').value = t.identifier;
-    document.getElementById('type-identifier').disabled = t.readonly;
-    document.getElementById('type-color').value = t.color;
-    document.getElementById('type-color').disabled = t.readonly;
-    document.getElementById('type-amp').value = t.amp;
-    document.getElementById('type-voice').checked = t.voice;
-    const delBtn = document.getElementById('btn-del-type');
-    if (delBtn) {
-        delBtn.disabled = t.readonly === true;
-        delBtn.title = t.readonly ? 'Tipo predeterminado: no se puede eliminar' : 'Eliminar seleccionado';
-    }
-}
-
 selTipoArchivo.addEventListener('change', (e) => {
     currentSelectedTypeId = e.target.value;
-    if (currentSelectedTypeId !== 'default') loadTypeDetails(currentSelectedTypeId);
     loadExceptionFades(currentSelectedTypeId);
 });
 
@@ -191,13 +126,6 @@ function saveCurrentTypeState() {
     if (currentSelectedTypeId !== 'default') {
         const t = fileTypesData.find(x => x.id === currentSelectedTypeId);
         if (t) {
-            if(!t.readonly) {
-                t.name = document.getElementById('type-name').value;
-                t.identifier = document.getElementById('type-identifier').value;
-                t.color = document.getElementById('type-color').value;
-            }
-            t.amp = parseFloat(document.getElementById('type-amp').value) || 0;
-            t.voice = document.getElementById('type-voice').checked;
             t.fadeinActive = document.getElementById('chk-fadein').checked;
             t.fadein = parseFloat(document.getElementById('num-fadein').value) || 0;
             t.fadeoutStopActive = document.getElementById('chk-fadeout-stop').checked;
@@ -227,28 +155,31 @@ function saveCurrentTypeState() {
     }
 }
 
-document.querySelectorAll('#tab-types input, #tab-fades input, #sel-tipo-archivo').forEach(el => {
-    el.addEventListener('change', () => {
-        saveCurrentTypeState();
-        if(currentSelectedTypeId !== 'default') renderLists();
-    });
+document.querySelectorAll('#tab-fades input, #sel-tipo-archivo').forEach(el => {
+    el.addEventListener('change', () => { saveCurrentTypeState(); });
 });
 
-document.getElementById('btn-add-type').addEventListener('click', () => {
-    const newId = 't_' + Date.now();
-    fileTypesData.push({
-        id: newId, name: 'Nuevo Tipo', color: '#ffffff', identifier: 'nuevo', searchIn: 'all', amp: 0, report: false, voice: false, readonly: false,
-        ...defaultFadeProfile
+const selLanguage = document.getElementById('sel-language');
+if (selLanguage) {
+    selLanguage.value = generalPrefs.language || 'es';
+    selLanguage.addEventListener('change', () => {
+        const warn = document.getElementById('lbl-lang-warning');
+        if (warn) {
+            if (selLanguage.value === 'es') {
+                warn.style.display = 'none';
+            } else {
+                warn.style.display = 'block';
+                const warnings = {
+                    'en': '⚠️ The translation for this language is actively in development.',
+                    'pt-BR': '⚠️ A tradução para este idioma está em constante desenvolvimento.',
+                    'pt-PT': '⚠️ A tradução para este idioma está em constante desenvolvimento.'
+                };
+                warn.textContent = warnings[selLanguage.value] || '⚠️ La traducción en este idioma está en desarrollo continuo.';
+            }
+        }
     });
-    currentSelectedTypeId = newId; renderLists(); loadTypeDetails(newId); loadExceptionFades(newId);
-});
-
-document.getElementById('btn-del-type').addEventListener('click', () => {
-    const t = fileTypesData.find(x => x.id === currentSelectedTypeId);
-    if (!t || t.readonly) return;
-    fileTypesData = fileTypesData.filter(x => x.id !== currentSelectedTypeId);
-    currentSelectedTypeId = 'default'; renderLists(); loadExceptionFades('default');
-});
+    selLanguage.dispatchEvent(new Event('change'));
+}
 
 const txtTimeFolder = document.getElementById('txt-time-folder');
 if (txtTimeFolder) {
@@ -300,7 +231,7 @@ if (txtWeatherCity) {
                 lblWeatherTemp.innerText = `🌡️ ${wInfo.temp} ${wInfo.unitSym}`;
                 lblWeatherHum.innerText = `💧 ${wInfo.hum} %`;
                 const date = new Date(wInfo.lastUpdate);
-                document.getElementById('lbl-weather-updated').innerText = `Última actualización: ${date.toLocaleTimeString('es-PE')}`;
+                document.getElementById('lbl-weather-updated').innerText = (i18n.t('settings_window.fields.last_updated') || 'Última actualización: ') + ` ${date.toLocaleTimeString('es-PE')}`;
             }
         }
     } catch(e) {}
@@ -716,9 +647,9 @@ const keyboardShortcutScopeHint = document.getElementById('keyboard-shortcut-sco
 function syncKeyboardShortcutScopeHint() {
     if (!selKeyboardShortcutScope || !keyboardShortcutScopeHint) return;
     const hints = {
-        contextual: 'Recomendado: los atajos generales actuan solo en la ventana principal y se pausan mientras hay dialogos abiertos. La botonera responde solo cuando esta visible.',
-        'main-window': 'Los atajos generales actuan en toda la ventana principal, excepto al escribir. La botonera responde solo cuando esta visible.',
-        application: 'Modo avanzado: los atajos generales tambien actuan desde ventanas auxiliares de LF Automatizador, excepto al escribir. La botonera responde solo cuando esta visible.'
+        contextual: i18n.t('settings_window.dynamic.shortcuts_general_hint') || 'Recomendado: los atajos generales actuan solo en la ventana principal y se pausan mientras hay dialogos abiertos. La botonera responde solo cuando esta visible.',
+        'main-window': i18n.t('settings_window.dynamic.shortcuts_main_hint') || 'Los atajos generales actuan en toda la ventana principal, excepto al escribir. La botonera responde solo cuando esta visible.',
+        application: i18n.t('settings_window.dynamic.shortcuts_app_hint') || 'Modo avanzado: los atajos generales tambien actuan desde ventanas auxiliares de LF Automatizador, excepto al escribir. La botonera responde solo cuando esta visible.'
     };
     keyboardShortcutScopeHint.textContent = hints[selKeyboardShortcutScope.value] || hints.contextual;
 }
@@ -799,6 +730,11 @@ function saveAll() {
     
     localStorage.setItem('sel-out-cue', generalPrefs.outCue);
 
+    const selLanguageDoc = document.getElementById('sel-language');
+    if (selLanguageDoc) {
+        generalPrefs.language = selLanguageDoc.value;
+    }
+
     generalPrefs.timeFolder = txtTimeFolder ? txtTimeFolder.value : '';
     if (document.getElementById('txt-weather-city')) {
         generalPrefs.weatherCity = document.getElementById('txt-weather-city').value;
@@ -840,7 +776,7 @@ const __SETTINGS_SNAPSHOT_IDS = [
     'sel-pl-out-1', 'sel-pl-out-2', 'sel-pl-out-3', 'sel-pl-out-4',
     'sel-playlist-shared', 'sel-playlist-output-mode', 'sel-cartwall-mode',
     'sel-monitor-source-mode', 'sel-monitor-volume-ui-mode',
-    'sel-keyboard-shortcut-scope',
+    'sel-keyboard-shortcut-scope', 'sel-language',
     'sel-audio-engine-mode',
     'chk-monitor-enabled', 'chk-monitor-volume-ui',
     'num-duck-vol', 'num-duck-fade',
@@ -975,14 +911,14 @@ function cancelCapture() {
             const [ti, bid] = row.dataset.cwKey.split(':').map(Number);
             el.value = getCwButtonShortcut(ti, bid);
         }
-        el.placeholder = 'Sin asignar';
+        el.placeholder = i18n.t('settings_window.dynamic.shortcuts_unassigned_ph') || 'Sin asignar';
     });
 }
 
 function startCapture(inputEl, isCw, actionIdOrTabIdx, cwBtnId) {
     cancelCapture();
     inputEl.value = '';
-    inputEl.placeholder = 'Presiona una tecla…';
+    inputEl.placeholder = i18n.t('settings_window.dynamic.shortcuts_press_key_ph') || 'Presiona una tecla…';
     inputEl.classList.add('sc-capturing');
     inputEl.focus();
 
@@ -999,7 +935,7 @@ function startCapture(inputEl, isCw, actionIdOrTabIdx, cwBtnId) {
         // Tecla reservada de sistema
         const baseKey = combo.split('+').pop();
         if (ALWAYS_RESERVED.has(baseKey) || ALWAYS_RESERVED.has(combo)) {
-            showShortcutStatus(`"${combo}" es una tecla del sistema y no puede asignarse.`, 'error');
+            showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_sys_key_error') || '"{combo}" es una tecla del sistema y no puede asignarse.').replace('{combo}', combo), 'error');
             cancelCapture(); return;
         }
 
@@ -1009,7 +945,10 @@ function startCapture(inputEl, isCw, actionIdOrTabIdx, cwBtnId) {
             if (genConflict) {
                 const cmd = COMMANDS.find(c => c.id === genConflict);
                 if (MANDATORY_ACTIONS.has(genConflict)) {
-                    showShortcutStatus(`"${combo}" está asignada a "${cmd?.label}" (obligatoria). Cambia esa acción primero.`, 'error');
+                    let tKey = 'settings_window.commands.cmd_' + cmd?.id.replace(/\\./g, '_');
+                    let tLabel = i18n.t(tKey);
+                    if (tLabel === tKey) tLabel = cmd?.label;
+                    showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_mandatory_error') || '"{combo}" está asignada a "{cmdLabel}" (obligatoria). Cambia esa acción primero.').replace('{combo}', combo).replace('{cmdLabel}', tLabel), 'error');
                     cancelCapture(); return;
                 }
                 if (!currentShortcuts) currentShortcuts = {};
@@ -1020,25 +959,31 @@ function startCapture(inputEl, isCw, actionIdOrTabIdx, cwBtnId) {
             const cwConflict = findConflictInCwActiveTab(combo, actionIdOrTabIdx, cwBtnId);
             if (cwConflict) { setCwButtonShortcut(cwConflict.tabIdx, cwConflict.btnId, ''); updateCwRowValue(cwConflict.tabIdx, cwConflict.btnId, ''); }
             setCwButtonShortcut(actionIdOrTabIdx, cwBtnId, combo);
-            inputEl.value = combo; inputEl.placeholder = 'Sin asignar'; inputEl.classList.remove('sc-capturing');
-            if (!genConflict) showShortcutStatus(`"${combo}" asignada.`, 'ok');
+            inputEl.value = combo; inputEl.placeholder = i18n.t('settings_window.dynamic.shortcuts_unassigned_ph') || 'Sin asignar'; inputEl.classList.remove('sc-capturing');
+            if (!genConflict) showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_assigned') || '"{combo}" asignada.').replace('{combo}', combo), 'ok');
         } else {
             const conflict = findConflictInGeneral(combo, actionIdOrTabIdx);
             if (conflict) {
                 const cmd = COMMANDS.find(c => c.id === conflict);
                 if (MANDATORY_ACTIONS.has(conflict)) {
-                    showShortcutStatus(`"${combo}" está asignada a "${cmd?.label}" (obligatoria). Cambia esa acción primero.`, 'error');
+                    let tKey = 'settings_window.commands.cmd_' + cmd?.id.replace(/\\./g, '_');
+                    let tLabel = i18n.t(tKey);
+                    if (tLabel === tKey) tLabel = cmd?.label;
+                    showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_mandatory_error') || '"{combo}" está asignada a "{cmdLabel}" (obligatoria). Cambia esa acción primero.').replace('{combo}', combo).replace('{cmdLabel}', tLabel), 'error');
                     cancelCapture(); return;
                 }
                 if (!currentShortcuts) currentShortcuts = {};
                 currentShortcuts[conflict] = '';
                 updateShortcutRowValue(conflict, '');
-                showShortcutStatus(`"${combo}" se desasignó de: ${cmd?.label || conflict}`, 'warning');
+                let tKey = 'settings_window.commands.cmd_' + cmd?.id.replace(/\\./g, '_');
+                let tLabel = i18n.t(tKey);
+                if (tLabel === tKey) tLabel = cmd?.label;
+                showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_unassigned_from') || '"{combo}" se desasignó de: {cmdLabel}').replace('{combo}', combo).replace('{cmdLabel}', tLabel || conflict), 'warning');
             }
             if (!currentShortcuts) currentShortcuts = {};
             currentShortcuts[actionIdOrTabIdx] = combo;
-            inputEl.value = combo; inputEl.placeholder = 'Sin asignar'; inputEl.classList.remove('sc-capturing');
-            if (!conflict) showShortcutStatus(`"${combo}" asignada.`, 'ok');
+            inputEl.value = combo; inputEl.placeholder = i18n.t('settings_window.dynamic.shortcuts_unassigned_ph') || 'Sin asignar'; inputEl.classList.remove('sc-capturing');
+            if (!conflict) showShortcutStatus((i18n.t('settings_window.dynamic.shortcuts_assigned') || '"{combo}" asignada.').replace('{combo}', combo), 'ok');
         }
 
         document.removeEventListener('keydown', captureKeydownHandler, true);
@@ -1082,11 +1027,13 @@ function buildShortcutRow(cmd, currentValue) {
 
     const label = document.createElement('span');
     label.className = 'shortcut-label';
-    label.textContent = cmd.label;
+    let tKey = 'settings_window.commands.cmd_' + cmd.id.replace(/\\./g, '_');
+    let translated = i18n.t(tKey);
+    label.textContent = translated === tKey ? cmd.label : translated;
     if (isMandatory) {
         const dot = document.createElement('span');
         dot.style.cssText = 'font-size:10px;color:#e67e22;margin-left:6px;vertical-align:middle;';
-        dot.title = 'Obligatoria — siempre debe tener una tecla';
+        dot.title = i18n.t('settings_window.dynamic.shortcuts_mandatory_dot') || 'Obligatoria — siempre debe tener una tecla';
         dot.textContent = '●';
         label.appendChild(dot);
     }
@@ -1096,25 +1043,25 @@ function buildShortcutRow(cmd, currentValue) {
 
     const input = document.createElement('input');
     input.type = 'text'; input.className = 'shortcut-input'; input.readOnly = true;
-    input.value = currentValue || ''; input.placeholder = 'Sin asignar';
-    input.title = 'Clic para asignar una tecla';
+    input.value = currentValue || ''; input.placeholder = i18n.t('settings_window.dynamic.shortcuts_unassigned_ph') || 'Sin asignar';
+    input.title = i18n.t('settings_window.dynamic.shortcuts_click_to_assign') || 'Clic para asignar una tecla';
     input.addEventListener('click', () => startCapture(input, false, cmd.id, -1));
 
     const badge = document.createElement('span');
-    badge.className = 'sc-conflict-badge'; badge.title = 'Conflicto: tecla ya asignada'; badge.textContent = '⚠'; badge.style.display = 'none';
+    badge.className = 'sc-conflict-badge'; badge.title = i18n.t('settings_window.dynamic.shortcuts_conflict') || 'Conflicto: tecla ya asignada'; badge.textContent = '⚠'; badge.style.display = 'none';
 
     zone.appendChild(input); zone.appendChild(badge);
 
     const clearBtn = document.createElement('button');
     clearBtn.className = 'icon-btn shortcut-clear-btn'; clearBtn.textContent = '×';
     clearBtn.disabled = isMandatory;
-    clearBtn.title = isMandatory ? 'Obligatoria: no puede quedar sin tecla' : 'Quitar atajo';
+    clearBtn.title = isMandatory ? (i18n.t('settings_window.dynamic.shortcuts_mandatory_remove_title') || 'Obligatoria: no puede quedar sin tecla') : (i18n.t('settings_window.dynamic.shortcuts_remove_title') || 'Quitar atajo');
     clearBtn.addEventListener('click', () => {
         if (!currentShortcuts) currentShortcuts = {};
         currentShortcuts[cmd.id] = '';
         input.value = '';
         updateConflictBadges();
-        showShortcutStatus('Atajo eliminado.', 'ok');
+        showShortcutStatus(i18n.t('settings_window.dynamic.shortcuts_removed') || 'Atajo eliminado.', 'ok');
     });
 
     div.appendChild(label); div.appendChild(zone); div.appendChild(clearBtn);
@@ -1131,7 +1078,12 @@ function renderShortcutsSection(container) {
     });
     Object.entries(grouped).forEach(([cat, cmds]) => {
         const hdr = document.createElement('div');
-        hdr.className = 'shortcuts-category-header'; hdr.textContent = cat;
+        hdr.className = 'shortcuts-category-header'; 
+        let translationKey = '';
+        for (let key in COMMAND_CATEGORIES) {
+            if (COMMAND_CATEGORIES[key] === cat) translationKey = 'cat_' + key.toLowerCase();
+        }
+        hdr.textContent = translationKey ? (i18n.t('settings_window.command_categories.' + translationKey) || cat) : cat;
         container.appendChild(hdr);
         cmds.forEach(cmd => container.appendChild(buildShortcutRow(cmd, eff[cmd.id] || '')));
     });
@@ -1147,15 +1099,15 @@ function buildCwShortcutRow(tabIdx, btnId, labelText, currentValue) {
 
     const input = document.createElement('input');
     input.type = 'text'; input.className = 'shortcut-input'; input.readOnly = true;
-    input.value = currentValue || ''; input.placeholder = 'Sin asignar';
+    input.value = currentValue || ''; input.placeholder = i18n.t('settings_window.dynamic.shortcuts_unassigned_ph') || 'Sin asignar';
     input.addEventListener('click', () => startCapture(input, true, tabIdx, btnId));
 
     const clearBtn = document.createElement('button');
-    clearBtn.className = 'icon-btn shortcut-clear-btn'; clearBtn.textContent = '×'; clearBtn.title = 'Quitar atajo';
+    clearBtn.className = 'icon-btn shortcut-clear-btn'; clearBtn.textContent = '×'; clearBtn.title = i18n.t('settings_window.dynamic.shortcuts_remove_title') || 'Quitar atajo';
     clearBtn.addEventListener('click', () => {
         setCwButtonShortcut(tabIdx, btnId, '');
         input.value = '';
-        showShortcutStatus('Atajo eliminado.', 'ok');
+        showShortcutStatus(i18n.t('settings_window.dynamic.shortcuts_removed') || 'Atajo eliminado.', 'ok');
     });
 
     div.appendChild(label); div.appendChild(input); div.appendChild(clearBtn);
@@ -1166,7 +1118,7 @@ function renderCartwallShortcutsSection(container) {
     container.innerHTML = '';
     const profile = cwState?.profiles?.find(p => p.id === cwState?.activeProfileId);
     if (!profile?.paletas?.length) {
-        container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">No hay perfil de cartwall activo.</div>';
+        container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">' + (i18n.t('settings_window.dynamic.shortcuts_no_cartwall_prof') || 'No hay perfil de cartwall activo.') + '</div>';
         return;
     }
     let hasAny = false;
@@ -1179,11 +1131,12 @@ function renderCartwallShortcutsSection(container) {
         hdr.textContent = paleta.nombre || `Botonera ${tabIdx + 1}`;
         container.appendChild(hdr);
         withContent.forEach(btn => {
-            const lbl = `Btn ${btn.id}${btn.name ? ` — ${btn.name}` : ''}`;
+            const tmpl = i18n.t('settings_window.dynamic.shortcuts_cartwall_btn_lbl') || 'Btn {id} — {name}';
+            const lbl = tmpl.replace('{id}', btn.id).replace('{name}', btn.name || '').replace(' — ', btn.name ? ' — ' : '');
             container.appendChild(buildCwShortcutRow(tabIdx, btn.id, lbl, btn.shortcut || ''));
         });
     });
-    if (!hasAny) container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">No hay botones configurados en el perfil activo.</div>';
+    if (!hasAny) container.innerHTML = '<div style="color:#555;font-size:12px;padding:8px 0;">' + (i18n.t('settings_window.dynamic.shortcuts_no_cartwall_btns') || 'No hay botones configurados en el perfil activo.') + '</div>';
 }
 
 async function initShortcutsTab() {
@@ -1204,7 +1157,7 @@ document.getElementById('btn-shortcuts-reset')?.addEventListener('click', () => 
     currentShortcuts = {};
     const genEl = document.getElementById('shortcuts-general-container');
     if (genEl) renderShortcutsSection(genEl);
-    showShortcutStatus('Atajos restaurados a los valores de fábrica.', 'ok');
+    showShortcutStatus(i18n.t('settings_window.dynamic.shortcuts_restored') || 'Atajos restaurados a los valores de fábrica.', 'ok');
 });
 
 renderLists();
@@ -1400,17 +1353,17 @@ function initInterfaceSettings() {
     };
 
     const controlsLabels = {
-        'btn-play': 'Play', 'btn-pause': 'Pausa', 'btn-stop': 'Stop',
-        'btn-next': 'Siguiente', 'btn-stop-after': 'Pausar al finalizar', 'btn-talk': 'MIC'
+        'btn-play': i18n.t('settings_window.dynamic_labels.play'), 'btn-pause': i18n.t('settings_window.dynamic_labels.pause'), 'btn-stop': i18n.t('settings_window.dynamic_labels.stop'),
+        'btn-next': i18n.t('settings_window.dynamic_labels.next'), 'btn-stop-after': i18n.t('settings_window.dynamic_labels.stop_after'), 'btn-talk': i18n.t('settings_window.dynamic_labels.talk')
     };
     const modesLabels = {
-        'btn-mode-looplist': 'Bucle / Infinita', 'btn-mode-remove': 'Eliminar al tocar', 'btn-mode-repeat': 'Repetir canción'
+        'btn-mode-looplist': i18n.t('settings_window.dynamic_labels.loop'), 'btn-mode-remove': i18n.t('settings_window.dynamic_labels.remove'), 'btn-mode-repeat': i18n.t('settings_window.dynamic_labels.repeat')
     };
     const widgetsLabels = {
-        'btn-reloj': 'Reloj', 'temp-widget': 'Temperatura', 'hum-widget': 'Humedad'
+        'btn-reloj': i18n.t('settings_window.dynamic_labels.clock'), 'temp-widget': i18n.t('settings_window.dynamic_labels.temp'), 'hum-widget': i18n.t('settings_window.dynamic_labels.hum')
     };
     const playlistLabels = {
-        'col-hora': 'Hora de inicio', 'col-titulo': 'Título', 'col-duracion': 'Duración', 'col-intro': 'Intro', 'col-outro': 'Outro'
+        'col-hora': i18n.t('settings_window.dynamic_labels.col_time'), 'col-titulo': i18n.t('settings_window.dynamic_labels.col_title'), 'col-duracion': i18n.t('settings_window.dynamic_labels.col_duration'), 'col-intro': i18n.t('settings_window.dynamic_labels.col_intro'), 'col-outro': i18n.t('settings_window.dynamic_labels.col_outro')
     };
 
     const allControls = ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'];

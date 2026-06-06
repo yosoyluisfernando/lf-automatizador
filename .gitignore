@@ -14,6 +14,7 @@ scratch_*.js
 # Runtime reports, logs and local caches
 config/audio_engine_report.jsonl
 ERROR_ANALYZER_LOG.txt
+app_launch_log.txt
 *.log
 track_cache.json
 bin/
@@ -74,7 +75,7 @@ error_log.txt
 ACTUALIZAR-MOTOR-STREAM.bat
 Radio.html
 prueba.html
-"entendiendo la consola virtual.md"
+entendiendo la consola virtual.md
 POR_HACER.md
 NOTA_CAMBIOS_*.md
 modify_*.py

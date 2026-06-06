@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Gestor de Comerciales</title>
+    <title data-i18n="commercial_manager.title">Gestor de Comerciales</title>
     <style>
         :root { --bg:#121212; --panel:#18181a; --header:#1a1a1c; --line:#333; --soft:#222; --accent:#00a8ff; --txt:#e0e0e0; --muted:#888; --ok:#2ecc71; --warn:#f1c40f; --bad:#e74c3c; --purple:#9b59b6; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,7 +23,9 @@
         tr:hover td, tr.selected td { background: rgba(0,168,255,0.11); color: #fff; }
         .shell { height: 100vh; display: flex; flex-direction: column; }
         .topbar { height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: var(--header); border-bottom: 1px solid var(--line); }
-        .title { color: var(--accent); font-weight: 800; font-size: 16px; min-width: 190px; }
+        .title { color: var(--accent); font-weight: 800; font-size: 16px; }
+        .title-group { display: flex; align-items: center; gap: 8px; min-width: 190px; }
+        .badge-exp { background: #f39c12; color: #1a1a1a; font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
         .tabs { display: flex; gap: 6px; }
         .actions { display: flex; gap: 8px; align-items: center; }
         .view { flex: 1; min-height: 0; display: none; }
@@ -105,163 +107,166 @@
 <body>
 <div class="shell">
     <header class="topbar">
-        <div class="title">Gestor de Pautas</div>
+        <div class="title-group">
+            <div class="title" data-i18n="commercial_manager.title_main">Gestor de Pautas</div>
+            <span class="badge-exp" data-i18n="commercial_manager.experimental">Experimental</span>
+        </div>
         <nav class="tabs">
-            <button class="nav-tab active" data-view="library">Biblioteca</button>
-            <button class="nav-tab" data-view="scheduler">Editor de pautas</button>
-            <button class="nav-tab" data-view="continuity">Continuidad</button>
+            <button class="nav-tab active" data-view="library" data-i18n="commercial_manager.tab_library">Biblioteca</button>
+            <button class="nav-tab" data-view="scheduler" data-i18n="commercial_manager.tab_scheduler">Editor de pautas</button>
+            <button class="nav-tab" data-view="continuity" data-i18n="commercial_manager.tab_continuity">Continuidad</button>
         </nav>
         <div class="actions">
-            <input id="global-search" type="text" placeholder="Buscar spot, cliente, campana o ruta..." style="width:300px;">
-            <button id="btn-refresh">Refrescar</button>
+            <input id="global-search" type="text" placeholder="Buscar spot, cliente, campana o ruta..." style="width:300px;" data-i18n="[placeholder]commercial_manager.ph_search">
+            <button id="btn-refresh" data-i18n="commercial_manager.btn_refresh">Refrescar</button>
         </div>
     </header>
 
     <main id="view-library" class="view active">
         <aside class="left">
-            <div class="panel-title">Carpetas monitorizadas</div>
+            <div class="panel-title" data-i18n="commercial_manager.pan_folders">Carpetas monitorizadas</div>
             <div class="stack">
                 <div class="route-card">
-                    <strong>Comerciales</strong>
-                    <div id="commercials-root-path" class="route-path">Sin carpeta configurada</div>
-                    <div class="route-actions"><button id="btn-set-commercials-root">Elegir</button><button id="btn-scan-commercials">Escanear</button></div>
+                    <strong data-i18n="commercial_manager.lbl_commercials">Comerciales</strong>
+                    <div id="commercials-root-path" class="route-path" data-i18n="commercial_manager.lbl_no_folder">Sin carpeta configurada</div>
+                    <div class="route-actions"><button id="btn-set-commercials-root" data-i18n="commercial_manager.btn_choose">Elegir</button><button id="btn-scan-commercials" data-i18n="commercial_manager.btn_scan">Escanear</button></div>
                 </div>
                 <div class="route-card">
-                    <strong>Jingles e IDs</strong>
-                    <div id="jingles-root-path" class="route-path">Sin carpeta configurada</div>
-                    <div class="route-actions"><button id="btn-set-jingles-root">Elegir</button><button id="btn-scan-jingles">Escanear</button></div>
+                    <strong data-i18n="commercial_manager.lbl_jingles">Jingles e IDs</strong>
+                    <div id="jingles-root-path" class="route-path" data-i18n="commercial_manager.lbl_no_folder">Sin carpeta configurada</div>
+                    <div class="route-actions"><button id="btn-set-jingles-root" data-i18n="commercial_manager.btn_choose">Elegir</button><button id="btn-scan-jingles" data-i18n="commercial_manager.btn_scan">Escanear</button></div>
                 </div>
                 <div>
-                    <label>Categoria al importar</label>
+                    <label data-i18n="commercial_manager.lbl_import_cat">Categoria al importar</label>
                     <select id="import-category"></select>
                 </div>
-                <button id="btn-new-category">Nueva categoria</button>
+                <button id="btn-new-category" data-i18n="commercial_manager.btn_new_cat">Nueva categoria</button>
             </div>
         </aside>
         <section id="asset-dropzone" class="center">
             <div class="toolbar">
-                <select id="filter-root" style="width:150px;"><option value="all">Todo</option><option value="commercials">Comerciales</option><option value="jingles">Jingles</option></select>
-                <select id="filter-category" style="width:180px;"><option value="all">Todas</option></select>
-                <select id="filter-status" style="width:150px;"><option value="all">Todos</option><option value="draft">Sin metadata</option><option value="active">Vigentes</option><option value="upcoming">Proximos</option><option value="expired">Vencidos</option></select>
-                <button id="btn-apply-category">Etiquetar seleccionados</button>
+                <select id="filter-root" style="width:150px;"><option value="all" data-i18n="commercial_manager.opt_all">Todo</option><option value="commercials" data-i18n="commercial_manager.lbl_commercials">Comerciales</option><option value="jingles" data-i18n="commercial_manager.lbl_jingles">Jingles</option></select>
+                <select id="filter-category" style="width:180px;"><option value="all" data-i18n="commercial_manager.opt_all_fem">Todas</option></select>
+                <select id="filter-status" style="width:150px;"><option value="all" data-i18n="commercial_manager.opt_all_masc">Todos</option><option value="draft" data-i18n="commercial_manager.opt_no_meta">Sin metadata</option><option value="active" data-i18n="commercial_manager.opt_active">Vigentes</option><option value="upcoming" data-i18n="commercial_manager.opt_upcoming">Proximos</option><option value="expired" data-i18n="commercial_manager.opt_expired">Vencidos</option></select>
+                <button id="btn-apply-category" data-i18n="commercial_manager.btn_apply_cat">Etiquetar seleccionados</button>
             </div>
             <div class="scroll">
                 <table>
-                    <thead><tr><th style="width:34px;">ST</th><th>Archivo</th><th>Cliente / Marca</th><th style="width:120px;">Tipo</th><th style="width:150px;">Vigencia</th><th style="width:110px;">Cues / dB</th></tr></thead>
+                    <thead><tr><th style="width:34px;">ST</th><th data-i18n="commercial_manager.th_file">Archivo</th><th data-i18n="commercial_manager.th_client">Cliente / Marca</th><th style="width:120px;" data-i18n="commercial_manager.th_type">Tipo</th><th style="width:150px;" data-i18n="commercial_manager.th_validity">Vigencia</th><th style="width:110px;" data-i18n="commercial_manager.th_cues">Cues / dB</th></tr></thead>
                     <tbody id="asset-body"></tbody>
                 </table>
-                <div id="empty-assets" class="drop-hint">Arrastra carpetas o escanea las raices maestras para construir la biblioteca comercial.</div>
+                <div id="empty-assets" class="drop-hint" data-i18n="commercial_manager.hint_drop">Arrastra carpetas o escanea las raices maestras para construir la biblioteca comercial.</div>
             </div>
         </section>
         <aside class="right">
-            <div class="panel-title">Inspector de spot <span id="asset-state-label">Sin seleccion</span></div>
+            <div class="panel-title"><span data-i18n="commercial_manager.pan_inspector">Inspector de spot</span> <span id="asset-state-label" data-i18n="commercial_manager.lbl_no_selection">Sin seleccion</span></div>
             <div class="mini-player">
-                <div id="asset-file-label" style="font-size:11px;color:var(--accent);word-break:break-all;">Selecciona un archivo</div>
+                <div id="asset-file-label" style="font-size:11px;color:var(--accent);word-break:break-all;" data-i18n="commercial_manager.lbl_select_file">Selecciona un archivo</div>
                 <div class="wave"></div>
-                <div style="display:flex;justify-content:space-between;align-items:center;"><button id="btn-preview-asset">Play</button><span id="asset-audio-info" style="font-size:11px;color:#888;">Dur: -- | dB: --</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;"><button id="btn-preview-asset" data-i18n="commercial_manager.btn_play">Play</button><span id="asset-audio-info" style="font-size:11px;color:#888;">Dur: -- | dB: --</span></div>
             </div>
             <div class="form">
                 <div class="full">
-                    <label>Tipo de elemento</label>
+                    <label data-i18n="commercial_manager.lbl_element_type">Tipo de elemento</label>
                     <div id="type-buttons" class="type-grid"></div>
                 </div>
-                <div class="full"><label>Cliente / Marca</label><input id="asset-client" type="text"></div>
-                <div class="full"><label>Campana / Pieza</label><input id="asset-campaign" type="text"></div>
-                <div><label id="asset-category-label">Categoria / motivo</label><select id="asset-category"></select></div>
-                <div><label id="asset-billing-label">Condicion de emision</label><select id="asset-billing"></select></div>
-                <div><label>Valido desde</label><input id="asset-validity-start" type="date"></div>
-                <div><label>Valido hasta</label><input id="asset-validity-end" type="date"></div>
-                <div><label>Prioridad</label><select id="asset-priority"><option value="high">Alta estricta</option><option value="normal">Normal</option><option value="low">Baja relleno</option></select></div>
-                <div><label>Limite diario</label><input id="asset-daily-limit" type="number" min="0" placeholder="0 = sin limite"></div>
-                <div class="full"><label>Como debe salir al aire</label><textarea id="asset-traffic-notes"></textarea></div>
-                <div class="full"><label>Notas internas</label><textarea id="asset-notes"></textarea></div>
+                <div class="full"><label data-i18n="commercial_manager.th_client">Cliente / Marca</label><input id="asset-client" type="text"></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_campaign">Campana / Pieza</label><input id="asset-campaign" type="text"></div>
+                <div><label id="asset-category-label" data-i18n="commercial_manager.lbl_category">Categoria / motivo</label><select id="asset-category"></select></div>
+                <div><label id="asset-billing-label" data-i18n="commercial_manager.lbl_condition">Condicion de emision</label><select id="asset-billing"></select></div>
+                <div><label data-i18n="commercial_manager.lbl_valid_from">Valido desde</label><input id="asset-validity-start" type="date"></div>
+                <div><label data-i18n="commercial_manager.lbl_valid_to">Valido hasta</label><input id="asset-validity-end" type="date"></div>
+                <div><label data-i18n="commercial_manager.lbl_priority">Prioridad</label><select id="asset-priority"><option value="high" data-i18n="commercial_manager.opt_pri_high">Alta estricta</option><option value="normal" data-i18n="commercial_manager.opt_pri_normal">Normal</option><option value="low" data-i18n="commercial_manager.opt_pri_low">Baja relleno</option></select></div>
+                <div><label data-i18n="commercial_manager.lbl_daily_limit">Limite diario</label><input id="asset-daily-limit" type="number" min="0" placeholder="0 = sin limite" data-i18n="[placeholder]commercial_manager.ph_limit"></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_air_notes">Como debe salir al aire</label><textarea id="asset-traffic-notes"></textarea></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_internal_notes">Notas internas</label><textarea id="asset-notes"></textarea></div>
             </div>
-            <div class="footer"><button class="danger" id="btn-disable-asset">Desactivar</button><button class="success" id="btn-save-asset">Guardar en SQLite</button></div>
+            <div class="footer"><button class="danger" id="btn-disable-asset" data-i18n="commercial_manager.btn_disable">Desactivar</button><button class="success" id="btn-save-asset" data-i18n="commercial_manager.btn_save_sqlite">Guardar en SQLite</button></div>
         </aside>
     </main>
 
     <main id="view-scheduler" class="view">
         <aside class="left">
-            <div class="panel-title">Libreria de recursos</div>
+            <div class="panel-title" data-i18n="commercial_manager.pan_resources">Libreria de recursos</div>
             <div class="stack">
                 <div id="expiring-card" class="smart-card">0 spots por expirar pronto</div>
                 <div id="orphans-card" class="smart-card" style="color:var(--bad);border-color:var(--bad);">0 spots sin metadata</div>
-                <div style="font-size:10px;color:#666;text-transform:uppercase;font-weight:800;">Spots listos para usar</div>
+                <div style="font-size:10px;color:#666;text-transform:uppercase;font-weight:800;" data-i18n="commercial_manager.hint_ready">Spots listos para usar</div>
                 <div id="inventory-list" style="display:flex;flex-direction:column;gap:8px;"></div>
             </div>
         </aside>
         <section class="center">
             <div class="toolbar" style="justify-content:space-between;">
                 <div class="mode-toggle">
-                    <span id="lbl-basic" class="mode-label active">Modo basico</span>
+                    <span id="lbl-basic" class="mode-label active" data-i18n="commercial_manager.lbl_mode_basic">Modo basico</span>
                     <label class="switch"><input id="mode-toggle" type="checkbox"><span class="slider"></span></label>
-                    <span id="lbl-advanced" class="mode-label">Modo avanzado</span>
+                    <span id="lbl-advanced" class="mode-label" data-i18n="commercial_manager.lbl_mode_adv">Modo avanzado</span>
                 </div>
-                <button class="success" id="btn-save-block">Guardar pauta</button>
+                <button class="success" id="btn-save-block" data-i18n="commercial_manager.btn_save_block">Guardar pauta</button>
             </div>
             <div id="sub-basic" class="subview active">
-                <div class="toolbar"><button id="btn-new-basic-block">Nuevo evento limpio</button><button id="btn-clear-basic" class="danger">Limpiar lista</button><span style="margin-left:auto;color:#888;font-size:12px;">Arrastra los spots aqui en el orden que desees</span></div>
+                <div class="toolbar"><button id="btn-new-basic-block" data-i18n="commercial_manager.btn_new_block">Nuevo evento limpio</button><button id="btn-clear-basic" class="danger" data-i18n="commercial_manager.btn_clear_list">Limpiar lista</button><span style="margin-left:auto;color:#888;font-size:12px;" data-i18n="commercial_manager.hint_drag_order">Arrastra los spots aqui en el orden que desees</span></div>
                 <div class="scroll">
                     <table>
-                        <thead><tr><th style="width:48px;">Ord</th><th style="width:130px;">Hora</th><th>Spot</th><th>Regla</th><th style="width:80px;">Accion</th></tr></thead>
+                        <thead><tr><th style="width:48px;" data-i18n="commercial_manager.th_ord">Ord</th><th style="width:130px;" data-i18n="commercial_manager.th_time">Hora</th><th data-i18n="commercial_manager.th_spot">Spot</th><th data-i18n="commercial_manager.th_rule">Regla</th><th style="width:80px;" data-i18n="commercial_manager.th_action">Accion</th></tr></thead>
                         <tbody id="basic-body"></tbody>
                     </table>
-                    <div id="basic-drop" class="drop-hint">Suelta un spot aqui para agregarlo a la lista manual.</div>
+                    <div id="basic-drop" class="drop-hint" data-i18n="commercial_manager.hint_drop_basic">Suelta un spot aqui para agregarlo a la lista manual.</div>
                 </div>
             </div>
             <div id="sub-advanced" class="subview">
-                <div class="toolbar"><select id="advanced-day" style="width:150px;"><option value="1">Lunes</option><option value="2">Martes</option><option value="3">Miercoles</option><option value="4">Jueves</option><option value="5">Viernes</option><option value="6">Sabado</option><option value="0">Domingo</option></select><button id="btn-generate-grid">Generar grilla SQLite</button></div>
-                <div class="grid-head"><div>Hora</div><div>Bloque :00</div><div>Bloque :15</div><div>Bloque :30</div><div>Bloque :45</div></div>
+                <div class="toolbar"><select id="advanced-day" style="width:150px;"><option value="1" data-i18n="commercial_manager.day_mon">Lunes</option><option value="2" data-i18n="commercial_manager.day_tue">Martes</option><option value="3" data-i18n="commercial_manager.day_wed">Miercoles</option><option value="4" data-i18n="commercial_manager.day_thu">Jueves</option><option value="5" data-i18n="commercial_manager.day_fri">Viernes</option><option value="6" data-i18n="commercial_manager.day_sat">Sabado</option><option value="0" data-i18n="commercial_manager.day_sun">Domingo</option></select><button id="btn-generate-grid" data-i18n="commercial_manager.btn_gen_grid">Generar grilla SQLite</button></div>
+                <div class="grid-head"><div data-i18n="commercial_manager.th_time">Hora</div><div data-i18n="commercial_manager.th_block_00">Bloque :00</div><div data-i18n="commercial_manager.th_block_15">Bloque :15</div><div data-i18n="commercial_manager.th_block_30">Bloque :30</div><div data-i18n="commercial_manager.th_block_45">Bloque :45</div></div>
                 <div id="advanced-grid" class="grid"></div>
             </div>
         </section>
         <aside class="right">
-            <div class="panel-title">Inspector / Configuracion</div>
+            <div class="panel-title" data-i18n="commercial_manager.pan_config">Inspector / Configuracion</div>
             <div id="editor-basic" class="form">
-                <div class="full"><label>Nombre de pauta</label><input id="block-name" type="text"></div>
-                <div><label>Hora exacta</label><input id="block-time" type="time" step="1"></div>
-                <div><label>Prioridad evento</label><select id="block-priority"><option value="low">Baja</option><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Critica</option></select></div>
-                <div class="full"><label>Comportamiento con musica</label><select id="block-execution"><option value="wait">Esperar cancion actual</option><option value="interrupt">Cortar con prioridad</option><option value="max-delay">Retardo maximo</option></select></div>
-                <div><label>Repeticion</label><select id="repeat-active"><option value="0">Sin repeticion</option><option value="1">Repetir</option></select></div>
-                <div><label>Cada</label><input id="repeat-interval" type="number" min="0"></div>
-                <div class="full"><label>Notas</label><textarea id="block-notes"></textarea></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_block_name">Nombre de pauta</label><input id="block-name" type="text"></div>
+                <div><label data-i18n="commercial_manager.lbl_exact_time">Hora exacta</label><input id="block-time" type="time" step="1"></div>
+                <div><label data-i18n="commercial_manager.lbl_ev_priority">Prioridad evento</label><select id="block-priority"><option value="low" data-i18n="commercial_manager.opt_pri_low">Baja</option><option value="normal" data-i18n="commercial_manager.opt_pri_normal">Normal</option><option value="high" data-i18n="commercial_manager.opt_pri_high">Alta</option><option value="critical" data-i18n="commercial_manager.opt_pri_crit">Critica</option></select></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_music_behav">Comportamiento con musica</label><select id="block-execution"><option value="wait" data-i18n="commercial_manager.opt_wait">Esperar cancion actual</option><option value="interrupt" data-i18n="commercial_manager.opt_interrupt">Cortar con prioridad</option><option value="max-delay" data-i18n="commercial_manager.opt_max_delay">Retardo maximo</option></select></div>
+                <div><label data-i18n="commercial_manager.lbl_repeat">Repeticion</label><select id="repeat-active"><option value="0" data-i18n="commercial_manager.opt_no_repeat">Sin repeticion</option><option value="1" data-i18n="commercial_manager.opt_repeat">Repetir</option></select></div>
+                <div><label data-i18n="commercial_manager.lbl_every">Cada</label><input id="repeat-interval" type="number" min="0"></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_notes">Notas</label><textarea id="block-notes"></textarea></div>
             </div>
             <div id="editor-advanced" class="form" style="display:none;">
-                <div class="full box" style="padding:10px;border-left:3px solid var(--warn);font-size:11px;color:#ccc;"><strong style="color:var(--warn);">Reglas automaticas:</strong> esta vista usara SQLite para repartir spots por vigencia, prioridad y separacion de competencia.</div>
-                <div class="full"><label>Frecuencia automatica</label><select id="asset-frequency"><option value="manual">Manual</option><option value="hourly">1 vez por hora</option><option value="daily_spread">Repartido en el dia</option><option value="morning">Solo manana</option><option value="afternoon">Solo tarde</option><option value="night">Solo noche</option></select></div>
-                <div class="full"><label>Separacion obligatoria</label><select id="asset-separation"><option value="category">Separar misma categoria</option><option value="client">Separar mismo cliente</option><option value="none">Permitir junto a competencia</option></select></div>
+                <div class="full box" style="padding:10px;border-left:3px solid var(--warn);font-size:11px;color:#ccc;"><strong style="color:var(--warn);" data-i18n="commercial_manager.adv_rules">Reglas automaticas:</strong> <span data-i18n="commercial_manager.adv_rules_desc">esta vista usara SQLite para repartir spots por vigencia, prioridad y separacion de competencia.</span></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_auto_freq">Frecuencia automatica</label><select id="asset-frequency"><option value="manual" data-i18n="commercial_manager.opt_manual">Manual</option><option value="hourly" data-i18n="commercial_manager.opt_hourly">1 vez por hora</option><option value="daily_spread" data-i18n="commercial_manager.opt_daily_spread">Repartido en el dia</option><option value="morning" data-i18n="commercial_manager.opt_morning">Solo manana</option><option value="afternoon" data-i18n="commercial_manager.opt_afternoon">Solo tarde</option><option value="night" data-i18n="commercial_manager.opt_night">Solo noche</option></select></div>
+                <div class="full"><label data-i18n="commercial_manager.lbl_separation">Separacion obligatoria</label><select id="asset-separation"><option value="category" data-i18n="commercial_manager.opt_sep_cat">Separar misma categoria</option><option value="client" data-i18n="commercial_manager.opt_sep_client">Separar mismo cliente</option><option value="none" data-i18n="commercial_manager.opt_sep_none">Permitir junto a competencia</option></select></div>
             </div>
         </aside>
     </main>
 
     <main id="view-continuity" class="view view-continuity">
         <aside class="left">
-            <div class="panel-title">Inventario SQLite</div>
+            <div class="panel-title" data-i18n="commercial_manager.pan_inventory">Inventario SQLite</div>
             <div class="stack" id="continuity-inventory"></div>
         </aside>
         <section class="center">
-            <div class="toolbar"><div id="continuity-day-tabs" style="display:flex;gap:5px;"></div><span id="selected-slot-label" style="margin-left:auto;color:#888;font-size:12px;">Selecciona un bloque</span></div>
-            <div class="grid-head"><div>Hora</div><div>Bloque :00</div><div>Bloque :15</div><div>Bloque :30</div><div>Bloque :45</div></div>
+            <div class="toolbar"><div id="continuity-day-tabs" style="display:flex;gap:5px;"></div><span id="selected-slot-label" style="margin-left:auto;color:#888;font-size:12px;" data-i18n="commercial_manager.lbl_select_block">Selecciona un bloque</span></div>
+            <div class="grid-head"><div data-i18n="commercial_manager.th_time">Hora</div><div data-i18n="commercial_manager.th_block_00">Bloque :00</div><div data-i18n="commercial_manager.th_block_15">Bloque :15</div><div data-i18n="commercial_manager.th_block_30">Bloque :30</div><div data-i18n="commercial_manager.th_block_45">Bloque :45</div></div>
             <div id="continuity-grid" class="grid"></div>
         </section>
         <aside class="right">
-            <div class="panel-title">Editor de tanda</div>
+            <div class="panel-title" data-i18n="commercial_manager.pan_editor">Editor de tanda</div>
             <div style="padding:12px;background:#111;border-bottom:1px solid var(--line);">
-                <div id="tanda-title" style="font-weight:800;margin-bottom:8px;">Sin bloque seleccionado</div>
+                <div id="tanda-title" style="font-weight:800;margin-bottom:8px;" data-i18n="commercial_manager.lbl_no_block">Sin bloque seleccionado</div>
                 <div class="progress"><div id="tanda-progress"></div></div>
-                <div id="tanda-progress-text" style="display:flex;justify-content:space-between;color:#888;font-size:10px;margin-top:5px;"><span>Ocupado: 00:00</span><span>Limite: 03:00</span></div>
+                <div id="tanda-progress-text" style="display:flex;justify-content:space-between;color:#888;font-size:10px;margin-top:5px;"><span data-i18n="commercial_manager.js_occupied">Ocupado:</span> <span data-i18n="commercial_manager.js_limit">Limite:</span></div>
             </div>
             <div id="tanda-items" class="block-list"></div>
-            <div class="footer"><button class="danger" id="btn-empty-tanda">Vaciar bloque</button><button class="success" id="btn-save-tanda">Guardar cambios</button></div>
+            <div class="footer"><button class="danger" id="btn-empty-tanda" data-i18n="commercial_manager.btn_empty_tanda">Vaciar bloque</button><button class="success" id="btn-save-tanda" data-i18n="commercial_manager.btn_save_tanda">Guardar cambios</button></div>
         </aside>
         <div class="floating">
-            <div class="float-head"><span>Monitor de pauta</span><span style="color:var(--bad);">Al aire</span></div>
-            <div class="float-body"><div style="color:var(--ok);font-size:10px;text-transform:uppercase;" id="monitor-type">Sin reproduccion</div><div id="monitor-title" style="font-size:15px;font-weight:800;">Esperando pauta</div><div class="progress"><div style="width:0%;background:var(--accent);"></div></div></div>
-            <div class="float-foot"><span id="monitor-next">Siguiente: --</span><span id="monitor-end">Fin tanda: --</span></div>
+            <div class="float-head"><span data-i18n="commercial_manager.pan_monitor">Monitor de pauta</span><span style="color:var(--bad);" data-i18n="commercial_manager.lbl_on_air">Al aire</span></div>
+            <div class="float-body"><div style="color:var(--ok);font-size:10px;text-transform:uppercase;" id="monitor-type" data-i18n="commercial_manager.lbl_no_play">Sin reproduccion</div><div id="monitor-title" style="font-size:15px;font-weight:800;" data-i18n="commercial_manager.lbl_wait_tanda">Esperando pauta</div><div class="progress"><div style="width:0%;background:var(--accent);"></div></div></div>
+            <div class="float-foot"><span id="monitor-next" data-i18n="commercial_manager.lbl_next">Siguiente: --</span><span id="monitor-end" data-i18n="commercial_manager.lbl_end_tanda">Fin tanda: --</span></div>
         </div>
     </main>
 
-    <footer style="height:28px;background:var(--header);border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 10px;color:#888;font-size:11px;"><span id="cm-status">Listo</span><span id="cm-count">0 elementos</span></footer>
+    <footer style="height:28px;background:var(--header);border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 10px;color:#888;font-size:11px;"><span id="cm-status" data-i18n="commercial_manager.lbl_ready">Listo</span><span id="cm-count" data-i18n="commercial_manager.lbl_count_0">0 elementos</span></footer>
 </div>
 <script src="commercial_manager.js"></script>
 </body>

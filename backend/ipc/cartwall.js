@@ -3,6 +3,7 @@ module.exports = function(context) {
         ipcMain, fs, dialog, cwConfigPath, BrowserWindow,
         saveUiPrefs, syncCartwallMenuState
     } = context;
+    const i18n = require('../i18n_main');
 
     function createDefaultButton(id) {
         return {
@@ -248,9 +249,9 @@ module.exports = function(context) {
     ipcMain.handle('preguntar-eliminar-perfil', async (event, nombre) => {
         const res = await dialog.showMessageBox(context.cartwallWindow || context.mainWindow, {
             type: 'warning',
-            buttons: ['Eliminar', 'Exportar (.bdeplf) y Eliminar', 'Cancelar'],
-            title: 'Eliminar Perfil',
-            message: `¿Qué deseas hacer con el perfil "${nombre}"?`,
+            buttons: [i18n.t('dialogs.buttons.delete'), i18n.t('dialogs.buttons.export_delete'), i18n.t('dialogs.buttons.cancel')],
+            title: i18n.t('dialogs.delete_profile.title'),
+            message: i18n.t('dialogs.delete_profile.message', { nombre }),
             cancelId: 2
         });
         return res.response; 

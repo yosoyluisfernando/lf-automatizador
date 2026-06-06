@@ -1,5 +1,9 @@
 const { ipcRenderer } = require('electron');
 const { redactSensitiveText } = require('../backend/utils/log_security');
+const { getConfigDir } = require('../backend/utils/app_paths');
+const fs = require('fs');
+const path = require('path');
+const i18n = require('./i18n');
 
 // Versión real (desde package.json) en la cabecera.
 try {
@@ -133,7 +137,7 @@ function formatKbpsFixed(value) {
 }
 function serverLabel(s) {
     const typeName = s.type === 'icecast' ? 'Icecast' : s.type === 'shoutcast2' ? 'SHOUTcast2' : 'SHOUTcast';
-    const host = s.ip ? `${s.ip}${s.port ? ':' + s.port : ''}` : 'sin host';
+    const host = s.ip ? `${s.ip}${s.port ? ':' + s.port : ''}` : i18n.t('encoder.without_host');
     return s.name ? s.name : `${typeName} · ${host}`;
 }
 function getServer(id) { return servers.find(s => s.id === String(id)); }
@@ -163,7 +167,7 @@ function encLog(msg, type = 'info', serverId = null) {
 // ── Medidor de entrada (compartido) ──────────────────────────────────────────
 function resetInputMeter() {
     lastInputMeterAt = 0;
-    if (inputMeterValuesEl) inputMeterValuesEl.textContent = 'Pico: -- dB | RMS: -- dB';
+    if (inputMeterValuesEl) inputMeterValuesEl.textContent = i18n.t('encoder.peak_rms', {peak: '-- dB', rms: '-- dB'});
     if (inputMeterCoverEl) inputMeterCoverEl.style.width = '100%';
     if (inputMeterEl) inputMeterEl.classList.remove('warn');
 }
@@ -178,8 +182,8 @@ function updateInputMeter(report = {}) {
     const silent = report.hasSignal === false && silentMs > 4000;
     if (inputMeterCoverEl) inputMeterCoverEl.style.width = `${(100 - percent).toFixed(1)}%`;
     if (inputMeterValuesEl) {
-        const silentText = silent ? ` | silencio ${Math.round(silentMs / 1000)}s` : '';
-        inputMeterValuesEl.textContent = `Pico: ${formatDb(peakDb)} | RMS: ${formatDb(rmsDb)} | ${source}${silentText}`;
+        const silentText = silent ? ` | ` + i18n.t('encoder.silent', {s: Math.round(silentMs / 1000)}) : '';
+        inputMeterValuesEl.textContent = i18n.t('encoder.peak_rms', {peak: formatDb(peakDb), rms: formatDb(rmsDb)}) + ` | ${source}${silentText}`;
     }
     if (inputMeterEl) inputMeterEl.classList.toggle('warn', silent);
 }
@@ -233,9 +237,9 @@ function updateInputMeterFromRustStatus(status = {}) {
 
 // ── Render de tarjetas de servidor ───────────────────────────────────────────
 function statusText(status) {
-    if (status === 'live') return 'En vivo';
-    if (status === 'connecting') return 'Conectando';
-    return 'Apagado';
+    if (status === 'live') return i18n.t('encoder.status_live');
+    if (status === 'connecting') return i18n.t('encoder.status_connecting');
+    return i18n.t('encoder.status_off');
 }
 function statusClass(status) {
     if (status === 'live') return 'status-badge status-on';
@@ -250,51 +254,51 @@ function buildServerCard(s) {
 
     const isIce = s.type === 'icecast';
     const isSc2 = s.type === 'shoutcast2';
-    const mountLabel = isSc2 ? 'Stream ID (SID):' : 'Punto de Montaje:';
-    const mountPh = isSc2 ? 'ej. 1' : 'ej. /stream';
+    const mountLabel = isSc2 ? i18n.t('encoder.srv_sid') : i18n.t('encoder.srv_mount');
+    const mountPh = isSc2 ? i18n.t('encoder.srv_sid_ph') : i18n.t('encoder.srv_mount_ph');
 
     card.innerHTML = `
         <div class="enc-server-head">
             <span class="enc-server-title"></span>
             <span class="enc-srv-badge ${statusClass(s.status)}">${statusText(s.status)}</span>
             <div class="enc-srv-actions">
-                <button class="enc-mini-btn srv-toggle">Conectar</button>
-                <button class="enc-mini-btn danger srv-remove" title="Quitar servidor">&#10005;</button>
+                <button class="enc-mini-btn srv-toggle">${i18n.t('encoder.btn_connect')}</button>
+                <button class="enc-mini-btn danger srv-remove" title="${i18n.t('encoder.btn_remove')}">&#10005;</button>
             </div>
         </div>
         <div class="enc-server-body">
-            <div class="row"><label>Tipo Servidor:</label>
+            <div class="row"><label>${i18n.t('encoder.srv_type')}</label>
                 <select class="enc-input dark-select fld-type">
-                    <option value="icecast">Icecast 2 (Zeno.fm, HTTP PUT)</option>
-                    <option value="shoutcast">SHOUTcast v1/clásico (L2MR — ICY legacy)</option>
-                    <option value="shoutcast2">SHOUTcast 2.x nativo (Ultravox 2.1)</option>
+                    <option value="icecast">${i18n.t('encoder.srv_type_ice')}</option>
+                    <option value="shoutcast">${i18n.t('encoder.srv_type_sc1')}</option>
+                    <option value="shoutcast2">${i18n.t('encoder.srv_type_sc2')}</option>
                 </select>
             </div>
-            <div class="row"><label>IP / Host:</label><input type="text" class="enc-input fld-ip" placeholder="ej. cast.zenomedia.com"></div>
-            <div class="row"><label>Puerto de fuente:</label><input type="text" class="enc-input fld-port" placeholder="ej. 8000" title="Usa el puerto exacto entregado por tu proveedor. En ICY legacy suele ser el puerto base DNAS + 1."></div>
-            <div class="row row-admin-port" style="${isIce ? 'display:none;' : ''}"><label>Puerto administrativo:</label><input type="text" class="enc-input fld-admin-port" placeholder="opcional, ej. 8000" title="Opcional. Usado solo para actualizar metadatos. En SHOUTcast clasico puede diferir del puerto de fuente."></div>
-            <div class="row row-user" style="${isIce || isSc2 ? '' : 'display:none;'}"><label>Usuario / UID:</label><input type="text" class="enc-input fld-user" placeholder="source"></div>
-            <div class="row"><label>Contraseña:</label><input type="password" class="enc-input fld-pass" placeholder="Mountpass o Password"></div>
+            <div class="row"><label>${i18n.t('encoder.srv_ip')}</label><input type="text" class="enc-input fld-ip" placeholder="${i18n.t('encoder.srv_ip_ph')}"></div>
+            <div class="row"><label>${i18n.t('encoder.srv_port')}</label><input type="text" class="enc-input fld-port" placeholder="${i18n.t('encoder.srv_port_ph')}" title="${i18n.t('encoder.srv_port_tt')}"></div>
+            <div class="row row-admin-port" style="${isIce ? 'display:none;' : ''}"><label>${i18n.t('encoder.srv_admin_port')}</label><input type="text" class="enc-input fld-admin-port" placeholder="${i18n.t('encoder.srv_admin_port_ph')}" title="${i18n.t('encoder.srv_admin_port_tt')}"></div>
+            <div class="row row-user" style="${isIce || isSc2 ? '' : 'display:none;'}"><label>${i18n.t('encoder.srv_user')}</label><input type="text" class="enc-input fld-user" placeholder="${i18n.t('encoder.srv_user_ph')}"></div>
+            <div class="row"><label>${i18n.t('encoder.srv_pass')}</label><input type="password" class="enc-input fld-pass" placeholder="${i18n.t('encoder.srv_pass_ph')}"></div>
             <div class="row row-mount" style="${isIce || isSc2 ? '' : 'display:none;'}"><label class="lbl-mount">${mountLabel}</label><input type="text" class="enc-input fld-mount" placeholder="${mountPh}"></div>
-            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>Compatibilidad ICY v1:</label><input type="checkbox" class="fld-legacy" title="Activalo solo si el proveedor DNAS2 exige fuente ICY v1. El SID se enviara como sufijo password:#SID. Sin esto se usa Ultravox 2.1 nativo."></div>
-            <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Nombre Estación:</label><input type="text" class="enc-input fld-icyname" placeholder="ej. Mi Radio" title="Nombre que verán los oyentes (requerido por SHOUTcast)"></div>
-            <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>Género:</label><input type="text" class="enc-input fld-genre" placeholder="ej. Variado" title="Género musical (requerido por SHOUTcast DNAS 2.x)"></div>
-            <div class="row"><label>Formato (Codec):</label>
+            <div class="row row-legacy" style="${isSc2 ? '' : 'display:none;'}"><label>${i18n.t('encoder.srv_legacy')}</label><input type="checkbox" class="fld-legacy" title="${i18n.t('encoder.srv_legacy_tt')}"></div>
+            <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>${i18n.t('encoder.srv_name')}</label><input type="text" class="enc-input fld-icyname" placeholder="${i18n.t('encoder.srv_name_ph')}" title="${i18n.t('encoder.srv_name_tt')}"></div>
+            <div class="row row-icy" style="${isIce ? 'display:none;' : ''}"><label>${i18n.t('encoder.srv_genre')}</label><input type="text" class="enc-input fld-genre" placeholder="${i18n.t('encoder.srv_genre_ph')}" title="${i18n.t('encoder.srv_genre_tt')}"></div>
+            <div class="row"><label>${i18n.t('encoder.srv_codec')}</label>
                 <select class="enc-input dark-select fld-codec">
-                    <option value="mp3">MP3 (Universal/Clásico)</option>
-                    <option value="aac">AAC-LC (Icecast / ZenoRadio)</option>
-                    <option value="aac_he">AAC+ / HE-AAC (FFmpeg externo autorizado)</option>
+                    <option value="mp3">${i18n.t('encoder.srv_codec_mp3')}</option>
+                    <option value="aac">${i18n.t('encoder.srv_codec_aac')}</option>
+                    <option value="aac_he">${i18n.t('encoder.srv_codec_aac_he')}</option>
                 </select>
             </div>
-            <div class="row"><label>Calidad (Bitrate):</label>
+            <div class="row"><label>${i18n.t('encoder.srv_bitrate')}</label>
                 <select class="enc-input dark-select fld-bitrate">
-                    <option value="64">64 kbps (Bajo consumo)</option>
-                    <option value="128">128 kbps (Recomendado)</option>
-                    <option value="192">192 kbps (Alta Calidad)</option>
-                    <option value="320">320 kbps (Estudio/HD)</option>
+                    <option value="64">${i18n.t('encoder.srv_bitrate_64')}</option>
+                    <option value="128">${i18n.t('encoder.srv_bitrate_128')}</option>
+                    <option value="192">${i18n.t('encoder.srv_bitrate_192')}</option>
+                    <option value="320">${i18n.t('encoder.srv_bitrate_320')}</option>
                 </select>
             </div>
-            <div class="row"><label>Auto-conectar al iniciar:</label><input type="checkbox" class="fld-autoconnect" title="Conecta este servidor automáticamente cuando la reproducción inicie de forma automática al abrir el programa (requiere activar el auto-play y el arranque del encoder en Ajustes → Sistema e Interfaz)."></div>
+            <div class="row"><label>${i18n.t('encoder.srv_autoconnect')}</label><input type="checkbox" class="fld-autoconnect" title="${i18n.t('encoder.srv_autoconnect_tt')}"></div>
         </div>`;
 
     // Rellenar valores
@@ -333,11 +337,11 @@ function wireServerCard(card, s) {
         rowsIcy.forEach(r => { r.style.display = isIce ? 'none' : 'flex'; });
         rowAdminPort.style.display = isIce ? 'none' : 'flex';
         if (isIce) {
-            rowMount.style.display = 'flex'; lblMount.textContent = 'Punto de Montaje:'; mountInput.placeholder = 'ej. /stream';
+            rowMount.style.display = 'flex'; lblMount.textContent = i18n.t('encoder.srv_mount'); mountInput.placeholder = i18n.t('encoder.srv_mount_ph');
             rowUser.style.display = 'flex';
             rowLegacy.style.display = 'none';
         } else if (t === 'shoutcast2') {
-            rowMount.style.display = 'flex'; lblMount.textContent = 'Stream ID (SID):'; mountInput.placeholder = 'ej. 1';
+            rowMount.style.display = 'flex'; lblMount.textContent = i18n.t('encoder.srv_sid'); mountInput.placeholder = i18n.t('encoder.srv_sid_ph');
             rowUser.style.display = 'flex';
             rowLegacy.style.display = 'flex';
         } else {
@@ -395,7 +399,7 @@ function refreshTitles() {
 function renderStatusList() {
     statusListEl.innerHTML = '';
     if (!servers.length) {
-        statusListEl.innerHTML = '<div style="color:#555;font-size:12px;padding:6px 2px;">No hay servidores configurados.</div>';
+        statusListEl.innerHTML = `<div style="color:#555;font-size:12px;padding:6px 2px;">${i18n.t('encoder.no_servers_configured')}</div>`;
         return;
     }
     servers.forEach(s => {
@@ -407,7 +411,7 @@ function renderStatusList() {
             <span class="srv-name"></span>
             <span class="srv-kbps"> -- kbps</span>
             <span class="srv-uptime">00:00:00</span>
-            <button class="enc-mini-btn srv-toggle2">Conectar</button>`;
+            <button class="enc-mini-btn srv-toggle2">${i18n.t('encoder.btn_connect')}</button>`;
         row.querySelector('.srv-name').textContent = serverLabel(s);
         row.querySelector('.srv-toggle2').addEventListener('click', () => {
             if (s.status === 'disconnected') connectServer(s.id); else disconnectServer(s.id);
@@ -418,7 +422,7 @@ function renderStatusList() {
 }
 
 function updateServerRowButtons(s) {
-    const label = s.status === 'disconnected' ? 'Conectar' : (s.status === 'connecting' ? 'Cancelar' : 'Desconectar');
+    const label = s.status === 'disconnected' ? i18n.t('encoder.btn_connect') : (s.status === 'connecting' ? i18n.t('encoder.btn_cancel') : i18n.t('encoder.btn_disconnect'));
     const cls = s.status === 'disconnected' ? 'enc-mini-btn' : 'enc-mini-btn off';
     // tarjeta config
     const card = serversContainer.querySelector(`.enc-server-card[data-server-id="${s.id}"]`);
@@ -452,14 +456,14 @@ function updateAggregate() {
     let live = 0, connecting = 0;
     servers.forEach(s => { if (s.status === 'live') live++; else if (s.status === 'connecting') connecting++; });
     if (aggBadgeEl) {
-        if (live > 0) { aggBadgeEl.className = 'status-badge status-on'; aggBadgeEl.textContent = 'En vivo'; }
-        else if (connecting > 0) { aggBadgeEl.className = 'status-badge status-connecting'; aggBadgeEl.textContent = 'Conectando'; }
-        else { aggBadgeEl.className = 'status-badge status-off'; aggBadgeEl.textContent = 'Desconectado'; }
+        if (live > 0) { aggBadgeEl.className = 'status-badge status-on'; aggBadgeEl.textContent = i18n.t('encoder.status_live'); }
+        else if (connecting > 0) { aggBadgeEl.className = 'status-badge status-connecting'; aggBadgeEl.textContent = i18n.t('encoder.status_connecting'); }
+        else { aggBadgeEl.className = 'status-badge status-off'; aggBadgeEl.textContent = i18n.t('encoder.status_disconnected'); }
     }
     if (summaryEl) {
         summaryEl.textContent = live > 0
-            ? `${live} transmisi${live === 1 ? 'ón' : 'ones'} en vivo${connecting ? `, ${connecting} conectando` : ''}`
-            : (connecting > 0 ? `${connecting} conectando…` : 'Sin transmisiones activas');
+            ? i18n.t('encoder.summary_live', { live, connecting }).replace(', 0 conectando', '')
+            : (connecting > 0 ? i18n.t('encoder.summary_connecting_only', { connecting }) : i18n.t('encoder.no_active_transmissions'));
     }
 }
 
@@ -486,13 +490,13 @@ function buildServerConfig(s) {
 function validateServer(s) {
     const portNum = Number(s.port);
     const adminPortNum = Number(s.adminPort);
-    if (s.adminPort && (!Number.isInteger(adminPortNum) || adminPortNum < 1 || adminPortNum > 65535)) return 'Puerto administrativo invalido.';
-    if (!s.ip || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return 'IP/host o puerto inválido.';
-    if (!s.pass) return 'Falta la contraseña del servidor.';
-    if (s.type === 'icecast' && !s.mount) return 'Falta el punto de montaje para Icecast.';
-    if (s.type === 'shoutcast2' && !/^[1-9]\d*$/.test(String(s.mount || '').trim())) return 'El Stream ID (SID) debe ser un entero positivo.';
-    if (!['mp3', 'aac', 'aac_he'].includes(s.codec)) return 'Selecciona un codec valido.';
-    if (globalCfg.source === 'mic' && !globalCfg.mic) return 'Selecciona una entrada de audio externa.';
+    if (s.adminPort && (!Number.isInteger(adminPortNum) || adminPortNum < 1 || adminPortNum > 65535)) return i18n.t('encoder.err_admin_port');
+    if (!s.ip || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return i18n.t('encoder.err_ip_port');
+    if (!s.pass) return i18n.t('encoder.err_pass');
+    if (s.type === 'icecast' && !s.mount) return i18n.t('encoder.err_mount');
+    if (s.type === 'shoutcast2' && !/^[1-9]\d*$/.test(String(s.mount || '').trim())) return i18n.t('encoder.err_sid');
+    if (!['mp3', 'aac', 'aac_he'].includes(s.codec)) return i18n.t('encoder.err_codec');
+    if (globalCfg.source === 'mic' && !globalCfg.mic) return i18n.t('encoder.err_no_mic');
     return null;
 }
 
@@ -500,7 +504,7 @@ function connectServer(id, opts = {}) {
     const s = getServer(id);
     if (!s) return;
     if (globalCfg.source === 'mic' && hasBusyServers(s.id)) {
-        encLog('La entrada externa solo admite un servidor a la vez. Desconecta el servidor actual antes de iniciar otro.', 'error', s.id);
+        encLog(i18n.t('encoder.err_mic_busy'), 'error', s.id);
         return;
     }
     const err = validateServer(s);
@@ -512,7 +516,7 @@ function connectServer(id, opts = {}) {
     savePrefs();
     ipcRenderer.send('start-encoder-server', buildServerConfig(s));
     setServerStatus(s.id, 'connecting');
-    encLog(opts.isRetry ? 'Reintentando conexión…' : 'Iniciando transmisión sin interrumpir el audio principal…', 'warn', s.id);
+    encLog(opts.isRetry ? i18n.t('encoder.log_retry') : i18n.t('encoder.log_start'), 'warn', s.id);
 }
 
 function disconnectServer(id) {
@@ -522,17 +526,17 @@ function disconnectServer(id) {
     s.autoReconnect = false;
     clearServerReconnect(s);
     ipcRenderer.send('stop-encoder-server', { serverId: s.id });
-    encLog('Deteniendo transmisión…', 'warn', s.id);
+    encLog(i18n.t('encoder.log_stop'), 'warn', s.id);
 }
 
 function connectAll() {
-    if (!servers.length) { encLog('No hay servidores configurados.', 'warn'); return; }
+    if (!servers.length) { encLog(i18n.t('encoder.no_servers_configured'), 'warn'); return; }
     servers.forEach(s => { if (s.status === 'disconnected') connectServer(s.id); });
 }
 function disconnectAll() {
     servers.forEach(s => { s.intentionalStop = true; s.autoReconnect = false; clearServerReconnect(s); });
     ipcRenderer.send('stop-encoder');
-    encLog('Deteniendo todas las transmisiones…', 'warn');
+    encLog(i18n.t('encoder.log_stop_all'), 'warn');
 }
 
 // ── Reconexión por servidor ──────────────────────────────────────────────────
@@ -541,7 +545,7 @@ function scheduleServerReconnect(s) {
     if (!s.autoReconnect || s.intentionalStop || s.reconnectTimer) return;
     s.reconnectAttempts++;
     const delaySec = Math.min(60, s.reconnectAttempts <= 1 ? 5 : 5 * Math.pow(2, Math.min(4, s.reconnectAttempts - 1)));
-    encLog(`Reconectando en ${delaySec}s… intento ${s.reconnectAttempts}.`, 'error', s.id);
+    encLog(i18n.t('encoder.log_reconnect', { s: delaySec, n: s.reconnectAttempts }), 'error', s.id);
     s.reconnectTimer = setTimeout(() => {
         s.reconnectTimer = null;
         if (s.autoReconnect && !s.intentionalStop) connectServer(s.id, { isRetry: true });
@@ -558,7 +562,7 @@ function setServerStatus(id, status) {
     updateAggregate();
 
     if (status === 'live') {
-        if (prev !== 'live') encLog('Conectado correctamente.', 'success', s.id);
+        if (prev !== 'live') encLog(i18n.t('encoder.log_connected'), 'success', s.id);
         s.autoReconnect = true; s.intentionalStop = false; s.reconnectAttempts = 0;
         clearServerReconnect(s);
         if (!s.timerInterval) {
@@ -628,9 +632,9 @@ async function loadMicrophones() {
         });
         if (globalCfg.mic && Array.from(micSel.options).some(o => o.value === globalCfg.mic)) micSel.value = globalCfg.mic;
         micDevicesLoaded = true;
-        encLog('Micrófonos cargados correctamente.', 'success');
+        encLog(i18n.t('encoder.log_mic_ok'), 'success');
     } catch (e) {
-        encLog('Error al acceder a micrófonos.', 'error');
+        encLog(i18n.t('encoder.log_mic_err'), 'error');
     }
 }
 
@@ -654,7 +658,7 @@ tapPointSel.value = globalCfg.tapPoint;
 sourceSel.addEventListener('change', async () => {
     if (servers.some(s => s.status !== 'disconnected')) {
         sourceSel.value = globalCfg.source;
-        encLog('Desconecta las transmisiones antes de cambiar la fuente de audio.', 'warn');
+        encLog(i18n.t('encoder.warn_source_change'), 'warn');
         return;
     }
     globalCfg.source = sourceSel.value === 'mic' ? 'mic' : 'master';
@@ -668,7 +672,7 @@ if (globalCfg.source === 'mic') loadMicrophones();
 micSel.addEventListener('change', () => {
     if (servers.some(s => s.status !== 'disconnected')) {
         micSel.value = globalCfg.mic;
-        encLog('Desconecta la transmision antes de cambiar la entrada externa.', 'warn');
+        encLog(i18n.t('encoder.warn_mic_change'), 'warn');
         return;
     }
     globalCfg.mic = micSel.value;
@@ -731,7 +735,24 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-renderServers();
-resetInputMeter();
-encLog('Encoder listo.', 'info');
-if (prefsLoadWarning) encLog(`Aviso de credenciales: ${prefsLoadWarning}`, 'warn');
+const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
+const generalPrefsPath = path.join(configDir, 'general_settings.json');
+let sysLang = 'es';
+try {
+    if (fs.existsSync(generalPrefsPath)) {
+        const parsed = JSON.parse(fs.readFileSync(generalPrefsPath, 'utf-8'));
+        if (parsed.language) sysLang = parsed.language;
+    }
+} catch(e) { console.warn('Error reading lang:', e); }
+
+try {
+    i18n.init(sysLang);
+    i18n.applyToDOM();
+    renderServers();
+    resetInputMeter();
+    encLog(i18n.t('encoder.log_ready'), 'info');
+    if (prefsLoadWarning) encLog(i18n.t('encoder.warn_credentials') + `: ${prefsLoadWarning}`, 'warn');
+} catch (err) {
+    console.error(err);
+    alert("CRITICAL ERROR: " + err.message);
+}

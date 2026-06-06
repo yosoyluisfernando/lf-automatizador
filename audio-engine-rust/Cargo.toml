@@ -5,7 +5,31 @@ edition = "2021"
 
 [dependencies]
 cpal = "0.17.3"
-rodio = "0.22.2"
+# Decodificadores adicionales de Symphonia, todos código abierto y libres de
+# regalías (patentes vencidas o licencias permisivas), por eso se pueden
+# compilar y distribuir sin problema:
+#   symphonia-alac  → ALAC / Apple Lossless (Apache-2.0), contenedor .m4a/.mp4.
+#   symphonia-aiff  → AIFF / AIFF-C (PCM, estándar Apple, sin patentes).
+#   symphonia-caf   → contenedor Core Audio Format (.caf) de Apple.
+#   symphonia-adpcm → ADPCM (IMA/Microsoft) dentro de WAV/AIFF.
+#   symphonia-mp1   → MPEG-1/2 Audio Layer I.
+#   symphonia-mp2   → MPEG-1/2 Audio Layer II (usado en broadcast/DAB).
+# Los defaults de rodio (flac, mp3, mp4=isomp4+aac, vorbis, wav) se conservan.
+#
+# NO incluidos por imposibilidad técnica, NO por decisión de licencia:
+#   OPUS → Symphonia aún no trae decodificador; requeriría libopus (C) + código
+#          propio de demux/decode. Royalty-free, pero no compilable aquí sin
+#          toolchain C. Pendiente para una fase con FFmpeg o binding a libopus.
+#   WMA  → no existe en Symphonia y es propietario de Microsoft (sin licencia).
+#   DSD  → no existe decodificador en Symphonia.
+rodio = { version = "0.22.2", features = [
+    "symphonia-alac",
+    "symphonia-aiff",
+    "symphonia-caf",
+    "symphonia-adpcm",
+    "symphonia-mp1",
+    "symphonia-mp2",
+] }
 # libc se usa para leer la hora local (libc::time + libc::localtime) sin
 # arrastrar chrono. Cross-platform Windows/Linux. Llamadas hechas solo desde
 # el thread de despacho (libc::localtime no es thread-safe pero no compite).

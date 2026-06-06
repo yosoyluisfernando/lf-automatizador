@@ -18,7 +18,7 @@ function mergeCsvList(currentValue, nextValue) {
 function cleanMetaString(s) {
     if (!s) return '';
     return String(s).toLowerCase()
-        .replace(/\.(mp3|wav|flac|ogg|m4a|aac)$/i, '')
+        .replace(/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i, '')
         .replace(/\[[^\]]*\]|\([^\)]*\)|\{[^\}]*\}/g, ' ')
         .replace(/feat\.?|ft\.?|official|video|lyrics|letra|audio|remix|mix|version|radio|live|hd|hq|explicit/gi, ' ')
         .replace(/[_\-]+/g, ' ')

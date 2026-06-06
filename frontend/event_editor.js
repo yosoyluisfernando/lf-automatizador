@@ -1,5 +1,30 @@
 const { ipcRenderer } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { getConfigDir } = require('../backend/utils/app_paths');
+const i18n = require('./i18n');
+
+const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
+
+function loadLanguage() {
+    let lang = 'es';
+    try {
+        const prefsPath = path.join(configDir, 'general_settings.json');
+        if (fs.existsSync(prefsPath)) {
+            const p = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+            lang = p.language || 'es';
+        }
+    } catch (e) {}
+    i18n.init(lang);
+    i18n.applyToDOM();
+}
+
+ipcRenderer.on('settings-updated', () => {
+    loadLanguage();
+    // Update document title if needed
+    let editingEventId = null; // or retrieve from URL params if available globally
+    document.title = i18n.t('event_editor.title') || "Configurar Evento";
+});
 
 let currentEventId = null;
 let commercialBlocks = [];
@@ -17,7 +42,7 @@ async function loadCommercialBlocksIntoSelect(selectedId = '') {
     if (!Array.isArray(commercialBlocks) || commercialBlocks.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
-        opt.innerText = 'No hay bloques comerciales';
+        opt.innerText = i18n.t('event_editor.no_com_blocks') || 'No hay bloques comerciales';
         sel.appendChild(opt);
         return;
     }
@@ -80,8 +105,8 @@ function syncStreamActionLock() {
     clearRadio.disabled = shouldLock;
     clearLabel.style.opacity = shouldLock ? '0.4' : '';
     clearLabel.style.cursor  = shouldLock ? 'not-allowed' : '';
-    clearLabel.title = isStream   ? 'No disponible para emisoras de radio (riesgo de silencio)' :
-                       isLocution ? 'No disponible para locuciones (la playlist principal no debe borrarse)' : '';
+    clearLabel.title = isStream   ? (i18n.t('event_editor.title_stream_lock') || 'No disponible para emisoras de radio (riesgo de silencio)') :
+                       isLocution ? (i18n.t('event_editor.title_loc_lock') || 'No disponible para locuciones (la playlist principal no debe borrarse)') : '';
 
     // Si estaba seleccionado y ahora lo bloqueamos, cambiar a 'append-end'
     if (shouldLock && clearRadio.checked) {
@@ -157,8 +182,8 @@ function syncStreamDurationPreview() {
     const preview = document.getElementById('ev-stream-dur-preview');
     if (preview) {
         preview.textContent = total > 0
-            ? `(${total} seg.)`
-            : '⚠️ Debe ser mayor a 0';
+            ? (i18n.t('event_editor.preview_secs', {0: total}) || `(${total} seg.)`)
+            : (i18n.t('event_editor.err_greater_zero') || '⚠️ Debe ser mayor a 0');
         preview.style.color = total > 0 ? '#888' : '#e74c3c';
     }
 }
@@ -191,7 +216,7 @@ async function loadGroupsIntoSelect() {
         } else {
             const opt = document.createElement('option');
             opt.value = 'g_general';
-            opt.innerText = 'General';
+            opt.innerText = i18n.t('event_groups.dyn_general') || 'General';
             sel.appendChild(opt);
         }
     } catch(e){
@@ -203,9 +228,12 @@ async function loadGroupsIntoSelect() {
         pendingGroupSelection = '';
     }
 }
-// Cargar al iniciar
-loadGroupsIntoSelect();
-loadCommercialBlocksIntoSelect();
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadLanguage();
+    loadGroupsIntoSelect();
+    loadCommercialBlocksIntoSelect();
+});
 
 // Escuchar actualizaciones en tiempo real si el usuario cambia los grupos
 ipcRenderer.on('refresh-event-groups', loadGroupsIntoSelect);
@@ -242,7 +270,7 @@ const hoursContainer = document.getElementById('other-hours-container');
 for (let i = 0; i <= 23; i++) {
     const lbl = document.createElement('label');
     lbl.style.fontSize = '12px'; lbl.style.display = 'flex'; lbl.style.alignItems = 'center'; lbl.style.gap = '4px';
-    lbl.innerHTML = `<input type="checkbox" class="chk-hour" value="${i}"> ${i.toString().padStart(2, '0')} hrs`;
+    lbl.innerHTML = `<input type="checkbox" class="chk-hour" value="${i}"> ${i.toString().padStart(2, '0')} <span data-i18n="event_editor.hrs">hrs</span>`;
     hoursContainer.appendChild(lbl);
 }
 
@@ -273,7 +301,7 @@ function syncPrimaryHour() {
             cb.checked = true;
             cb.disabled = true; 
             cb.parentElement.style.opacity = '0.5'; 
-            cb.parentElement.title = 'Hora principal (obligatoria)';
+            cb.parentElement.title = i18n.t('event_editor.title_primary_hour') || 'Hora principal (obligatoria)';
         } else {
             if (cbHour === lastPrimaryHour) {
                 cb.checked = false; 
@@ -415,7 +443,7 @@ document.getElementById('btn-browse').addEventListener('click', async (e) => {
             let baseName = require('path').basename(filePath);
             baseName = baseName.replace(/\.[^/.]+$/, ""); 
             if (sourceType === 'folder') {
-                nameField.value = `[Carpeta] ${baseName}`;
+                nameField.value = `${i18n.t('event_editor.prefix_folder') || '[Carpeta]'} ${baseName}`;
             } else {
                 nameField.value = baseName;
             }
@@ -432,7 +460,7 @@ document.querySelectorAll('input[name="ev-source-type"]').forEach(radio => {
             const sel = document.getElementById('ev-commercial-block');
             pathInput.value = sel?.value || '';
             const block = commercialBlocks.find(item => item.id === pathInput.value);
-            if (block && !document.getElementById('ev-name').value.trim()) document.getElementById('ev-name').value = `[Comerciales] ${block.name}`;
+            if (block && !document.getElementById('ev-name').value.trim()) document.getElementById('ev-name').value = `${i18n.t('event_editor.prefix_com') || '[Comerciales]'} ${block.name}`;
         } else if (sourceType === 'stream_url') {
             if (pathInput) pathInput.value = '';
             syncSourceTypeUi();
@@ -450,11 +478,11 @@ document.getElementById('btn-stream-verify')?.addEventListener('click', async ()
     const btn       = document.getElementById('btn-stream-verify');
     const url = urlInput?.value?.trim() || '';
     if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-        if (resultDiv) { resultDiv.textContent = '⚠ URL inválida (debe comenzar con http:// o https://)'; resultDiv.style.color = '#e74c3c'; }
+        if (resultDiv) { resultDiv.textContent = i18n.t('event_editor.err_invalid_url') || '⚠ URL inválida (debe comenzar con http:// o https://)'; resultDiv.style.color = '#e74c3c'; }
         return;
     }
     if (btn) btn.disabled = true;
-    if (resultDiv) { resultDiv.textContent = '🔍 Detectando…'; resultDiv.style.color = '#888'; }
+    if (resultDiv) { resultDiv.textContent = i18n.t('event_editor.detecting') || '🔍 Detectando…'; resultDiv.style.color = '#888'; }
     try {
         const info = await ipcRenderer.invoke('stream-probe', { url });
         if (info.error) {
@@ -466,7 +494,7 @@ document.getElementById('btn-stream-verify')?.addEventListener('click', async ()
             if (info.bitrate) parts.push(`${info.bitrate} kbps`);
             if (info.sampleRate) parts.push(`${info.sampleRate} Hz`);
             if (resultDiv) {
-                resultDiv.textContent = parts.length ? `✓ ${parts.join(' · ')}` : '✓ Stream detectado';
+                resultDiv.textContent = parts.length ? `✓ ${parts.join(' · ')}` : (i18n.t('event_editor.stream_detected') || '✓ Stream detectado');
                 resultDiv.style.color = '#27ae60';
             }
             // Auto-rellenar nombre del evento con el nombre ICY si está vacío
@@ -485,7 +513,7 @@ document.getElementById('btn-stream-verify')?.addEventListener('click', async ()
 document.getElementById('ev-commercial-block').addEventListener('change', (e) => {
     const block = commercialBlocks.find(item => item.id === e.target.value);
     document.getElementById('ev-filepath').value = e.target.value || '';
-    if (block && !document.getElementById('ev-name').value.trim()) document.getElementById('ev-name').value = `[Comerciales] ${block.name}`;
+    if (block && !document.getElementById('ev-name').value.trim()) document.getElementById('ev-name').value = `${i18n.t('event_editor.prefix_com') || '[Comerciales]'} ${block.name}`;
 });
 
 document.getElementById('btn-save').addEventListener('click', (e) => {
@@ -500,13 +528,13 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
     if (sourceType === 'stream_url') {
         streamUrl = (document.getElementById('ev-stream-url')?.value || '').trim();
         if (!streamUrl || (!streamUrl.startsWith('http://') && !streamUrl.startsWith('https://'))) {
-            alert("Debes ingresar una URL válida para la emisora (debe comenzar con http:// o https://).");
+            alert(i18n.t('event_editor.err_url') || "Debes ingresar una URL válida para la emisora (debe comenzar con http:// o https://).");
             document.getElementById('ev-stream-url')?.focus();
             return;
         }
         streamStopSeconds = getStreamStopSeconds();
         if (streamStopSeconds <= 0) {
-            alert("Las emisoras requieren una duración definida mayor a 0 segundos.");
+            alert(i18n.t('event_editor.err_duration') || "Las emisoras requieren una duración definida mayor a 0 segundos.");
             document.getElementById('ev-stream-hours')?.focus();
             return;
         }
@@ -539,18 +567,18 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
 
     const filePath = document.getElementById('ev-filepath').value;
     if (!filePath || filePath === 'undefined' || filePath.trim() === '') {
-        alert("Debes seleccionar una ruta válida en Origen del Audio.");
+        alert(i18n.t('event_editor.err_source') || "Debes seleccionar una ruta válida en Origen del Audio.");
         return;
     }
 
     let name = document.getElementById('ev-name').value.trim();
     if (!name || name === 'undefined') {
         if (sourceType === 'stream_url') {
-            name = streamUrl.split('/').slice(2, 3).join('') || 'Emisora';
+            name = streamUrl.split('/').slice(2, 3).join('') || (i18n.t('event_editor.default_stream') || 'Emisora');
         } else if (sourceType === 'locution') {
-            name = locutionType === 'time' ? 'Locución de Hora'
-                 : locutionType === 'temperature' ? 'Locución de Temperatura'
-                 : 'Locución de Humedad';
+            name = locutionType === 'time' ? (i18n.t('event_editor.loc_time') || 'Locución de Hora')
+                 : locutionType === 'temperature' ? (i18n.t('event_editor.loc_temp') || 'Locución de Temperatura')
+                 : (i18n.t('event_editor.loc_hum') || 'Locución de Humedad');
         } else {
             name = require('path').basename(filePath).replace(/\.[^/.]+$/, "");
         }
@@ -577,7 +605,7 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
     if (dayMode === 'monthlyWeeks') {
         document.querySelectorAll('.chk-week:checked').forEach(cb => targetWeeks.push(parseInt(cb.value)));
         if (targetWeeks.length === 0) {
-            alert("Debes seleccionar al menos una semana del mes.");
+            alert(i18n.t('event_editor.err_week') || "Debes seleccionar al menos una semana del mes.");
             return;
         }
     }
@@ -592,7 +620,7 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
     const maxDelayTotalSeconds = maxDelayActive ? getMaxDelayTotalSeconds() : 0;
 
     if (maxDelayActive && maxDelayTotalSeconds < 1) {
-            alert("Debes indicar un Tiempo Máx de Espera válido (mínimo 1 segundo).");
+            alert(i18n.t('event_editor.err_wait') || "Debes indicar un Tiempo Máx de Espera válido (mínimo 1 segundo).");
             return;
     }
 

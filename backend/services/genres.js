@@ -14,7 +14,7 @@ let mainContext = {
     getSafeMainWindow: () => null,
     broadcastEvent: () => {},
     storeTrackFileSignature: () => {},
-    AUDIO_FILE_RE: /\.(mp3|wav|flac|ogg|m4a|aac)$/i,
+    AUDIO_FILE_RE: /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i,
     getTrackStmt: null,
     upsertArtistProfile: null,
     artists_applyGenreToTrackPaths: null,

@@ -12,6 +12,8 @@ const os = require('os');
 const url = require('url');
 const { ipcRenderer, webUtils } = require('electron');
 const { normalizeAudioPrefs } = require('./audio_prefs');
+const i18n = require('./i18n');
+const uiAlerts = require('./ui_alerts');
 const { AudioEngineClient, RustAudioEngineAdapter } = require('./audio_engine_client');
 const {
     PISADOR_IDS,
@@ -28,6 +30,7 @@ const {
 const { prepareOverlaySession } = require('./pisador_runtime');
 const randomFolderSource = require('./random_folder_source');
 const musicSeparation = require('./music_separation_rules');
+const fileTypeAssignments = require('./file_type_assignments');
 const { askIncludeSubfolders } = require('./random_subfolder_dialog');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
@@ -363,7 +366,18 @@ let uiPrefs = loadConfig(uiPrefsPath, {
     widgetsOrder: ['btn-reloj', 'temp-widget', 'hum-widget'],
     playlistColumnsOrder: ['col-hora', 'col-titulo', 'col-duracion', 'col-intro', 'col-outro'],
     playlistColumnsHidden: [],
-    playlistFitToWindow: false
+    playlistFitToWindow: false,
+    // Nombres personalizados de las 4 playlists, indexados por IDENTIDAD LÓGICA
+    // (0-3). El motor de audio SIEMPRE usa este índice/bus, nunca el nombre, así
+    // que renombrar es puramente cosmético y no afecta la reproducción.
+    playlistNames: ['Playlist 1', 'Playlist 2', 'Playlist 3', 'Playlist 4'],
+    // Orden VISUAL de las pestañas: cada entrada es un índice lógico. El default
+    // [0,1,2,3] = sin reordenar. Reordenar solo mueve botones; la identidad viaja
+    // en el data-tab de cada botón, los tbodys/buses no se tocan.
+    playlistOrder: [0, 1, 2, 3],
+    // Bloqueado por defecto para los usuarios que reciben la actualización; una
+    // vez que el usuario lo activa, se recuerda y se respeta su decisión.
+    allowPlaylistReorder: false
 });
 
 function applyUILayout(prefs) {
@@ -418,6 +432,12 @@ let fxPrefs = loadConfig(fxPrefsPath, { preamp: 0, pan: 0, mono: false, eq_bands
 let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', keyboardShortcutScope: 'contextual', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
 generalPrefs.modeRepeatTrack = false;
 saveConfig(generalPrefsPath, generalPrefs);
+
+// Iniciar sistema de internacionalización
+i18n.init(generalPrefs.language || 'es');
+window.t = i18n.t; // Exportarlo globalmente para facilidad de uso
+i18n.applyToDOM();
+
 let clockwheelPrefs = loadConfig(clockwheelPrefsPath, { pattern: '', targetMinutes: 60, sepArtist: 4, sepTitle: 8, sepFolder: 2, clearList: false });
 
 // Adaptar rutas de configuración al SO actual (Linux: traduce rutas Windows automáticamente)
@@ -438,51 +458,8 @@ if (generalPrefs.weatherHumidityFolder) {
 
 if (generalPrefs.duckingFade >= 10) generalPrefs.duckingFade = 1.0;
 
-const defaultFadeProfile = {
-    fadeinActive: false,
-    fadein: 0,
-    mixActive: true,
-    mix: 0.6,
-    mixDbActive: true,
-    mixDb: -14,
-    fadeoutStopActive: true,
-    fadeoutStop: 2,
-    fadeoutNextActive: true,
-    fadeoutNext: 0.6,
-    mixFadeoutActive: false
-};
-const defaultFileTypes = [
-    { id: 't_comercial', name: 'Comercial', color: '#ff0000', identifier: 'comercial', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile },
-    { id: 't_time', name: 'Locuciones', color: '#2ecc71', identifier: 'locucion', aliases: ['saytime', 'time_locution', 'temperature_locution', 'humidity_locution'], searchIn: 'all', amp: 0, report: true, history: false, voice: true, readonly: true, ...defaultFadeProfile },
-    { id: 't_station_id', name: 'Station ID', color: '#3498db', identifier: 'id', searchIn: 'all', amp: 0, report: true, history: false, voice: false, readonly: true, ...defaultFadeProfile }
-];
+const { defaultFileTypes, normalizeFileTypes } = require('./file_types_data');
 let fileTypesData = [];
-function normalizeFileTypes(types) {
-    const loadedTypes = Array.isArray(types) ? types : [];
-    const byId = new Map(loadedTypes.map(typeData => [typeData.id, typeData]));
-    const builtInIds = new Set(defaultFileTypes.map(typeData => typeData.id));
-    const normalized = defaultFileTypes.map(defaultType => {
-        const stored = byId.get(defaultType.id) || {};
-        const migrated = {
-            ...defaultType,
-            ...stored,
-            name: defaultType.name,
-            identifier: defaultType.identifier,
-            aliases: defaultType.aliases || [],
-            readonly: true,
-            mixFadeoutActive: stored.mixFadeoutActive === true
-        };
-        delete migrated.mixFadeout;
-        return migrated;
-    });
-    loadedTypes.forEach(typeData => {
-        if (!typeData?.id || builtInIds.has(typeData.id)) return;
-        const migrated = { ...typeData, mixFadeoutActive: typeData.mixFadeoutActive === true };
-        delete migrated.mixFadeout;
-        normalized.push(migrated);
-    });
-    return normalized;
-}
 function loadFileTypes() { fileTypesData = normalizeFileTypes(loadConfig(fileTypesPath, defaultFileTypes)); }
 loadFileTypes();
 let genreProfiles = [];
@@ -542,6 +519,9 @@ let tbodys = [];
 let currentViewTab = 0;
 let pgmTab = 0;
 let playlistBody = null;
+// --- Estado de personalización de pestañas (renombrar / reordenar) ---
+let plTabReorderSource = null;   // botón que se está arrastrando para reordenar
+let plTabContextTarget = 0;      // índice LÓGICO sobre el que se abrió el menú contextual
 let isRestoringSession = false;
 let lastSessionSnapshotJson = '';
 const incidentReportPath = path.join(configDir, 'incident_report_history.json');
@@ -1189,7 +1169,10 @@ function applySessionViewState(nextViewTab) {
 }
 
 function updateTabsUI() {
-    document.querySelectorAll('.pl-tab').forEach((btn, idx) => {
+    document.querySelectorAll('.pl-tab').forEach((btn) => {
+        // Índice LÓGICO del botón (data-tab), independiente de su posición visual
+        // cuando el usuario reordena las pestañas.
+        const idx = parseInt(btn.dataset.tab, 10);
         const dot = btn.querySelector('.pgm-dot');
         if (dot) {
             if (idx === pgmTab && currentPlayingRow && idx !== currentViewTab) {
@@ -1208,6 +1191,105 @@ function updateTabsUI() {
     });
 }
 
+// ============================================================================
+// PERSONALIZACIÓN DE PESTAÑAS: renombrar y reordenar (sin afectar al motor)
+// La identidad de cada playlist es su índice lógico (data-tab 0-3). Estas
+// funciones solo cambian el rótulo visible y el orden de los botones; jamás
+// tocan tbodys[] ni los buses de audio.
+// ============================================================================
+const PLAYLIST_DEFAULT_NAMES = ['Playlist 1', 'Playlist 2', 'Playlist 3', 'Playlist 4'];
+
+function getPlaylistName(logicalIdx) {
+    const names = Array.isArray(uiPrefs.playlistNames) ? uiPrefs.playlistNames : PLAYLIST_DEFAULT_NAMES;
+    const n = (names[logicalIdx] || '').toString().trim();
+    return n || PLAYLIST_DEFAULT_NAMES[logicalIdx] || ('Playlist ' + (logicalIdx + 1));
+}
+
+// Asigna el rótulo conservando el punto indicador de reproducción (.pgm-dot).
+function setTabLabelText(btn, name) {
+    const dot = btn.querySelector('.pgm-dot');
+    btn.textContent = name + ' ';
+    if (dot) btn.appendChild(dot);
+}
+
+function getPlTabButton(logicalIdx) {
+    return document.querySelector('.pl-tab[data-tab="' + logicalIdx + '"]');
+}
+
+// Aplica al arrancar: nombres + orden visual + si el arrastre está habilitado.
+function applyPlaylistTabPrefs() {
+    const container = document.querySelector('.playlist-tabs-container');
+    if (!container) return;
+    document.querySelectorAll('.pl-tab').forEach((btn) => {
+        const idx = parseInt(btn.dataset.tab, 10);
+        setTabLabelText(btn, getPlaylistName(idx));
+    });
+    const order = Array.isArray(uiPrefs.playlistOrder) ? uiPrefs.playlistOrder : [0, 1, 2, 3];
+    order.forEach((logicalIdx) => {
+        const btn = getPlTabButton(logicalIdx);
+        if (btn) container.appendChild(btn); // reanexa en el orden guardado
+    });
+    applyPlaylistReorderDraggable();
+    updateTabsUI();
+    syncPlaylistNamesToMain();
+}
+
+function applyPlaylistReorderDraggable() {
+    const on = !!uiPrefs.allowPlaylistReorder;
+    document.querySelectorAll('.pl-tab').forEach((btn) => {
+        btn.draggable = on;
+        btn.style.cursor = on ? 'grab' : '';
+    });
+}
+
+// Recalcula el orden visual desde el DOM, lo persiste y sincroniza el menú nativo.
+function persistPlaylistTabState() {
+    const order = Array.from(document.querySelectorAll('.pl-tab'))
+        .map((btn) => parseInt(btn.dataset.tab, 10))
+        .filter((n) => !isNaN(n));
+    uiPrefs.playlistOrder = order;
+    saveConfig(uiPrefsPath, uiPrefs);
+    syncPlaylistNamesToMain();
+}
+
+// Envía los nombres (en orden visual) al proceso principal para el menú "Lista".
+function syncPlaylistNamesToMain() {
+    try {
+        const order = Array.isArray(uiPrefs.playlistOrder) ? uiPrefs.playlistOrder : [0, 1, 2, 3];
+        const payload = order.map((logicalIdx) => ({ index: logicalIdx, name: getPlaylistName(logicalIdx) }));
+        ipcRenderer.send('playlist-names-changed', payload);
+    } catch (_) { }
+}
+
+// Mueve la pestaña `source` a la posición de `target` (antes/después según cursor).
+function reorderPlaylistTabTo(source, target, clientX) {
+    if (!source || !target || source === target) return;
+    const container = source.parentElement;
+    if (!container || target.parentElement !== container) return;
+    const rect = target.getBoundingClientRect();
+    const after = clientX > rect.left + rect.width / 2;
+    container.insertBefore(source, after ? target.nextSibling : target);
+    persistPlaylistTabState();
+    updateTabsUI();
+}
+
+function renamePlaylistTab(logicalIdx, rawName) {
+    const name = (rawName || '').toString().trim().slice(0, 40);
+    if (!Array.isArray(uiPrefs.playlistNames)) uiPrefs.playlistNames = PLAYLIST_DEFAULT_NAMES.slice();
+    uiPrefs.playlistNames[logicalIdx] = name || PLAYLIST_DEFAULT_NAMES[logicalIdx];
+    const btn = getPlTabButton(logicalIdx);
+    if (btn) setTabLabelText(btn, getPlaylistName(logicalIdx));
+    saveConfig(uiPrefsPath, uiPrefs);
+    syncPlaylistNamesToMain();
+    updateTabsUI();
+}
+
+function setPlaylistReorderEnabled(enabled) {
+    uiPrefs.allowPlaylistReorder = !!enabled;
+    saveConfig(uiPrefsPath, uiPrefs);
+    applyPlaylistReorderDraggable();
+}
+
 function clearAirTimeSegmentState() {
     const lblT = document.getElementById('lbl-tiempo');
     const txtTiempo = document.getElementById('txt-tiempo');
@@ -1215,7 +1297,7 @@ function clearAirTimeSegmentState() {
 
     if (lblT) {
         lblT.classList.remove('label-intro', 'label-outro');
-        lblT.innerText = uiPrefs.showRemainingTime ? "Tiempo restante" : "Tiempo transcurrido";
+        lblT.innerText = uiPrefs.showRemainingTime ? i18n.t("main_window.aire.time_remaining") : i18n.t("main_window.aire.elapsed_time");
     }
     if (txtTiempo) {
         txtTiempo.classList.remove('segment-intro', 'segment-outro');
@@ -1445,7 +1527,7 @@ function renderIncidentEntries() {
     const keepScrollPosition = previousScrollTop > 8;
     const visibleEntries = incidentEntries.filter(entry => incidentFilter === 'all' || entry.category === incidentFilter);
     if (visibleEntries.length === 0) {
-        logBox.innerHTML = '<div class="incident-empty">No hay incidencias para este filtro.</div>';
+        logBox.innerHTML = `<div class="incident-empty">${i18n.t('dynamic_ui.no_incidents')}</div>`;
         return;
     }
     logBox.innerHTML = visibleEntries.map(entry => `
@@ -1508,29 +1590,29 @@ function recordIncident(msg, meta = {}) {
 }
 
 function refreshAirIncidentStatus() {
-    if (currentPlayingRow && !isPlayerClockPaused(activePlayer)) { setIncidentStatus('air', 'En aire', 'ok'); return; }
-    if (currentPlayingRow && playbackHoldByUser) { setIncidentStatus('air', 'Pausa manual', 'manual'); return; }
-    if (currentPlayingRow) { setIncidentStatus('air', 'En espera', 'warn'); return; }
-    setIncidentStatus('air', 'Detenido', 'manual');
+    if (currentPlayingRow && !isPlayerClockPaused(activePlayer)) { setIncidentStatus('air', i18n.t('incidents.air_on_air'), 'ok'); return; }
+    if (currentPlayingRow && playbackHoldByUser) { setIncidentStatus('air', i18n.t('incidents.air_manual_pause'), 'manual'); return; }
+    if (currentPlayingRow) { setIncidentStatus('air', i18n.t('incidents.air_waiting'), 'warn'); return; }
+    setIncidentStatus('air', i18n.t('incidents.air_stopped'), 'manual');
 }
 
 function refreshEventsIncidentStatus() {
     const chkManual = document.getElementById('chk-events-manual');
     const chkMaster = document.getElementById('chk-events-master');
     if (!chkMaster || !chkManual) return;
-    if (!chkMaster.checked) { setIncidentStatus('events', 'Pausados', 'manual'); return; }
-    if (chkManual.checked) { setIncidentStatus('events', 'Manual', 'manual'); return; }
-    if (eventsMasterDB.some(ev => ev.hasError)) { setIncidentStatus('events', 'Con alertas', 'error'); return; }
-    setIncidentStatus('events', 'Activos', 'ok');
+    if (!chkMaster.checked) { setIncidentStatus('events', i18n.t('incidents.events_paused'), 'manual'); return; }
+    if (chkManual.checked) { setIncidentStatus('events', i18n.t('incidents.events_manual'), 'manual'); return; }
+    if (eventsMasterDB.some(ev => ev.hasError)) { setIncidentStatus('events', i18n.t('incidents.events_alerts'), 'error'); return; }
+    setIncidentStatus('events', i18n.t('incidents.events_active'), 'ok');
 }
 
 function setEncoderIncidentStatus(status) {
     const statusMap = {
-        live: { value: 'En vivo', tone: 'ok' },
-        reconnecting: { value: 'Reconectando', tone: 'warn' },
-        connecting: { value: 'Conectando', tone: 'warn' },
-        error: { value: 'Error', tone: 'error' },
-        disconnected: { value: 'Desconectado', tone: 'manual' }
+        live: { value: i18n.t('incidents.encoder_live') || 'En vivo', tone: 'ok' },
+        reconnecting: { value: i18n.t('incidents.encoder_reconnecting') || 'Reconectando', tone: 'warn' },
+        connecting: { value: i18n.t('incidents.encoder_connecting') || 'Conectando', tone: 'warn' },
+        error: { value: i18n.t('incidents.encoder_error') || 'Error', tone: 'error' },
+        disconnected: { value: i18n.t('incidents.encoder_disconnected') || 'Desconectado', tone: 'manual' }
     };
     const next = statusMap[status] || statusMap.disconnected;
     setIncidentStatus('encoder', next.value, next.tone);
@@ -1556,7 +1638,7 @@ function initIncidentCenter() {
     refreshAirIncidentStatus();
     refreshEventsIncidentStatus();
     setEncoderIncidentStatus('disconnected');
-    setIncidentStatus('session', 'Nueva', 'manual');
+    setIncidentStatus('session', i18n.t('incidents.session_new'), 'manual');
     recordIncident('Sistema de Reportes Activado.', { category: 'system', level: 'info' });
     pushIncidentSnapshot();
 }
@@ -2665,7 +2747,7 @@ function triggerPlaybackGuardRecovery(reason) {
     const now = Date.now();
     if (now < playbackGuard.cooldownUntil) return;
     playbackGuard.cooldownUntil = now + PLAYBACK_GUARD_COOLDOWN_MS;
-    setIncidentStatus('air', 'Recuperando', 'warn');
+    setIncidentStatus('air', i18n.t('incidents.air_recovering'), 'warn');
     recordIncident(`[GUARDIA AIRE] ${reason}. Intentando recuperar...`, { category: 'guard', level: 'warn', autoAction: true });
     if (currentPlayingRow && document.body.contains(currentPlayingRow) && generalPrefs.modeRepeatTrack) {
         const meta = getPlayerPlaybackMeta(activePlayer) || {};
@@ -2895,25 +2977,25 @@ function openRepeatTrackOptionsDialog() {
     dialog.className = 'modal-content repeat-options-modal';
     dialog.innerHTML = `
         <div class="repeat-options-header">
-            <h3>Repetir canción</h3>
-            <span>Opciones de seguridad</span>
+            <h3>${i18n.t('modals.repeat_track.title')}</h3>
+            <span>${i18n.t('modals.repeat_track.subtitle')}</span>
         </div>
         <label class="repeat-option-row">
             <input id="repeat-forget-enabled" type="checkbox">
-            <span>Protección contra olvido</span>
+            <span>${i18n.t('modals.repeat_track.forget_protection')}</span>
         </label>
         <label class="repeat-option-number">
-            <span>Repeticiones máximas</span>
+            <span>${i18n.t('modals.repeat_track.max_repeats')}</span>
             <input id="repeat-forget-max" type="number" min="1" max="999" step="1" class="settings-input">
         </label>
         <div id="repeat-options-error" class="mode-options-error"></div>
         <label class="repeat-option-row">
             <input id="repeat-disable-next" type="checkbox">
-            <span>Desactivar bucle al presionar siguiente</span>
+            <span>${i18n.t('modals.repeat_track.disable_on_next')}</span>
         </label>
         <div class="repeat-options-actions">
-            <button id="repeat-options-cancel" class="settings-btn mode-options-cancel" type="button">Cancelar</button>
-            <button id="repeat-options-save" class="settings-btn mode-options-save" type="button">Guardar</button>
+            <button id="repeat-options-cancel" class="settings-btn mode-options-cancel" type="button">${i18n.t('modals.repeat_track.cancel')}</button>
+            <button id="repeat-options-save" class="settings-btn mode-options-save" type="button">${i18n.t('modals.repeat_track.save')}</button>
         </div>
     `;
 
@@ -2942,7 +3024,7 @@ function openRepeatTrackOptionsDialog() {
     btnSave.addEventListener('click', () => {
         const maxValue = parseInt(inputMax.value, 10);
         if (chkForget.checked && (!Number.isFinite(maxValue) || maxValue < 1)) {
-            errorEl.textContent = 'El valor minimo permitido es 1.';
+            errorEl.textContent = i18n.t('dynamic_ui.min_value_1');
             inputMax.focus();
             return;
         }
@@ -2996,21 +3078,21 @@ function openRemovePlayedOptionsDialog() {
     dialog.className = 'modal-content mode-options-modal';
     dialog.innerHTML = `
         <div class="mode-options-header">
-            <h3>Eliminar al terminar</h3>
-            <span>Evita vaciar la lista por accidente</span>
+            <h3>${i18n.t('modals.remove_played.title')}</h3>
+            <span>${i18n.t('modals.remove_played.subtitle')}</span>
         </div>
         <label class="mode-option-row">
             <input id="remove-protection-enabled" type="checkbox">
-            <span>Protección de playlist</span>
+            <span>${i18n.t('modals.remove_played.protection')}</span>
         </label>
         <label class="mode-option-number">
-            <span>Mantener al menos</span>
+            <span>${i18n.t('modals.remove_played.keep_at_least')}</span>
             <input id="remove-protection-min" type="number" min="1" max="999" step="1" class="settings-input">
         </label>
         <div id="remove-options-error" class="mode-options-error"></div>
         <div class="mode-options-actions">
-            <button id="remove-options-cancel" class="settings-btn mode-options-cancel" type="button">Cancelar</button>
-            <button id="remove-options-save" class="settings-btn mode-options-save" type="button">Guardar</button>
+            <button id="remove-options-cancel" class="settings-btn mode-options-cancel" type="button">${i18n.t('modals.remove_played.cancel')}</button>
+            <button id="remove-options-save" class="settings-btn mode-options-save" type="button">${i18n.t('modals.remove_played.save')}</button>
         </div>
     `;
 
@@ -3037,7 +3119,7 @@ function openRemovePlayedOptionsDialog() {
     btnSave.addEventListener('click', () => {
         const minValue = parseInt(inputMin.value, 10);
         if (chkEnabled.checked && (!Number.isFinite(minValue) || minValue < 1)) {
-            errorEl.textContent = 'El valor minimo permitido es 1.';
+            errorEl.textContent = i18n.t('dynamic_ui.min_value_1');
             inputMin.focus();
             return;
         }
@@ -3115,7 +3197,7 @@ function haltPlaybackOnFatalError(message, options = {}) {
     const visibleMessage = message || 'Reproduccion detenida por error de audio.';
     logSystem(`[ERROR CRITICO] ${visibleMessage}`);
     recordIncident(`[AIRE] ${visibleMessage}`, { category: 'air', level: 'error', autoAction: options.autoAction === true });
-    setIncidentStatus('air', 'Detenido por error', 'error');
+    setIncidentStatus('air', i18n.t('incidents.air_error'), 'error');
     updateNextTrackVisuals();
     refreshAirIncidentStatus();
     resetPlaybackGuard();
@@ -3207,7 +3289,7 @@ async function restoreSessionState() {
         }
     }
     if (!state || !Array.isArray(state.playlists)) {
-        setIncidentStatus('session', 'Nueva', 'manual');
+        setIncidentStatus('session', i18n.t('incidents.session_new'), 'manual');
         return false;
     }
 
@@ -3292,13 +3374,13 @@ async function restoreSessionState() {
             anchorRowIndex = lastSelectedRowIndex;
             queuedNextRow = resumeRow;
             const resumeName = (resumeRow.dataset.pureName || resumeRow.querySelector(".col-titulo").innerText || '').replace(/^(?:\u23f3|⏳)\s*/, '');
-            setIncidentStatus('session', 'Restaurada', 'ok');
+            setIncidentStatus('session', i18n.t('incidents.session_restored'), 'ok');
             recordIncident(`[SESION] Lista restaurada. Lista para retomar con: ${resumeName}`, { category: 'session', level: 'success' });
         } else if (queuedRow) {
             queuedNextRow = queuedRow;
-            setIncidentStatus('session', 'Restaurada', 'ok');
+            setIncidentStatus('session', i18n.t('incidents.session_restored'), 'ok');
         } else {
-            setIncidentStatus('session', 'Nueva', 'manual');
+            setIncidentStatus('session', i18n.t('incidents.session_new'), 'manual');
         }
 
         updateTabsUI();
@@ -3307,7 +3389,7 @@ async function restoreSessionState() {
         ensurePlaybackRowsVisible({ forcePgmView: true, centerCurrent: true });
         return true;
     } catch (err) {
-        setIncidentStatus('session', 'Error', 'error');
+        setIncidentStatus('session', i18n.t('incidents.session_error'), 'error');
         recordIncident('[SESION] No se pudo restaurar la sesion guardada.', { category: 'session', level: 'error' });
         return false;
     } finally {
@@ -3410,13 +3492,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const lblT = document.getElementById('lbl-tiempo');
     const txtT = document.getElementById('txt-tiempo');
-    if (lblT) lblT.innerText = uiPrefs.showRemainingTime ? "Tiempo restante" : "Tiempo transcurrido";
+    if (lblT) lblT.innerText = uiPrefs.showRemainingTime ? i18n.t("main_window.aire.time_remaining") : i18n.t("main_window.aire.elapsed_time");
     if (txtT) {
         txtT.style.cursor = 'pointer';
         txtT.addEventListener('click', () => {
             uiPrefs.showRemainingTime = !uiPrefs.showRemainingTime;
             saveConfig(uiPrefsPath, uiPrefs);
-            if (lblT) lblT.innerText = uiPrefs.showRemainingTime ? "Tiempo restante" : "Tiempo transcurrido";
+            if (lblT) lblT.innerText = uiPrefs.showRemainingTime ? i18n.t("main_window.aire.time_remaining") : i18n.t("main_window.aire.elapsed_time");
             if (activePlayer && (!isPlayerClockPaused(activePlayer) || getPlayerClockTime(activePlayer) > 0)) { handleTimeUpdate(activePlayer); }
             else { txtT.innerText = "00:00.0"; clearAirTimeSegmentState(); }
         });
@@ -3424,7 +3506,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     initPlaylistColumnResizers();
 
-    document.querySelectorAll('.pl-tab').forEach((btn, idx) => {
+    document.querySelectorAll('.pl-tab').forEach((btn) => {
+        // Índice LÓGICO (identidad estable de la playlist), no la posición visual.
+        // Al reordenar, el data-tab viaja con el botón, así que esto sigue siendo
+        // correcto y el ruteo de audio (tbodys[idx] / bus plN) nunca se confunde.
+        const idx = parseInt(btn.dataset.tab, 10);
         btn.addEventListener('click', () => {
             tbodys[currentViewTab].style.display = 'none';
             currentViewTab = idx;
@@ -3435,10 +3521,35 @@ document.addEventListener("DOMContentLoaded", () => {
             calcularHorasPlaylist();
             updateNextTrackVisuals();
         });
-        // Drag & Drop Intelligent Routing
+
+        // Menú contextual de la pestaña: Renombrar / Permitir reorganizar.
+        btn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            plTabContextTarget = idx;
+            refreshPlTabContextMenuState();
+            showContextMenu(plTabContextMenu, e.clientX, e.clientY);
+        });
+
+        // Reordenar pestañas: solo si el usuario lo habilitó. Mueve el botón en el
+        // DOM; los tbodys/buses y la identidad lógica (data-tab) no se tocan.
+        btn.addEventListener('dragstart', (e) => {
+            if (!uiPrefs.allowPlaylistReorder) { e.preventDefault(); return; }
+            plTabReorderSource = btn;
+            try { e.dataTransfer.setData('application/x-pl-tab', String(idx)); } catch (_) { }
+            try { e.dataTransfer.effectAllowed = 'move'; } catch (_) { }
+            btn.style.opacity = '0.5';
+        });
+        btn.addEventListener('dragend', () => {
+            plTabReorderSource = null;
+            btn.style.opacity = '';
+            btn.style.boxShadow = '';
+        });
+
+        // Drag & Drop Intelligent Routing (filas/archivos) + reorden de pestañas
         btn.addEventListener('dragover', (e) => {
             e.preventDefault();
-            btn.style.boxShadow = 'inset 0 0 10px #00a8ff';
+            btn.style.boxShadow = plTabReorderSource ? 'inset 3px 0 0 #00a8ff' : 'inset 0 0 10px #00a8ff';
         });
         btn.addEventListener('dragleave', () => {
             btn.style.boxShadow = '';
@@ -3446,6 +3557,14 @@ document.addEventListener("DOMContentLoaded", () => {
         btn.addEventListener('drop', async (e) => {
             e.preventDefault();
             btn.style.boxShadow = '';
+
+            // Caso reorden de pestañas: reacomodar el botón en vez de insertar filas.
+            if (plTabReorderSource) {
+                reorderPlaylistTabTo(plTabReorderSource, btn, e.clientX);
+                plTabReorderSource = null;
+                return;
+            }
+
             let targetTbodyForDrop = tbodys[idx];
 
             if (draggedTableRow) {
@@ -3667,6 +3786,62 @@ const playlistContextMenu = document.getElementById('playlist-context-menu');
 const eventsListMenu = document.getElementById('events-list-menu');
 const groupContextMenu = document.getElementById('group-context-menu');
 const eimMenu = document.getElementById('event-item-menu');
+const plTabContextMenu = document.getElementById('pl-tab-context-menu');
+
+// Refleja en el menú contextual si "Permitir reorganizar" está activo (✔).
+function refreshPlTabContextMenuState() {
+    const check = document.getElementById('pltm-reorder-check');
+    if (check) check.textContent = uiPrefs.allowPlaylistReorder ? '✔' : '';
+}
+
+// Abre el modal para renombrar la playlist sobre la que se hizo clic derecho.
+function openPlaylistRenameModal(logicalIdx) {
+    const modal = document.getElementById('pl-rename-modal');
+    const input = document.getElementById('pl-rename-input');
+    if (!modal || !input) return;
+    input.value = getPlaylistName(logicalIdx);
+    modal.dataset.targetIdx = String(logicalIdx);
+    modal.style.display = 'flex';
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+function closePlaylistRenameModal() {
+    const modal = document.getElementById('pl-rename-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function commitPlaylistRename() {
+    const modal = document.getElementById('pl-rename-modal');
+    const input = document.getElementById('pl-rename-input');
+    if (!modal || !input) return;
+    const idx = parseInt(modal.dataset.targetIdx, 10) || 0;
+    renamePlaylistTab(idx, input.value);
+    closePlaylistRenameModal();
+}
+
+function wirePlaylistTabCustomization() {
+    const miRename = document.getElementById('pltm-rename');
+    const miToggle = document.getElementById('pltm-toggle-reorder');
+    const miReset = document.getElementById('pltm-reset');
+    if (miRename) miRename.addEventListener('click', () => { hideAllMenus(); openPlaylistRenameModal(plTabContextTarget); });
+    if (miToggle) miToggle.addEventListener('click', () => { setPlaylistReorderEnabled(!uiPrefs.allowPlaylistReorder); refreshPlTabContextMenuState(); hideAllMenus(); });
+    if (miReset) miReset.addEventListener('click', () => { hideAllMenus(); renamePlaylistTab(plTabContextTarget, PLAYLIST_DEFAULT_NAMES[plTabContextTarget]); });
+
+    const btnCancel = document.getElementById('btn-cancel-pl-rename');
+    const btnAccept = document.getElementById('btn-accept-pl-rename');
+    const input = document.getElementById('pl-rename-input');
+    if (btnCancel) btnCancel.addEventListener('click', closePlaylistRenameModal);
+    if (btnAccept) btnAccept.addEventListener('click', commitPlaylistRename);
+    if (input) input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commitPlaylistRename(); }
+        else if (e.key === 'Escape') { e.preventDefault(); closePlaylistRenameModal(); }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    wirePlaylistTabCustomization();
+    applyPlaylistTabPrefs();
+});
 
 let lastSelectedRowIndex = -1; let anchorRowIndex = -1; let draggedTableRow = null;
 let lastSelectedExplorerIndex = -1; let anchorExplorerIndex = -1; let explorerItemsCache = [];
@@ -3803,7 +3978,7 @@ function getQueuedDelayInfo(eventId) {
 }
 
 function isSupportedAudioName(fileName) {
-    return /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(fileName || '');
+    return /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(fileName || '');
 }
 
 async function inspectEventSource(filePath, sourceType) {
@@ -3912,8 +4087,9 @@ function randomBagKey(folderPath, recursive) {
     return `${recursive ? 'R' : 'F'}|${folderPath}`;
 }
 
-function takeRandomFolderFile(folderPath, recursive = false) {
-    const rels = getRandomFolderFilesFast(folderPath, recursive);
+async function takeRandomFolderFile(folderPath, recursive = false) {
+    // Async (no bloqueante): mismo motivo que takeRandomFolderFileAvoidingRecentMusic.
+    const rels = await warmRandomFolder(folderPath, recursive);
     if (rels.length === 0) return null;
     const key = randomBagKey(folderPath, recursive);
     if (!randomBagsCache[key] || randomBagsCache[key].length === 0) {
@@ -4037,9 +4213,22 @@ function pickLeastRecentlyPlayed(folderPath, rels, recentSongMap) {
 //  N0: separacion de cancion + artista.   N1: solo cancion (artista relajado).
 //  N2: forzar "la menos reciente" (cancion relajada). Nunca queda en silencio.
 async function takeRandomFolderFileAvoidingRecentMusic(folderPath, recursive = false) {
-    const rels = getRandomFolderFilesFast(folderPath, recursive);
+    // Lectura ASÍNCRONA del listado (warmRandomFolder usa fs.promises.readdir y
+    // cede el hilo entre carpetas). El lector síncrono recursivo congelaba el
+    // renderer varios segundos en bibliotecas grandes sobre disco lento, lo que
+    // además atascaba los push de estado de Rust (100 ms) y disparaba falsos
+    // "stalls" en el watchdog. warmRandomFolder devuelve el mismo listado.
+    const rels = await warmRandomFolder(folderPath, recursive);
     if (rels.length === 0) return null;
     const toAbs = rel => randomFolderSource.resolveAbsolute(folderPath, rel);
+
+    // Carpeta de un tipo que ignora la separacion musical (comerciales, ids,
+    // pisadores...): sin filtro de no-repeticion, seleccion aleatoria directa
+    // respetando la rotacion del pozo.
+    if (resolveIgnoreSeparation(folderPath)) {
+        return drawFromBag(folderPath, recursive, rels);
+    }
+
     const rules = musicSeparation.getEffectiveRules(folderPath, generalPrefs);
 
     const now = Date.now();
@@ -4120,6 +4309,10 @@ const EXPLICIT_TYPES_PATH = path.join(configDir, 'explicit_types.json');
 let explicitTypesDB = {};
 try { if (fs.existsSync(EXPLICIT_TYPES_PATH)) explicitTypesDB = JSON.parse(fs.readFileSync(EXPLICIT_TYPES_PATH, 'utf-8')); } catch (e) { }
 function saveExplicitTypes() { try { fs.writeFileSync(EXPLICIT_TYPES_PATH, JSON.stringify(explicitTypesDB, null, 2)); } catch (e) { } }
+// Opciones por ruta (incluir subcarpetas / ignorar separacion / guardar en
+// historial). Cache en memoria; se recarga cuando el Gestor avisa por IPC.
+let fileTypeOptionsDB = fileTypeAssignments.readOptions();
+function reloadFileTypeOptions() { fileTypeOptionsDB = fileTypeAssignments.readOptions(); }
 function saveEventsDB() { ipcRenderer.send('db-save-events-full', eventsMasterDB); }
 
 let selectedEventId = null; let collapsedGroups = new Set(); let rightClickedGroupId = null;
@@ -4189,6 +4382,9 @@ function hideAllMenus() {
 
         const cwtcm = document.getElementById('cw-tab-context-menu');
         if (cwtcm) cwtcm.style.display = 'none';
+
+        const pltcm = document.getElementById('pl-tab-context-menu');
+        if (pltcm) pltcm.style.display = 'none';
 
         const cwpm = document.getElementById('cw-profile-menu');
         if (cwpm) cwpm.style.display = 'none';
@@ -4654,7 +4850,7 @@ function renderPlaylistEventPickerList(selectedEventId = '') {
     if (eventsMasterDB.length === 0) {
         const empty = document.createElement('li');
         empty.className = 'incident-empty';
-        empty.textContent = 'No hay eventos disponibles.';
+        empty.textContent = i18n.t('dynamic_ui.no_events_available');
         list.appendChild(empty);
         return;
     }
@@ -5073,7 +5269,7 @@ function renderEventTimeline(force = false) {
     if (items.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'event-timeline-empty';
-        empty.textContent = 'No hay eventos programados en la cola.';
+        empty.textContent = i18n.t('dynamic_ui.no_events_in_queue');
         container.appendChild(empty);
         return;
     }
@@ -5146,7 +5342,7 @@ function applyEventsFilterMenuStyles() {
 
     const sortNextEl = document.getElementById('ef-sort-next');
     if (sortNextEl) {
-        sortNextEl.innerHTML = eventsSortByNext ? '☑ Próximo a emitir primero' : '🔳 Próximo a emitir primero';
+        sortNextEl.innerHTML = eventsSortByNext ? "☑ " + i18n.t("context_menus.events_filter.sort_next_raw") : "🔳 " + i18n.t("context_menus.events_filter.sort_next_raw");
         sortNextEl.style.fontWeight = eventsSortByNext ? 'bold' : 'normal';
     }
 
@@ -5155,7 +5351,7 @@ function applyEventsFilterMenuStyles() {
     const showEmittedEl = document.getElementById('ef-show-emitted');
     if (showEmittedEl) {
         const emittedApplies = eventsFilterMode !== 'all' && !eventsFilterMode.startsWith('day_');
-        showEmittedEl.innerHTML = eventsShowEmitted ? '☑ Separar emitidos hoy' : '🔳 Separar emitidos hoy';
+        showEmittedEl.innerHTML = eventsShowEmitted ? "☑ " + i18n.t("context_menus.events_filter.show_emitted_raw") : "🔳 " + i18n.t("context_menus.events_filter.show_emitted_raw");
         showEmittedEl.style.fontWeight = (eventsShowEmitted && emittedApplies) ? 'bold' : 'normal';
         showEmittedEl.style.opacity = emittedApplies ? '' : '0.4';
     }
@@ -5413,11 +5609,12 @@ function renderEventsList() {
 function updateTabAppearance(globalHasError, nearestHealthy, nearestSecs, recentEmergency, isManualOnly, isMasterActive) {
     const tabEventos = document.getElementById('tab-btn-eventos'); if (!tabEventos) return; const isActive = tabEventos.classList.contains('active');
     tabEventos.style.backgroundColor = ''; tabEventos.style.color = ''; tabEventos.classList.remove('tab-emergency-flash', 'tab-flash-red', 'tab-flash-orange', 'tab-flash-orange-trans', 'tab-flash-gray');
-    if (!isMasterActive) { tabEventos.innerText = `${ICON_EVENT_DISABLED_LABEL} Eventos`; tabEventos.style.backgroundColor = '#333333'; tabEventos.style.color = '#aaaaaa'; if (nearestHealthy) { if ((nearestSecs <= 60 && nearestSecs >= 30) || (nearestSecs <= 300 && nearestSecs >= 270) || (nearestSecs <= 900 && nearestSecs >= 870)) { tabEventos.classList.add('tab-flash-gray'); } } return; }
-    if (isActive) { tabEventos.innerText = globalHasError ? `${ICON_WARNING_LABEL} Eventos` : 'Eventos'; return; }
-    if (recentEmergency) { tabEventos.classList.add('tab-emergency-flash'); tabEventos.innerText = `${ICON_WARNING_LABEL} Eventos`; return; }
-    if (nearestHealthy && nearestSecs <= 900) { tabEventos.innerText = 'Eventos'; if (isManualOnly) { if (nearestSecs <= 60 && nearestSecs >= 50) { tabEventos.classList.add('tab-flash-red'); } else if (nearestSecs <= 300 && nearestSecs >= 290) { tabEventos.classList.add('tab-flash-orange'); } else if (nearestSecs <= 900 && nearestSecs >= 890) { tabEventos.classList.add('tab-flash-orange-trans'); } } else { if (nearestSecs <= 30) { tabEventos.classList.add('tab-flash-red'); } else if (nearestSecs <= 60) { tabEventos.style.backgroundColor = '#e74c3c'; tabEventos.style.color = '#fff'; } else if (nearestSecs <= 300) { tabEventos.style.backgroundColor = 'rgba(243, 156, 18, 0.9)'; tabEventos.style.color = '#fff'; } else if (nearestSecs <= 900) { tabEventos.style.backgroundColor = 'rgba(243, 156, 18, 0.3)'; tabEventos.style.color = ''; } } return; }
-    tabEventos.innerText = globalHasError ? `${ICON_WARNING_LABEL} Eventos` : 'Eventos';
+    const tabText = window.t('main_window.sidebar.events');
+    if (!isMasterActive) { tabEventos.innerText = `${ICON_EVENT_DISABLED_LABEL} ${tabText}`; tabEventos.style.backgroundColor = '#333333'; tabEventos.style.color = '#aaaaaa'; if (nearestHealthy) { if ((nearestSecs <= 60 && nearestSecs >= 30) || (nearestSecs <= 300 && nearestSecs >= 270) || (nearestSecs <= 900 && nearestSecs >= 870)) { tabEventos.classList.add('tab-flash-gray'); } } return; }
+    if (isActive) { tabEventos.innerText = globalHasError ? `${ICON_WARNING_LABEL} ${tabText}` : tabText; return; }
+    if (recentEmergency) { tabEventos.classList.add('tab-emergency-flash'); tabEventos.innerText = `${ICON_WARNING_LABEL} ${tabText}`; return; }
+    if (nearestHealthy && nearestSecs <= 900) { tabEventos.innerText = tabText; if (isManualOnly) { if (nearestSecs <= 60 && nearestSecs >= 50) { tabEventos.classList.add('tab-flash-red'); } else if (nearestSecs <= 300 && nearestSecs >= 290) { tabEventos.classList.add('tab-flash-orange'); } else if (nearestSecs <= 900 && nearestSecs >= 890) { tabEventos.classList.add('tab-flash-orange-trans'); } } else { if (nearestSecs <= 30) { tabEventos.classList.add('tab-flash-red'); } else if (nearestSecs <= 60) { tabEventos.style.backgroundColor = '#e74c3c'; tabEventos.style.color = '#fff'; } else if (nearestSecs <= 300) { tabEventos.style.backgroundColor = 'rgba(243, 156, 18, 0.9)'; tabEventos.style.color = '#fff'; } else if (nearestSecs <= 900) { tabEventos.style.backgroundColor = 'rgba(243, 156, 18, 0.3)'; tabEventos.style.color = ''; } } return; }
+    tabEventos.innerText = globalHasError ? `${ICON_WARNING_LABEL} ${tabText}` : tabText;
 }
 
 function updateEventCountdowns() {
@@ -5564,6 +5761,34 @@ function canEventInterruptNow(eventObj, runtimeOptions = {}) {
     return getEventPriorityRank(eventObj) > getEventPriorityRank(currentEvent);
 }
 
+// ¿Hay audio de PROGRAMA realmente al aire en este instante?
+//
+// `currentPlayingRow` es la referencia normal del aire, pero queda en null
+// momentáneamente durante las colas de fundido y las transiciones; y en modo
+// Rust los <audio> HTML están SIEMPRE pausados por diseño (Rust es la única
+// fuente de verdad de posición/estado). Por eso no basta con `currentPlayingRow`
+// ni con `player.paused`: si nos fiáramos de ellos, un evento con regla de
+// ESPERA o RETARDO confundiría una transición audible con "nada sonando" y se
+// dispararía al instante, saltándose su regla. Aquí consultamos a Rust.
+function isProgramAudioOnAir() {
+    if (currentPlayingRow && document.body.contains(currentPlayingRow) && !isPlayerClockPaused(activePlayer)) {
+        return true;
+    }
+    if (isRustPlaylistOwnerEnabled()) {
+        const players = Array.isArray(rustAudioProbeStatus?.lastStatus?.players)
+            ? rustAudioProbeStatus.lastStatus.players
+            : [];
+        // 'playing' = pista que continúa; 'fading' = saliente de un crossfade o
+        // cola de fundido. En ambos casos hay audio sonando, así que el evento
+        // debe RESPETAR su regla y no auto-dispararse.
+        return players.some(p => RUST_PLAYLIST_DECK_IDS.includes(p?.id)
+            && (p?.status === 'playing' || p?.status === 'fading'));
+    }
+    // Modo WebAudio puro: ahí los <audio> HTML sí son la fuente de verdad.
+    return !!((playerA && !playerA.paused && !playerA.ended)
+        || (playerB && !playerB.paused && !playerB.ended));
+}
+
 function getPlaylistRowEventRank(row) {
     if (!row?.dataset?.eventId) return -1;
     return EVENT_PRIORITY_RANK[row.dataset.eventPriority || 'normal'] ?? EVENT_PRIORITY_RANK.normal;
@@ -5701,7 +5926,7 @@ function holdForUpcomingEvent(item) {
     clearEventPreHold();
     eventPreHoldActive = true;
     eventPreHoldKey = key;
-    setIncidentStatus('events', 'En espera', 'warn');
+    setIncidentStatus('events', i18n.t('incidents.events_waiting'), 'warn');
     recordIncident(`[EVENTOS] Esperando ${item.seconds}s para no pisar el evento "${item.ev.name}".`, { category: 'events', level: 'warn' });
     eventPreHoldTimer = setTimeout(() => {
         clearEventPreHold();
@@ -5849,7 +6074,7 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
         });
     } else if (eventObj.sourceType === 'folder') {
         try {
-            const finalPath = takeRandomFolderFile(eventObj.filePath);
+            const finalPath = await takeRandomFolderFile(eventObj.filePath);
             if (!finalPath) return false;
             await warmTrackFromLibraryAndFile(finalPath);
             const dur = getCachedTrackDurationSeconds(finalPath, 180);
@@ -5862,7 +6087,13 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
     if (pistas.length === 0) return false;
     const action = eventObj.action || 'add'; const execution = eventObj.execution || 'interrupt'; const maxDelayActive = execution === 'max-delay' && eventObj.maxDelayActive; const priority = getEventPriority(eventObj); const interruptAllowed = execution === 'interrupt' && canEventInterruptNow(eventObj, runtimeOptions); const fromPlaylistCommand = runtimeOptions.playlistCommand === true; const deferClearUntilExecution = action === 'clear' && currentPlayingRow && !interruptAllowed && !fromPlaylistCommand;
 
-    const targetTbody = currentPlayingRow ? currentPlayingRow.closest('tbody') : tbodys[currentViewTab] || tbodys[pgmTab];
+    // El evento SIEMPRE debe cargarse en la playlist que está al aire (la de
+    // programa, pgmTab), no en la que el operador tenga visible. `pgmTab` se
+    // mantiene apuntando a la última playlist reproducida aunque currentPlayingRow
+    // quede null durante una cola de fundido/transición. Sólo si no hubiera
+    // programa válido caemos a la pestaña visible como último recurso.
+    const targetTbody = (currentPlayingRow && document.body.contains(currentPlayingRow) && currentPlayingRow.closest('tbody'))
+        || tbodys[pgmTab] || tbodys[currentViewTab];
 
     if (action === 'clear' && !deferClearUntilExecution) {
         const clearTabIndex = tbodys.indexOf(targetTbody);
@@ -5938,8 +6169,8 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
         if (firstInsertedRow) playRow(firstInsertedRow, false, 2, { forceFollowView: action === 'clear' });
         return true;
     }
-    if (action === 'append-end') { if (firstInsertedRow && (!currentPlayingRow || (isPlayerClockPaused(activePlayer) && getPlayerClockTime(activePlayer) === 0))) { playRow(firstInsertedRow, false); const entry = runtimeOptions.queueKey ? eventRuntimeQueue.get(runtimeOptions.queueKey) : null; if (entry) setEventQueueStatus(entry, 'fired', 'AL AIRE', 'Disparado a emision'); } return true; }
-    if (execution === 'interrupt' && interruptAllowed) { if (firstInsertedRow) playRow(firstInsertedRow, false, 2, { forceFollowView: action === 'clear' }); } else { if (firstInsertedRow && (!currentPlayingRow || (isPlayerClockPaused(activePlayer) && getPlayerClockTime(activePlayer) === 0))) { playRow(firstInsertedRow, false, 0, { forceFollowView: action === 'clear' }); } else if (firstInsertedRow) { syncQueuedNextAfterEventInsert(targetTbody, firstInsertedRow); } }
+    if (action === 'append-end') { if (firstInsertedRow && !maxDelayActive && !isProgramAudioOnAir()) { playRow(firstInsertedRow, false); const entry = runtimeOptions.queueKey ? eventRuntimeQueue.get(runtimeOptions.queueKey) : null; if (entry) setEventQueueStatus(entry, 'fired', 'AL AIRE', 'Disparado a emision'); } return true; }
+    if (execution === 'interrupt' && interruptAllowed) { if (firstInsertedRow) playRow(firstInsertedRow, false, 2, { forceFollowView: action === 'clear' }); } else { if (firstInsertedRow && !maxDelayActive && !isProgramAudioOnAir()) { playRow(firstInsertedRow, false, 0, { forceFollowView: action === 'clear' }); } else if (firstInsertedRow) { syncQueuedNextAfterEventInsert(targetTbody, firstInsertedRow); } }
     return true;
 }
 
@@ -6073,7 +6304,7 @@ function renderTree(items, container, isRoot = false) {
         try {
             const stats = fs.statSync(itemPath);
             if (stats.isDirectory()) dirs.push(itemPath);
-            else if (/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(itemPath)) files.push(itemPath);
+            else if (/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(itemPath)) files.push(itemPath);
         } catch (e) { console.error("Error leyendo ruta:", itemPath, e); }
     });
 
@@ -6174,7 +6405,7 @@ function renderTree(items, container, isRoot = false) {
                 applyMenuLogic();
             };
         } else {
-            if (!/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(name)) return;
+            if (!/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(name)) return;
             div.dataset.path = itemPath;
             div.innerHTML = `<span class="icon-file">🎵</span> ${name}`; div.draggable = true;
             div.ondragstart = (e) => {
@@ -6197,9 +6428,9 @@ explorerContainer.innerHTML = ''; loadDrives();
 
 window.setExplicitTypeExplorer = function (typeId) {
     const ruta = contextMenuTargetFolder; if (!ruta) return;
-    if (typeId === 'default') delete explicitTypesDB[ruta]; else explicitTypesDB[ruta] = typeId;
-    saveExplicitTypes(); hideAllMenus();
-    document.querySelectorAll('.playlist-table tr').forEach(tr => { tr.style.color = getPlaylistRowColor(tr); });
+    hideAllMenus();
+    if (typeId === 'default') { clearFileTypeAssign([ruta]); return; }
+    openFileTypeAssignModal([{ path: ruta, kind: 'folder' }], typeId);
 };
 
 document.getElementById('ctx-add-random').addEventListener('click', async () => { let targetRow = document.querySelector('.selected-row'); if (contextMenuTargetFolder) await addRandomFolderToPlaylist(contextMenuTargetFolder, targetRow, 'bottom', playlistBody); hideAllMenus(); });
@@ -6331,7 +6562,7 @@ async function handleDroppedItem(itemPath, insertTarget = null, position = 'bott
                 endBulkInsert();
             }
         } else {
-            if (/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(itemPath)) {
+            if (/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(itemPath)) {
                 await ensureDbTracksLoaded([itemPath]);
                 lastInsertedRow = await addTrackToPlaylist(itemPath, 'normal', lastInsertedRow, currentPos, targetTbody);
             }
@@ -6528,7 +6759,13 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
 
     normalizeTimeLocutionRow(tr);
 
-    if (insertTarget) {
+    // El punto de inserción sólo es válido si pertenece a la playlist destino.
+    // Si `insertTarget` quedó apuntando a una fila de OTRA playlist (p. ej. una
+    // selección viva en la lista que suena mientras el operador pre-produce en
+    // otra), `insertBefore` lanzaría NotFoundError y el alta se perdería en
+    // silencio. En ese caso agregamos al final de la lista visible, que es lo
+    // que el operador espera.
+    if (insertTarget && insertTarget.parentNode === bodyToUse) {
         if (position === 'top') bodyToUse.insertBefore(tr, insertTarget);
         else bodyToUse.insertBefore(tr, insertTarget.nextSibling);
     } else {
@@ -6701,11 +6938,123 @@ if (playlistSection) {
 }
 
 window.setExplicitType = function (typeId) {
-    document.querySelectorAll('.selected-row').forEach(tr => {
-        const ruta = tr.dataset.ruta; if (typeId === 'default') { delete explicitTypesDB[ruta]; } else { explicitTypesDB[ruta] = typeId; }
-        tr.style.color = getPlaylistRowColor(tr);
-    }); saveExplicitTypes(); hideAllMenus();
+    const rows = Array.from(document.querySelectorAll('.selected-row'));
+    hideAllMenus();
+    if (!rows.length) return;
+    if (typeId === 'default') {
+        clearFileTypeAssign(rows.map(tr => tr.dataset.ruta).filter(Boolean));
+        return;
+    }
+    const targets = rows
+        .map(tr => ({ path: tr.dataset.ruta, kind: tr.dataset.type === 'random' ? 'folder' : 'file' }))
+        .filter(x => x.path);
+    openFileTypeAssignModal(targets, typeId);
 }
+
+// ── Mini-modal de asignacion de tipo (interfaz principal) ──────────────────
+// Pregunta subcarpetas / ignorar separacion / guardar en historial y persiste
+// en explicit_types.json + file_type_options.json, sincronizando con el Gestor.
+let fileTypeAssignContext = null;
+
+function recolorAllPlaylistRows() {
+    document.querySelectorAll('.playlist-table tr').forEach(tr => { tr.style.color = getPlaylistRowColor(tr); });
+}
+
+function saveFileTypeOptions() { fileTypeAssignments.writeOptions(fileTypeOptionsDB); }
+
+function broadcastAssignmentsChanged() {
+    try { ipcRenderer.send('file-types-assignments-changed'); } catch (e) {}
+}
+
+function clearFileTypeAssign(paths) {
+    (paths || []).forEach(p => {
+        if (!p) return;
+        delete explicitTypesDB[p];
+        fileTypeAssignments.removeOptions(p, fileTypeOptionsDB);
+    });
+    saveExplicitTypes();
+    saveFileTypeOptions();
+    recolorAllPlaylistRows();
+    broadcastAssignmentsChanged();
+}
+
+function openFileTypeAssignModal(targets, typeId) {
+    const cleanTargets = (targets || []).filter(t => t && t.path);
+    if (!cleanTargets.length || !typeId) return;
+    fileTypeAssignContext = { targets: cleanTargets, typeId };
+    const typeData = fileTypesData.find(x => x.id === typeId);
+    const hasFolder = cleanTargets.some(t => t.kind === 'folder');
+
+    const label = document.getElementById('fta-target-label');
+    label.textContent = '';
+    const b = document.createElement('b');
+    b.style.color = typeData?.color || '#fff';
+    b.textContent = typeData?.name || typeId;
+    label.appendChild(b);
+    const detail = cleanTargets.length > 1
+        ? `  —  ${i18n.t('modals.assign_type.items_count', { count: cleanTargets.length }) || (cleanTargets.length + ' elementos')}`
+        : `  —  ${cleanTargets[0].path.split(/[\\/]/).pop()}`;
+    label.appendChild(document.createTextNode(detail));
+
+    const subRow = document.getElementById('fta-subfolders-row');
+    const subChk = document.getElementById('fta-subfolders');
+    subChk.disabled = !hasFolder;
+    subChk.checked = hasFolder;
+    subRow.style.opacity = hasFolder ? '1' : '0.4';
+    subRow.style.cursor = hasFolder ? 'pointer' : 'not-allowed';
+
+    document.getElementById('fta-ignore-sep').checked = true;
+    document.getElementById('fta-save-history').checked = true;
+    document.getElementById('file-type-assign-modal').style.display = 'flex';
+}
+
+function closeFileTypeAssignModal() {
+    document.getElementById('file-type-assign-modal').style.display = 'none';
+    fileTypeAssignContext = null;
+}
+
+function applyFileTypeAssignFromModal() {
+    if (!fileTypeAssignContext) return;
+    const { targets, typeId } = fileTypeAssignContext;
+    const includeSub = document.getElementById('fta-subfolders').checked;
+    const ignoreSep = document.getElementById('fta-ignore-sep').checked;
+    const saveHist = document.getElementById('fta-save-history').checked;
+    targets.forEach(({ path: p, kind }) => {
+        explicitTypesDB[p] = typeId;
+        fileTypeAssignments.setOptions(p, {
+            kind,
+            includeSubfolders: kind === 'folder' ? includeSub : false,
+            ignoreSeparation: ignoreSep,
+            saveToHistory: saveHist
+        }, fileTypeOptionsDB);
+    });
+    saveExplicitTypes();
+    saveFileTypeOptions();
+    recolorAllPlaylistRows();
+    broadcastAssignmentsChanged();
+    closeFileTypeAssignModal();
+}
+
+(function wireFileTypeAssignModal() {
+    const modal = document.getElementById('file-type-assign-modal');
+    if (!modal) return;
+    document.getElementById('fta-accept').addEventListener('click', applyFileTypeAssignFromModal);
+    document.getElementById('fta-cancel').addEventListener('click', closeFileTypeAssignModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeFileTypeAssignModal(); });
+})();
+
+function reloadExplicitTypes() {
+    try { explicitTypesDB = fs.existsSync(EXPLICIT_TYPES_PATH) ? JSON.parse(fs.readFileSync(EXPLICIT_TYPES_PATH, 'utf-8')) : {}; } catch (e) {}
+}
+
+// El Gestor de Tipos de Archivos (otra ventana) cambio tipos o asignaciones:
+// recargar todo y recolorear la playlist, sin tocar la ruta de audio.
+ipcRenderer.on('file-types-data-updated', () => {
+    loadFileTypes();
+    reloadExplicitTypes();
+    reloadFileTypeOptions();
+    recolorAllPlaylistRows();
+});
 
 function serializePlaylistClipboardRow(tr, includeElement = false) {
     const item = {
@@ -6820,11 +7169,11 @@ document.getElementById('auto-pisador-save').addEventListener('click', () => {
     const previous = automaticPisadorModalContext.loadedRule;
     const rule = getAutomaticPisadorModalRule(row.dataset.type || 'normal');
     if (!rule) {
-        window.alert('Selecciona un origen valido y un tiempo de inicio mayor o igual que cero.');
+        uiAlerts.showAlert('alerts.invalid_origin_start');
         return;
     }
     if (quickRuleNeedsZeroConfirmation(rule)
-        && !window.confirm('El pisador se ejecutara en el segundo 0. Desea guardar esta configuracion?')) return;
+        && !uiAlerts.showConfirm('confirms.pisador_second_zero')) return;
     if (previous?.scope === 'path' && rule.scope !== 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, null);
     if (rule.scope === 'path') setPersistentAutomaticPisadorRule(row.dataset.ruta, rule);
     row.dataset.automaticPisadorRule = serializeQuickRule(rule);
@@ -6904,7 +7253,7 @@ document.getElementById('pm-edit-name').addEventListener('click', () => {
     const filePath = getPhysicalTrackPathForRow(rightClickedRow);
     hideAllMenus();
     if (!filePath) {
-        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        uiAlerts.showAlert('alerts.random_no_track');
         return;
     }
     ipcRenderer.send('open-file-metadata-editor', filePath);
@@ -6914,18 +7263,18 @@ document.getElementById('pm-show-folder').addEventListener('click', async () => 
     const filePath = getPhysicalTrackPathForRow(rightClickedRow);
     hideAllMenus();
     if (!filePath) {
-        alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+        uiAlerts.showAlert('alerts.random_no_track');
         return;
     }
     const result = await ipcRenderer.invoke('file:show-in-folder', filePath);
-    if (!result?.success) alert(result?.error || 'No se pudo mostrar el archivo en su carpeta.');
+    if (!result?.success) uiAlerts.showAlert('alerts.show_file_error', { error: result?.error });
 });
 
 document.getElementById('pm-set-next').addEventListener('click', () => { const nextRow = resolveNextOperationalRow(rightClickedRow, false); if (nextRow) { setQueuedNextManual(nextRow); } hideAllMenus(); });
 document.getElementById('pm-advanced-edit').addEventListener('click', () => {
     const filePath = getPhysicalTrackPathForRow(rightClickedRow);
     if (filePath) ipcRenderer.send('open-audio-editor', filePath);
-    else alert('Esta carpeta aleatoria aun no tiene una pista fisica seleccionada.');
+    else uiAlerts.showAlert('alerts.random_no_track');
     hideAllMenus();
 });
 
@@ -6967,7 +7316,7 @@ document.getElementById('pm-transition-edit').addEventListener('click', () => {
 document.getElementById('pm-jingle-edit').addEventListener('click', () => {
     if (!rightClickedRow) return;
     const prevRow = rightClickedRow.previousElementSibling; const nextRow = rightClickedRow.nextElementSibling;
-    if (!prevRow || !nextRow) { alert("El pisador debe estar ubicado entre dos canciones."); hideAllMenus(); return; }
+    if (!prevRow || !nextRow) { uiAlerts.showAlert('alerts.pisador_between_songs'); hideAllMenus(); return; }
     // FIX BUG (reapertura con tiempos guardados): si el operador ya editó este
     // pisador antes, las filas tienen `dataset.customMix` con los segundos
     // dentro de cada pista donde se debe iniciar el siguiente bloque. Los
@@ -7023,12 +7372,48 @@ ipcRenderer.on('apply-jingle-transition', (e, res) => {
 });
 
 
+// Resuelve la asignacion explicita de una ruta (archivo o carpeta): coincidencia
+// exacta, luego carpeta contenedora directa (sus hijos siempre heredan) y por
+// ultimo carpetas ancestro con "incluir subcarpetas" activado. Devuelve la ruta
+// que coincidio (matchedPath) y su typeData, para tambien poder leer las
+// opciones de separacion/historial de esa misma asignacion.
+function resolveExplicitAssignment(targetPath) {
+    if (!targetPath) return null;
+    const byId = id => fileTypesData.find(t => t.id === id) || null;
+    if (explicitTypesDB[targetPath]) { const found = byId(explicitTypesDB[targetPath]); if (found) return { matchedPath: targetPath, typeData: found }; }
+    const dirPath = path.dirname(targetPath);
+    if (!dirPath || dirPath === targetPath) return null;
+    if (explicitTypesDB[dirPath]) { const found = byId(explicitTypesDB[dirPath]); if (found) return { matchedPath: dirPath, typeData: found }; }
+    let prev = dirPath;
+    let ancestor = path.dirname(dirPath);
+    while (ancestor && ancestor !== prev) {
+        if (explicitTypesDB[ancestor] && fileTypeAssignments.includesSubfolders(ancestor, fileTypeOptionsDB)) {
+            const found = byId(explicitTypesDB[ancestor]);
+            if (found) return { matchedPath: ancestor, typeData: found };
+        }
+        prev = ancestor;
+        ancestor = path.dirname(ancestor);
+    }
+    return null;
+}
+
+function resolveExplicitTypeData(targetPath) {
+    return resolveExplicitAssignment(targetPath)?.typeData || null;
+}
+
+// ¿La asignacion que aplica a esta ruta pide ignorar las reglas de separacion
+// musical? (comerciales, ids, pisadores...). Las asignaciones antiguas sin
+// opciones devuelven false, conservando el comportamiento previo.
+function resolveIgnoreSeparation(targetPath) {
+    const match = resolveExplicitAssignment(targetPath);
+    return match ? fileTypeAssignments.ignoresSeparation(match.matchedPath, fileTypeOptionsDB) : false;
+}
+
 function getTrackTypeData(filePath) {
     const types = fileTypesData;
     if (manualCuesDB[filePath] && manualCuesDB[filePath].typeId) { const found = types.find(t => t.id === manualCuesDB[filePath].typeId); if (found) return found; }
-    if (explicitTypesDB[filePath]) { const found = types.find(t => t.id === explicitTypesDB[filePath]); if (found) return found; }
-    const dirPath = path.dirname(filePath);
-    if (explicitTypesDB[dirPath]) { const found = types.find(t => t.id === explicitTypesDB[dirPath]); if (found) return found; }
+    const explicit = resolveExplicitTypeData(filePath);
+    if (explicit) return explicit;
 
     const nameStr = path.basename(filePath).toLowerCase();
     for (let t of types) {
@@ -7059,7 +7444,12 @@ function getPlaylistRowColor(rowOrType, ruta = '') {
     if (type === 'time' || isClimateLocutionType(type) || filePath === 'time_locution' || filePath === 'temperature_locution' || filePath === 'humidity_locution') {
         return getLocutionTypeData()?.color || '#2ecc71';
     }
-    if (type === 'random') return '#f39c12';
+    if (type === 'random') {
+        // Carpeta aleatoria con tipo asignado entra con SU color; si es musica
+        // por defecto (sin tipo), naranja como siempre.
+        const folderType = resolveExplicitTypeData(filePath);
+        return folderType ? folderType.color : '#f39c12';
+    }
     if (type === 'stream_url') return '#e74c3c';
     const typeData = getTrackTypeData(filePath);
     return typeData ? typeData.color : '#e0e0e0';
@@ -7295,7 +7685,7 @@ function getRotationCandidates(categoryDefs = null) {
         });
     }
     Object.entries(manualCuesDB || {}).forEach(([filePath, data]) => {
-        if (!filePath || !/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(filePath)) return;
+        if (!filePath || !/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(filePath)) return;
         const typeData = getTrackTypeData(filePath);
         const catId = typeData ? typeData.id : 'default';
         const isId = typeData && /id|pisador|jingle|cuña|station|promo/i.test(`${typeData.name} ${typeData.identifier}`);
@@ -7466,7 +7856,7 @@ function updateRotationSummary(plan = null) {
 
 function runRotationPreflight() {
     const summary = document.getElementById('rotation-summary');
-    if (summary) summary.textContent = 'Calculando preflight...';
+    if (summary) summary.textContent = i18n.t('dynamic_ui.calculating_preflight');
     setTimeout(async () => {
         try {
             saveClockwheelPrefsFromUi();
@@ -7533,11 +7923,11 @@ async function applyRotationPlanToPlaylist() {
     try {
         plan = await buildRotationPlan();
     } catch (err) {
-        alert(err.message || 'No se pudo generar la rotacion.');
+        uiAlerts.showAlert('alerts.rotation_generation_error', { error: err.message });
         return;
     }
     if (plan.tracks.length === 0) {
-        alert('No hay canciones suficientes para ese patron. Revisa tipos de archivo o biblioteca.');
+        uiAlerts.showAlert('alerts.insufficient_songs');
         updateRotationSummary(plan);
         return;
     }
@@ -7556,7 +7946,7 @@ async function applyRotationPlanToPlaylist() {
     const playingInsideTarget = currentPlayingRow && targetTbody.contains(currentPlayingRow);
 
     if (clearList && playingInsideTarget) {
-        alert('Esa playlist esta al aire. Por seguridad no se reemplaza mientras hay audio sonando.');
+        uiAlerts.showAlert('alerts.playlist_on_air_no_replace');
         return;
     }
     if (clearList) {
@@ -7607,7 +7997,7 @@ async function applyRotationPlanToPlaylist() {
         const missingList = skippedMissingPaths
             .map((filePath, index) => `${index + 1}. ${filePath}`)
             .join('\n');
-        alert(`Se omitieron ${skippedMissing} archivo(s) que ya no existen en disco:\n\n${missingList}`);
+        uiAlerts.showAlert('alerts.skipped_missing_files', { count: skippedMissing, list: missingList });
     }
     recordIncident(`[CLOCKWHEEL] Rotacion generada: ${plan.tracks.length - skippedMissing} pista(s), ${formatRotationDuration(plan.totalSeconds)} en Playlist ${chosenTab + 1}.`, { category: 'system', level: 'success' });
     updateRotationSummary(plan);
@@ -7639,11 +8029,11 @@ function showPlaylistTargetSelector() {
 
         const title = document.createElement('h3');
         title.style.cssText = 'margin:0 0 6px;color:#00a8ff;font-size:16px;';
-        title.textContent = '¿En cuál playlist deseas cargar?';
+        title.textContent = i18n.t('dynamic_ui.select_playlist_title');
 
         const subtitle = document.createElement('p');
         subtitle.style.cssText = 'margin:0 0 18px;color:#8f96a3;font-size:12px;';
-        subtitle.textContent = 'Selecciona la playlist de destino';
+        subtitle.textContent = i18n.t('dynamic_ui.select_playlist_subtitle');
 
         box.appendChild(title);
         box.appendChild(subtitle);
@@ -7737,7 +8127,7 @@ function updateNextTrackVisuals() {
 
     if (stopAfterCurrent && currentPlayingRow) {
         // "Pausar Fin" activo: quitar línea naranja y mostrar mensaje de pausa.
-        if (txtSiguiente) { txtSiguiente.innerText = '⏸ Pausado al finalizar'; txtSiguiente.style.color = '#e74c3c'; }
+        if (txtSiguiente) { txtSiguiente.innerText = i18n.t('dynamic_ui.paused_at_end'); txtSiguiente.style.color = '#e74c3c'; }
         preloadNextTrack();
     } else if (generalPrefs.nextPausada) {
         if (txtSiguiente) { txtSiguiente.innerText = `${ICON_TEMP_PREFIX}Siguiente pausada temporalmente`; txtSiguiente.style.color = "#e74c3c"; }
@@ -9585,10 +9975,15 @@ function getTrackHistoryDescriptor(filePath) {
             : typeData.voice === true
                 ? 'locution'
                 : String(typeData.id || 'custom');
+    // La opcion por ruta "Guardar en el historial" manda sobre el default del
+    // tipo. Asi un comercial asignado puede quedar en memoria aunque su tipo
+    // traiga history:false. Sin asignacion explicita, se usa el default del tipo.
+    const saveOverride = fileTypeAssignments.savesToHistory(resolveExplicitAssignment(filePath)?.matchedPath, fileTypeOptionsDB);
+    const wantsHistory = saveOverride === null ? (typeData.history === true) : saveOverride;
     return {
         category,
         report: typeData.report !== false,
-        history: typeData.history === true && category !== 'locution'
+        history: wantsHistory && category !== 'locution'
     };
 }
 
@@ -10431,7 +10826,7 @@ if (btnReloj) { btnReloj.addEventListener('click', () => playTimeLocution()); bt
 const tempWidget = document.getElementById('temp-widget');
 if (tempWidget) {
     tempWidget.style.cursor = 'pointer';
-    tempWidget.title = 'Clic Izquierdo: Lanzar Temperatura | Clic Derecho: Agregar a la Lista';
+    tempWidget.title = i18n.t('main_window.widgets.temp_tooltip');
     tempWidget.addEventListener('click', () => playClimateLocution('temperature'));
     tempWidget.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -10444,7 +10839,7 @@ if (tempWidget) {
 const humWidget = document.getElementById('hum-widget');
 if (humWidget) {
     humWidget.style.cursor = 'pointer';
-    humWidget.title = 'Clic Izquierdo: Lanzar Humedad | Clic Derecho: Agregar a la Lista';
+    humWidget.title = i18n.t('main_window.widgets.hum_tooltip');
     humWidget.addEventListener('click', () => playClimateLocution('humidity'));
     humWidget.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -12486,7 +12881,7 @@ function stopActiveStream({ fadeSeconds = 0 } = {}) {
         const txtT = document.getElementById('txt-tiempo');
         if (txtT) { txtT.innerText = '00:00.0'; txtT.classList.remove('time-warning-blue','time-warning-red','time-flash'); }
         const lblT = document.getElementById('lbl-tiempo');
-        if (lblT) lblT.innerText = uiPrefs?.showRemainingTime ? 'Tiempo restante' : 'Tiempo transcurrido';
+        if (lblT) lblT.innerText = uiPrefs?.showRemainingTime ? i18n.t("main_window.aire.time_remaining") : i18n.t("main_window.aire.elapsed_time");
     } catch (_) {}
 }
 
@@ -13141,16 +13536,32 @@ function cwExtractFirstDroppedPath(e) {
     } catch (err) { }
     return null;
 }
-function cwIsValidAudioPath(p) { return !!p && /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(p); }
+function cwIsValidAudioPath(p) { return !!p && /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(p); }
+function cwHslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => {
+        const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        return Math.round(255 * c).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+}
 function getRandomDarkEffectColor() {
-    const palette = ['#164e3a', '#1f4b5f', '#47346b', '#61395a', '#653b2f', '#36502a', '#214a70', '#5a4630', '#285057', '#4d375f'];
-    return palette[Math.floor(Math.random() * palette.length)];
+    // Matiz aleatorio en todo el círculo (0-359) → máxima variedad. Saturación
+    // media y luminosidad baja para conservar el tono oscuro y que el texto
+    // blanco siga siendo legible. Reemplaza la paleta fija de 10 colores que
+    // se percibía como "siempre los mismos 4-5".
+    const hue = Math.floor(Math.random() * 360);
+    const sat = 45 + Math.floor(Math.random() * 20);   // 45-64 %
+    const light = 22 + Math.floor(Math.random() * 10); // 22-31 %
+    return cwHslToHex(hue, sat, light);
 }
 
 function createEmptyCwButtons(total) {
     const botones = [];
     for (let i = 1; i <= total; i++) {
-        botones.push({ id: i, label: i.toString(), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '' });
+        botones.push({ id: i, label: i.toString(), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '', duration: 0 });
     }
     return botones;
 }
@@ -13275,6 +13686,8 @@ async function cwAssignPathToButton(btnInfo, filePath) {
     btnInfo.name = (nombre || '').toUpperCase();
     btnInfo.bg = getRandomDarkEffectColor();
     btnInfo.text = '#FFFFFF';
+    // Análisis único al insertar: se calcula la duración y se guarda en el perfil.
+    btnInfo.duration = await getAudioDuration(filePath) || 0;
     await ipcRenderer.invoke('save-cartwall-profiles', cartwallState);
     renderCartwallGrid();
     return true;
@@ -13512,7 +13925,7 @@ function buildCwProfileMenu() {
     });
     sep();
     addItem('Eliminar Perfil actual', async () => {
-        if (cartwallState.profiles.length <= 1) { alert('No puedes eliminar el unico perfil.'); return; }
+        if (cartwallState.profiles.length <= 1) { uiAlerts.showAlert('alerts.cannot_delete_only_profile'); return; }
         const profile = getActiveCwProfile();
         const ok = await ipcRenderer.invoke('dialog:confirm', `Seguro que deseas eliminar el perfil "${profile.name}"?`);
         if (!ok) return;
@@ -13551,12 +13964,37 @@ async function initCartwall({ forceRender = false } = {}) {
     }
 
     await cartwallInitPromise;
+    backfillCwDurations(); // segundo plano, una sola vez por sesión
     if (forceRender && !isCartwallUndocked) {
         updateCwProfileButton();
         renderCartwallTabs();
         renderCartwallGrid();
     }
     return cartwallState;
+}
+
+// Calcula UNA sola vez las duraciones faltantes (perfiles creados antes de esta
+// función). Los botones que ya tienen `duration` no se vuelven a sondear, así que
+// en aperturas posteriores no hay trabajo que hacer.
+let cwDurationsBackfilled = false;
+async function backfillCwDurations() {
+    if (cwDurationsBackfilled || !cartwallState?.profiles) return;
+    cwDurationsBackfilled = true;
+    let changed = false;
+    for (const profile of cartwallState.profiles) {
+        for (const paleta of (profile.paletas || [])) {
+            for (const b of (paleta.botones || [])) {
+                if (b && b.type === 'audio' && b.file && !(Number(b.duration) > 0)) {
+                    const d = await getAudioDuration(b.file) || 0;
+                    if (d > 0) { b.duration = d; changed = true; }
+                }
+            }
+        }
+    }
+    if (changed) {
+        try { await ipcRenderer.invoke('save-cartwall-profiles', cartwallState); } catch (_) { }
+        if (!isCartwallUndocked) renderCartwallGrid();
+    }
 }
 
 function getActiveCwPalette() {
@@ -13571,7 +14009,7 @@ async function addCartwallTab() {
     if (!profile) return;
     modoTab = 'nuevo';
     tabSeleccionadaIndex = null;
-    document.getElementById('cw-tab-modal-title').innerText = 'Nueva Botonera';
+    document.getElementById('cw-tab-modal-title').innerText = i18n.t('dynamic_ui.new_cartwall');
     document.getElementById('cw-tab-name').value = `Botonera ${profile.paletas.length + 1}`;
     document.getElementById('cw-tab-v').value = 5;
     document.getElementById('cw-tab-h').value = 5;
@@ -13644,7 +14082,12 @@ function formatCwTime(seconds) {
 }
 
 function getCartwallButtonReadyText(btnInfo) {
-    return isCartwallButtonPlayable(btnInfo) ? 'LISTO' : '';
+    if (!isCartwallButtonPlayable(btnInfo)) return '';
+    // Muestra la duración total (mm:ss) si ya está calculada; si todavía no
+    // (perfil viejo aún sin sondear, o locución de hora/clima sin duración fija)
+    // cae a 'LISTO'. El cálculo en segundo plano rellena los faltantes.
+    const d = Number(btnInfo?.duration) || 0;
+    return d > 0 ? formatCwTime(d) : 'LISTO';
 }
 
 function refreshCartwallModeMenu(btnInfo) {
@@ -14153,7 +14596,7 @@ async function confirmDeleteCartwallTab(paleta) {
 }
 // LÃ“GICA DE MENÃšS Y MODALES DEL CARTWALL EN PANTALLA PRINCIPAL
 function createEmptyCwButtonForSlot(id) {
-    return { id, label: String(id), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '' };
+    return { id, label: String(id), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '', duration: 0 };
 }
 
 function moveCartwallRuntime(fromTabIndex, fromId, toTabIndex, toId) {
@@ -14192,7 +14635,9 @@ document.getElementById('menu-editar').addEventListener('click', () => {
     document.getElementById('cw-edit-filepath').value = (botonSeleccionado.type === 'time' || isCartwallClimateButton(botonSeleccionado)) ? (botonSeleccionado.folder || '') : (botonSeleccionado.file || '');
     document.getElementById('cw-edit-name').value = botonSeleccionado.name || '';
     document.getElementById('cw-edit-volume').value = botonSeleccionado.vol || 1;
-    document.getElementById('cw-edit-bg-color').value = botonSeleccionado.bg || '#444444';
+    // Si el botón aún no tiene color (efecto nuevo), proponer uno aleatorio en vez
+    // del gris por defecto; al guardar queda persistido.
+    document.getElementById('cw-edit-bg-color').value = botonSeleccionado.bg || getRandomDarkEffectColor();
     document.getElementById('cw-edit-text-color').value = botonSeleccionado.text || '#FFFFFF';
     hideAllMenus();
     cwEditModal.style.display = 'flex';
@@ -14202,7 +14647,7 @@ document.getElementById('menu-editar').addEventListener('click', () => {
 
 document.getElementById('menu-limpiar').addEventListener('click', () => {
     stopCartwallAudio(botonSeleccionado);
-    botonSeleccionado.file = ''; botonSeleccionado.folder = ''; botonSeleccionado.type = 'audio'; botonSeleccionado.name = ''; botonSeleccionado.bg = ''; botonSeleccionado.overlap = false; botonSeleccionado.restart = false;
+    botonSeleccionado.file = ''; botonSeleccionado.folder = ''; botonSeleccionado.type = 'audio'; botonSeleccionado.name = ''; botonSeleccionado.bg = ''; botonSeleccionado.overlap = false; botonSeleccionado.restart = false; botonSeleccionado.duration = 0;
     ipcRenderer.invoke('save-cartwall-profiles', cartwallState); renderCartwallGrid(); hideAllMenus();
 });
 
@@ -14220,7 +14665,7 @@ document.getElementById('tab-menu-editar').addEventListener('click', () => {
     modoTab = 'editar';
     const profile = cartwallState.profiles.find(p => p.id === cartwallState.activeProfileId);
     const paleta = profile.paletas[tabSeleccionadaIndex];
-    document.getElementById('cw-tab-modal-title').innerText = 'Editar Botonera';
+    document.getElementById('cw-tab-modal-title').innerText = i18n.t('dynamic_ui.edit_cartwall');
     document.getElementById('cw-tab-name').value = paleta.nombre;
     document.getElementById('cw-tab-v').value = paleta.rows;
     document.getElementById('cw-tab-h').value = paleta.cols;
@@ -14236,7 +14681,7 @@ document.getElementById('tab-menu-editar').addEventListener('click', () => {
 document.getElementById('tab-menu-eliminar').addEventListener('click', async () => {
     hideAllMenus();
     const profile = cartwallState.profiles.find(p => p.id === cartwallState.activeProfileId);
-    if (profile.paletas.length <= 1) { alert("No puedes eliminar la unica botonera."); return; }
+    if (profile.paletas.length <= 1) { uiAlerts.showAlert('alerts.cannot_delete_only_cartwall'); return; }
     const paleta = profile.paletas[tabSeleccionadaIndex];
     if (!(await confirmDeleteCartwallTab(paleta))) return;
     stopCartwallTabAudio(tabSeleccionadaIndex);
@@ -14291,6 +14736,10 @@ document.getElementById('btn-save-cw-edit').addEventListener('click', async () =
     botonSeleccionado.bg = document.getElementById('cw-edit-bg-color').value;
     botonSeleccionado.text = document.getElementById('cw-edit-text-color').value;
     resetCartwallButtonModeOptions(botonSeleccionado);
+    // Recalcular duración solo si es audio con archivo; si no, dejarla en 0.
+    botonSeleccionado.duration = (selectedType === 'audio' && botonSeleccionado.file)
+        ? (await getAudioDuration(botonSeleccionado.file) || 0)
+        : 0;
     await ipcRenderer.invoke('save-cartwall-profiles', cartwallState);
     renderCartwallGrid();
     closeCwEditModal();
@@ -14443,7 +14892,7 @@ ipcRenderer.on('stream-status', (_e, { streamId, playerId, status, displayName }
             // ── Reloj elapsed/restante (actualizado por visualTimeLoop vía rAF) ──
             streamLiveStartAt = Date.now();
             const lblT = document.getElementById('lbl-tiempo');
-            if (lblT) lblT.innerText = (streamTimerStopSecs > 0) ? 'Tiempo restante' : 'Tiempo transcurrido';
+            if (lblT) lblT.innerText = (streamTimerStopSecs > 0) ? i18n.t("main_window.aire.time_remaining") : i18n.t("main_window.aire.elapsed_time");
             // Hora de fin si hay timer
             if (streamTimerStopSecs > 0) {
                 try {
@@ -14591,7 +15040,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
         const url = urlInput.value.trim();
         if (!url) return;
         detectBtn.disabled = true;
-        detectResult.textContent = '🔍 Detectando…';
+        detectResult.textContent = i18n.t('dynamic_ui.detecting_url');
         try {
             const info = await ipcRenderer.invoke('stream-probe', { url });
             if (info.error) {
@@ -14616,7 +15065,7 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
     okBtn.addEventListener('click', () => {
         const url = urlInput.value.trim();
         if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-            detectResult.textContent = '⚠ Ingresá una URL válida (http:// o https://).';
+            detectResult.textContent = i18n.t('dynamic_ui.invalid_url');
             urlInput.focus();
             return;
         }
@@ -15185,7 +15634,7 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         try {
             navigator.clipboard.writeText(buildDiagnosticText()).then(() => {
                 const fb = $('wizard-copy-feedback');
-                if (fb) { fb.textContent = 'Copiado!'; setTimeout(() => { fb.textContent = ''; }, 2500); }
+                if (fb) { fb.textContent = i18n.t('dynamic_ui.copied'); setTimeout(() => { fb.textContent = ''; }, 2500); }
             }).catch(err => console.error('[wizard] clipboard:', err));
         } catch (err) { console.error('[wizard] copy error:', err); }
     }

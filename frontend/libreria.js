@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const Fuse = require('fuse.js');
 const { getConfigDir } = require('../backend/utils/app_paths');
+const i18n = require('./i18n');
 
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
@@ -12,18 +13,39 @@ const libSessionPath = path.join(configDir, 'lib_session.json');
 const libraryPrefsPath = path.join(configDir, 'library_prefs.json');
 
 const defaultLibraryColumnsConfig = [
-    { id: 'status', title: 'Estado', width: 50 },
-    { id: 'fullPath', title: 'Ruta Completa', width: 230 },
-    { id: 'title', title: 'TÃ­tulo', width: 160 },
-    { id: 'artist', title: 'Artista', width: 130 },
-    { id: 'album', title: 'Ãlbum', width: 120 },
-    { id: 'genre', title: 'GÃ©nero', width: 110 },
-    { id: 'year', title: 'AÃ±o', width: 50 },
-    { id: 'inicio', title: 'Ini (s)', width: 55 },
-    { id: 'mix', title: 'Mix (s)', width: 55 },
-    { id: 'fin', title: 'Fin (s)', width: 55 },
-    { id: 'db', title: 'dB', width: 60 }
+    { id: 'status', width: 50 },
+    { id: 'fullPath', width: 230 },
+    { id: 'title', width: 160 },
+    { id: 'artist', width: 130 },
+    { id: 'album', width: 120 },
+    { id: 'genre', width: 110 },
+    { id: 'year', width: 50 },
+    { id: 'inicio', width: 55 },
+    { id: 'mix', width: 55 },
+    { id: 'fin', width: 55 },
+    { id: 'db', width: 60 }
 ];
+
+function getLocalizedColumnsConfig() {
+    return defaultLibraryColumnsConfig.map(col => {
+        let title = '';
+        switch(col.id) {
+            case 'status': title = i18n.t('library.dynamic.col_status') || 'Estado'; break;
+            case 'fullPath': title = i18n.t('library.dynamic.col_path') || 'Ruta Completa'; break;
+            case 'title': title = i18n.t('library.dynamic.col_title') || 'Título'; break;
+            case 'artist': title = i18n.t('library.dynamic.col_artist') || 'Artista'; break;
+            case 'album': title = i18n.t('library.dynamic.col_album') || 'Álbum'; break;
+            case 'genre': title = i18n.t('library.dynamic.col_genre') || 'Género'; break;
+            case 'year': title = i18n.t('library.dynamic.col_year') || 'Año'; break;
+            case 'inicio': title = i18n.t('library.dynamic.col_ini') || 'Ini (s)'; break;
+            case 'mix': title = i18n.t('library.dynamic.col_mix') || 'Mix (s)'; break;
+            case 'fin': title = i18n.t('library.dynamic.col_fin') || 'Fin (s)'; break;
+            case 'db': title = 'dB'; break;
+        }
+        return { ...col, title };
+    });
+}
+
 const defaultLibraryColumnWidths = defaultLibraryColumnsConfig.map(col => col.width);
 const libraryColumnMinWidths = [50, 180, 140, 120, 120, 105, 50, 55, 55, 55, 60];
 
@@ -84,21 +106,7 @@ let dbViewMode = localStorage.getItem('lib_db_view_mode') || 'peak';
 const ROW_HEIGHT = 26; 
 const OVERSCAN = 50; 
 
-let columnsConfig = [
-    { id: 'status', title: 'Estado', width: 50 },
-    { id: 'fullPath', title: 'Ruta Completa', width: 230 },
-    { id: 'title', title: 'Título', width: 160 },
-    { id: 'artist', title: 'Artista', width: 130 },
-    { id: 'album', title: 'Álbum', width: 120 },
-    { id: 'genre', title: 'Género', width: 110 },
-    { id: 'year', title: 'Año', width: 50 },
-    { id: 'inicio', title: 'Ini (s)', width: 55 }, 
-    { id: 'mix', title: 'Mix (s)', width: 55 },
-    { id: 'fin', title: 'Fin (s)', width: 55 },
-    { id: 'db', title: 'dB', width: 60 }
-];
-
-columnsConfig = defaultLibraryColumnsConfig.map(col => ({ ...col }));
+let columnsConfig = getLocalizedColumnsConfig();
 
 function normalizeLibraryColumnWidths(widths) {
     const normalized = [];
@@ -113,7 +121,7 @@ function normalizeLibraryColumnWidths(widths) {
 
 function applyStoredLibraryColumnWidths() {
     const normalizedWidths = normalizeLibraryColumnWidths(libraryPrefs.columnWidths);
-    columnsConfig = defaultLibraryColumnsConfig.map((column, index) => ({
+    columnsConfig = getLocalizedColumnsConfig().map((column, index) => ({
         ...column,
         width: normalizedWidths[index]
     }));
@@ -323,7 +331,7 @@ function applyCurrentSearchAndRender() {
 }
 
 function isAudioFilePath(filePath) {
-    return /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(filePath || '');
+    return /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(filePath || '');
 }
 
 function normalizeLibraryPath(targetPath) {
@@ -375,11 +383,11 @@ function refreshLibraryRootUi() {
     if (btnLoadRoot) {
         const rootPath = getPersistentRootPath();
         if (rootPath) {
-            btnLoadRoot.innerText = '📁 Mostrar Raíz';
-            btnLoadRoot.title = `Cargar la carpeta raíz configurada: ${rootPath}`;
+            btnLoadRoot.innerText = i18n.t('library.root_btn_text') || '📁 Mostrar Raíz';
+            btnLoadRoot.title = (i18n.t('library.dynamic.root_configured') || 'Cargar la carpeta raíz configurada:') + ' ' + rootPath;
         } else {
-            btnLoadRoot.innerText = '📁 Configurar Raíz';
-            btnLoadRoot.title = 'Define una carpeta raíz fija para la biblioteca';
+            btnLoadRoot.innerText = i18n.t('library.dynamic.root_config_btn') || '📁 Configurar Raíz';
+            btnLoadRoot.title = i18n.t('library.dynamic.root_config_title') || 'Define una carpeta raíz fija para la biblioteca';
         }
     }
 
@@ -390,11 +398,11 @@ function refreshLibraryRootUi() {
     if (rootStatus) {
         const activeRoot = getPersistentRootPath();
         if (activeRoot) {
-            rootStatus.innerText = 'La carpeta raíz fija está lista para cargarse y refrescarse cuando lo necesites.';
+            rootStatus.innerText = i18n.t('library.dynamic.root_ready') || 'La carpeta raíz fija está lista para cargarse y refrescarse cuando lo necesites.';
         } else if (libraryPrefs.persistentRoot) {
-            rootStatus.innerText = 'La carpeta configurada no está disponible ahora mismo. Revisa si fue movida, renombrada o si la unidad no está conectada.';
+            rootStatus.innerText = i18n.t('library.dynamic.root_unavailable') || 'La carpeta configurada no está disponible ahora mismo. Revisa si fue movida, renombrada o si la unidad no está conectada.';
         } else {
-            rootStatus.innerText = 'No hay una carpeta raíz fija configurada todavía.';
+            rootStatus.innerText = i18n.t('library.dynamic.root_empty') || 'No hay una carpeta raíz fija configurada todavía.';
         }
     }
 
@@ -494,8 +502,8 @@ function renderGenreAssistant(items) {
     tbody.innerHTML = '';
 
     if (genreAssistantItems.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="color:#888; text-align:center;">No se encontraron carpetas dentro de la raiz configurada.</td></tr>';
-        if (summary) summary.innerText = 'Sin carpetas disponibles para sugerir.';
+        tbody.innerHTML = `<tr><td colspan="5" style="color:#888; text-align:center;">${i18n.t('library.dynamic.assistant_no_folders_table') || 'No se encontraron carpetas dentro de la raiz configurada.'}</td></tr>`;
+        if (summary) summary.innerText = i18n.t('library.dynamic.assistant_no_folders') || 'Sin carpetas disponibles para sugerir.';
         return;
     }
 
@@ -515,7 +523,7 @@ function renderGenreAssistant(items) {
         fragment.appendChild(tr);
     });
     tbody.appendChild(fragment);
-    if (summary) summary.innerText = `${genreAssistantItems.length} carpeta(s) sugeridas desde la raiz musical.`;
+    if (summary) summary.innerText = `${genreAssistantItems.length} ${i18n.t('library.dynamic.assistant_suggested') || 'carpeta(s) sugeridas desde la raiz musical.'}`;
 }
 
 window.openGenreAssistant = async function() {
@@ -530,10 +538,10 @@ window.openGenreAssistant = async function() {
     const modal = document.getElementById('genre-assistant-modal');
     const summary = document.getElementById('genre-assistant-summary');
     if (modal) modal.style.display = 'flex';
-    if (summary) summary.innerText = 'Leyendo carpetas de la raiz musical...';
+    if (summary) summary.innerText = i18n.t('library.dynamic.assistant_reading') || 'Leyendo carpetas de la raiz musical...';
     const result = await ipcRenderer.invoke('lib-preview-root-genres', rootPath);
     if (!result?.success) {
-        if (summary) summary.innerText = result?.error || 'No se pudo leer la carpeta raiz.';
+        if (summary) summary.innerText = result?.error || i18n.t('library.dynamic.assistant_read_error') || 'No se pudo leer la carpeta raiz.';
         renderGenreAssistant([]);
         return;
     }
@@ -563,12 +571,12 @@ window.applyGenreAssistant = async function() {
     }).filter(item => item && item.genre);
 
     if (selectedItems.length === 0) {
-        alert('Selecciona al menos una carpeta con genero.');
+        alert(i18n.t('library.dynamic.alert_genre') || 'Selecciona al menos una carpeta con genero.');
         return;
     }
 
     const summary = document.getElementById('genre-assistant-summary');
-    if (summary) summary.innerText = 'Guardando generos en la base de datos...';
+    if (summary) summary.innerText = i18n.t('library.dynamic.assistant_saving') || 'Guardando generos en la base de datos...';
     const result = await ipcRenderer.invoke('lib-apply-folder-genres', {
         rootPath: getPersistentRootPath(),
         items: selectedItems,
@@ -576,12 +584,12 @@ window.applyGenreAssistant = async function() {
     });
 
     if (!result?.success) {
-        if (summary) summary.innerText = result?.error || 'No se pudieron guardar los generos.';
+        if (summary) summary.innerText = result?.error || i18n.t('library.dynamic.assistant_save_error') || 'No se pudieron guardar los generos.';
         return;
     }
 
     await refreshWorkQueueFromDatabase();
-    if (summary) summary.innerText = `Listo: ${result.savedFolders || 0} carpeta(s) y ${result.updatedTracks || 0} pista(s) actualizadas.`;
+    if (summary) summary.innerText = (i18n.t('library.dynamic.assistant_ready') || 'Listo:') + ` ${result.savedFolders || 0} ` + (i18n.t('library.dynamic.assistant_folders_tracks') || 'carpeta(s) y') + ` ${result.updatedTracks || 0} ` + (i18n.t('library.dynamic.assistant_updated') || 'pista(s) actualizadas.');
     await loadGenreProfiles();
     setTimeout(() => { window.closeGenreAssistant(); }, 900);
 }
@@ -623,7 +631,7 @@ function renderTrackGenrePicker() {
     if (padres.length === 0 && subgeneros.length === 0 && sinIdentificar.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'track-genre-picker-empty';
-        empty.textContent = 'Todavia no hay generos guardados.';
+        empty.textContent = i18n.t('library.dynamic.genre_picker_empty') || 'Todavia no hay generos guardados.';
         container.appendChild(empty);
         return;
     }
@@ -648,12 +656,12 @@ function renderTrackGenrePicker() {
 
             const genreButton = document.createElement('button');
             genreButton.type = 'button';
-            genreButton.textContent = 'A genero';
+            genreButton.textContent = i18n.t('library.dynamic.genre_btn') || 'A genero';
             genreButton.addEventListener('click', () => setTrackGenreField('track-genre-name', name));
 
             const subgenreButton = document.createElement('button');
             subgenreButton.type = 'button';
-            subgenreButton.textContent = 'A subgenero';
+            subgenreButton.textContent = i18n.t('library.dynamic.subgenre_btn') || 'A subgenero';
             subgenreButton.addEventListener('click', () => setTrackGenreField('track-subgenre-name', name));
 
             row.appendChild(label);
@@ -663,9 +671,9 @@ function renderTrackGenrePicker() {
         });
     };
 
-    renderGroup('GÉNEROS PADRE (RAÍZ)', padres);
-    renderGroup('SUBGÉNEROS', subgeneros);
-    renderGroup('SIN IDENTIFICAR', sinIdentificar);
+    renderGroup(i18n.t('library.dynamic.group_parent') || 'GÉNEROS PADRE (RAÍZ)', padres);
+    renderGroup(i18n.t('library.dynamic.group_subgenre') || 'SUBGÉNEROS', subgeneros);
+    renderGroup(i18n.t('library.dynamic.group_unknown') || 'SIN IDENTIFICAR', sinIdentificar);
 }
 
 window.closeTrackGenreModal = function() {
@@ -687,8 +695,8 @@ function openTrackGenreModal(paths) {
     if (subgenreInput) subgenreInput.value = firstTrack?.subgenre || genreParts.slice(1).join(' / ');
     if (summary) {
         summary.innerText = pendingGenreEditPaths.length === 1
-            ? `Editando genero de: ${firstTrack?.title || path.basename(pendingGenreEditPaths[0])}`
-            : `El genero se aplicara a ${pendingGenreEditPaths.length} pista(s) seleccionada(s).`;
+            ? `${i18n.t('library.dynamic.genre_editing') || 'Editando genero de:'} ${firstTrack?.title || path.basename(pendingGenreEditPaths[0])}`
+            : `${i18n.t('library.dynamic.genre_multiple_pre') || 'El genero se aplicara a'} ${pendingGenreEditPaths.length} ${i18n.t('library.dynamic.genre_multiple_post') || 'pista(s) seleccionada(s).'}`;
     }
     renderTrackGenrePicker();
     const modal = document.getElementById('track-genre-modal');
@@ -704,7 +712,7 @@ window.applyTrackGenreModal = async function() {
     const genre = document.getElementById('track-genre-name')?.value?.trim() || '';
     const subgenre = document.getElementById('track-subgenre-name')?.value?.trim() || '';
     if (!genre) {
-        alert('Escribe un genero principal antes de aplicar.');
+        alert(i18n.t('library.dynamic.alert_main_genre') || 'Escribe un genero principal antes de aplicar.');
         return;
     }
     const result = await ipcRenderer.invoke('lib-set-track-genre', {
@@ -713,7 +721,7 @@ window.applyTrackGenreModal = async function() {
         subgenre
     });
     if (!result?.success) {
-        alert(result?.error || 'No se pudo guardar el genero.');
+        alert(result?.error || i18n.t('library.dynamic.alert_save_genre_err') || 'No se pudo guardar el genero.');
         return;
     }
     await refreshWorkQueueFromDatabase();
@@ -740,6 +748,17 @@ async function syncWorkQueueWithDisk() {
 
 async function initializeExplorer() {
     try {
+        const prefsPath = path.join(configDir, 'general_settings.json');
+        let lang = 'es';
+        try {
+            if (fs.existsSync(prefsPath)) {
+                const p = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+                lang = p.language || 'es';
+            }
+        } catch (e) {}
+        i18n.init(lang);
+        i18n.applyToDOM();
+
         await loadGenreProfiles();
         const paths = await ipcRenderer.invoke('get-default-paths');
         if (paths) defaultPaths = paths;
@@ -924,10 +943,10 @@ async function toggleFolderTree(wrapper, dirPath, childrenContainer, caret) {
                 res.dirs.sort((a,b)=>a.localeCompare(b)).forEach(d => childrenContainer.appendChild(createTreeNode(d, require('path').join(dirPath, d), true)));
                 res.files.sort((a,b)=>a.localeCompare(b)).forEach(f => childrenContainer.appendChild(createTreeNode(f, require('path').join(dirPath, f), false)));
                 if (res.dirs.length===0 && res.files.length===0) { 
-                    const empty = document.createElement('div'); empty.className = 'tree-empty'; empty.innerText = '(Vacía)'; childrenContainer.appendChild(empty); 
+                    const empty = document.createElement('div'); empty.className = 'tree-empty'; empty.innerText = i18n.t('library.dynamic.tree_empty') || '(Vacía)'; childrenContainer.appendChild(empty); 
                 }
             } else {
-                const errDiv = document.createElement('div'); errDiv.className = 'tree-empty'; errDiv.style.color = '#e74c3c'; errDiv.innerText = '❌ Acceso denegado'; childrenContainer.appendChild(errDiv);
+                const errDiv = document.createElement('div'); errDiv.className = 'tree-empty'; errDiv.style.color = '#e74c3c'; errDiv.innerText = '❌ ' + (i18n.t('library.dynamic.tree_denied') || 'Acceso denegado'); childrenContainer.appendChild(errDiv);
             }
             document.getElementById('loader-icon').style.display = 'none';
         }
@@ -968,7 +987,7 @@ function setupDropZone() {
 
 async function processPathsMassively(pathsArray) {
     document.getElementById('import-modal').style.display = 'flex';
-    document.getElementById('import-status-text').innerText = "Escaneando directorios en el disco duro...";
+    document.getElementById('import-status-text').innerText = i18n.t('library.dynamic.import_scanning') || "Escaneando directorios en el disco duro...";
     document.getElementById('import-progress-fill').style.width = '0%';
     document.getElementById('import-progress-percent').innerText = '0%';
     
@@ -990,7 +1009,7 @@ async function processPathsMassively(pathsArray) {
                 allExtractedFiles = allExtractedFiles.concat(res.files);
             }
         } else {
-            if (/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(itemPath)) {
+            if (/\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(itemPath)) {
                 allExtractedFiles.push({ path: itemPath, name: require('path').basename(itemPath) });
             }
         }
@@ -1007,7 +1026,7 @@ async function processPathsMassively(pathsArray) {
         return;
     }
 
-    document.getElementById('import-status-text').innerText = "Leyendo datos guardados de estas pistas...";
+    document.getElementById('import-status-text').innerText = i18n.t('library.dynamic.import_reading') || "Leyendo datos guardados de estas pistas...";
     const scannedPaths = allExtractedFiles.map(file => file.path);
     const scopedDb = await ipcRenderer.invoke('lib-get-db-tracks', scannedPaths);
     manualCuesDB = { ...manualCuesDB, ...(scopedDb || {}) };
@@ -1032,7 +1051,7 @@ async function processPathsMassively(pathsArray) {
         let percent = Math.round((processed / totalFiles) * 100);
         document.getElementById('import-progress-fill').style.width = percent + '%';
         document.getElementById('import-progress-percent').innerText = percent + '%';
-        document.getElementById('import-status-text').innerText = `Agregando a la lista: ${processed} de ${totalFiles}`;
+        document.getElementById('import-status-text').innerText = (i18n.t('library.dynamic.import_adding') || 'Agregando a la lista:') + ` ${processed} / ${totalFiles}`;
 
         if (processed < totalFiles) {
             setTimeout(processChunk, 15); 
@@ -1120,8 +1139,8 @@ function renderTableHeader() {
             th.oncontextmenu = (e) => {
                 e.preventDefault(); e.stopPropagation(); hideAllMenus();
                 const menu = document.getElementById('db-header-menu');
-                document.getElementById('ctx-db-peak').innerHTML = dbViewMode === 'peak' ? '✓ Modo DJ (Picos)' : '&nbsp;&nbsp;&nbsp; Modo DJ (Picos)';
-                document.getElementById('ctx-db-rms').innerHTML = dbViewMode === 'rms' ? '✓ Modo Estudio (Promedio)' : '&nbsp;&nbsp;&nbsp; Modo Estudio (Promedio)';
+                document.getElementById('ctx-db-peak').innerHTML = dbViewMode === 'peak' ? ('✓ ' + (i18n.t('library.db_menu.peak') || 'Modo DJ (Pico)')) : ('&nbsp;&nbsp;&nbsp; ' + (i18n.t('library.db_menu.peak') || 'Modo DJ (Pico)'));
+                document.getElementById('ctx-db-rms').innerHTML = dbViewMode === 'rms' ? ('✓ ' + (i18n.t('library.db_menu.rms') || 'Modo Estudio (Promedio)')) : ('&nbsp;&nbsp;&nbsp; ' + (i18n.t('library.db_menu.rms') || 'Modo Estudio (Promedio)'));
                 showContextMenu(menu, e.pageX, e.pageY);
             };
         }
@@ -1147,7 +1166,7 @@ function renderVirtualQueue() {
     
     if (filteredTracks.length === 0) {
         table.style.display = 'none'; spacer.style.height = '0px'; emptyMsg.style.display = 'flex';
-        document.getElementById('lib-status-count').innerText = `Lista: 0 pistas`; return;
+        document.getElementById('lib-status-count').innerText = i18n.t('library.track_count') || 'Lista: 0 pistas'; return;
     }
     
     table.style.display = 'table'; emptyMsg.style.display = 'none';
@@ -1203,7 +1222,7 @@ function renderVirtualQueue() {
                     break;
                 case 'fullPath': td.innerText = track.fullPath; td.title = track.fullPath; break;
                 case 'title': 
-                    if (track.metaError) { td.innerHTML = `<span title="Error Metadatos" style="cursor:help;">⚠️</span> ${track.title}`; td.style.color = "#e74c3c"; } 
+                    if (track.metaError) { td.innerHTML = `<span title="${i18n.t('library.dynamic.meta_err_title') || 'Error Metadatos'}" style="cursor:help;">⚠️</span> ${track.title}`; td.style.color = "#e74c3c"; } 
                     else { td.innerText = track.title; td.style.color = "#fff"; } break;
                 case 'artist': td.innerText = track.artist; break;
                 case 'album': td.innerText = track.album; break;
@@ -1241,7 +1260,7 @@ function renderVirtualQueue() {
     }
     
     tbody.appendChild(fragment);
-    document.getElementById('lib-status-count').innerText = `Mostrando: ${filteredTracks.length} / Lista Total: ${workQueueTracks.length} pistas`;
+    document.getElementById('lib-status-count').innerText = (i18n.t('library.dynamic.showing') || 'Mostrando:') + ` ${filteredTracks.length} / ${workQueueTracks.length} ` + (i18n.t('library.dynamic.tracks') || 'pistas');
 }
 
 function setupVirtualScroll() {
@@ -1479,7 +1498,7 @@ function startProgressUI(totalTasks, message) {
     document.getElementById('modal-stop-warning').style.display = 'none';
     
     document.getElementById('btn-analyze-main').classList.add('working');
-    document.getElementById('btn-analyze-text').innerText = "Procesando... 0%"; 
+    document.getElementById('btn-analyze-text').innerText = (i18n.t('library.processing') || "Procesando...") + " 0%"; 
     document.getElementById('btn-analyze-fill').style.width = "0%";
     
     document.getElementById('lib-processing-status').style.display = 'inline';
@@ -1564,7 +1583,7 @@ function handleTaskDone(result, processName) {
     document.getElementById('modal-progress-file').innerText = `(${completedBatchTasks}/${totalBatchTasks}) ${filenameDisplay}`;
     document.getElementById('modal-progress-percent').innerText = `${percent}%`; 
     document.getElementById('modal-progress-fill').style.width = `${percent}%`;
-    document.getElementById('btn-analyze-text').innerText = `Procesando... ${percent}%`; 
+    document.getElementById('btn-analyze-text').innerText = (i18n.t('library.processing') || 'Procesando...') + ` ${percent}%`; 
     document.getElementById('btn-analyze-fill').style.width = `${percent}%`;
     document.getElementById('lib-processing-status').innerText = `${processName}... (${completedBatchTasks}/${totalBatchTasks})`;
 
@@ -1615,26 +1634,26 @@ window.stopBatchAnalysis = function() {
     ipcRenderer.send('lib-start-meta-internet', []);
 
     document.getElementById('modal-stop-warning').style.display = 'block';
-    document.getElementById('modal-stop-warning').innerText = "Cancelando proceso...";
+    document.getElementById('modal-stop-warning').innerText = i18n.t('library.dynamic.cancel_process') || "Cancelando proceso...";
     document.getElementById('btn-modal-stop').disabled = true;
-    document.getElementById('lib-processing-status').innerText = "Deteniendo...";
+    document.getElementById('lib-processing-status').innerText = i18n.t('library.dynamic.stopping') || "Deteniendo...";
     
     setTimeout(() => { if(isAnalyzing) finishAnalysisUI(true); }, 1500);
 }
 
 function finishAnalysisUI(wasCancelled) {
     isAnalyzing = false; totalBatchTasks = 0; completedBatchTasks = 0;
-    document.getElementById('lib-processing-status').innerText = wasCancelled ? "Proceso Cancelado" : "¡Proceso Completado!";
+    document.getElementById('lib-processing-status').innerText = wasCancelled ? (i18n.t('library.dynamic.process_canceled') || "Proceso Cancelado") : (i18n.t('library.dynamic.process_completed') || "¡Proceso Completado!");
     setTimeout(() => { document.getElementById('lib-processing-status').style.display = 'none'; }, 3000);
     
     document.getElementById('modal-progress-fill').style.width = "100%"; 
     document.querySelectorAll('.config-input').forEach(el => el.disabled = false);
     document.getElementById('btn-modal-stop').style.display = 'none'; document.getElementById('btn-modal-hide').style.display = 'none'; 
     document.getElementById('btn-modal-start').style.display = 'block'; document.getElementById('btn-modal-cancel').style.display = 'block';
-    document.getElementById('modal-progress-file').innerText = wasCancelled ? "Cancelado por el usuario." : "¡Proceso completado con éxito!";
+    document.getElementById('modal-progress-file').innerText = wasCancelled ? (i18n.t('library.dynamic.canceled_by_user') || "Cancelado por el usuario.") : (i18n.t('library.dynamic.process_success') || "¡Proceso completado con éxito!");
     
     document.getElementById('btn-analyze-main').classList.remove('working');
-    document.getElementById('btn-analyze-text').innerText = "▶ Centro de Procesamiento"; document.getElementById('btn-analyze-fill').style.width = "0%";
+    document.getElementById('btn-analyze-text').innerText = i18n.t('library.analyze_btn_text') || "▶ Centro de Procesamiento"; document.getElementById('btn-analyze-fill').style.width = "0%";
     
     renderVirtualQueue();
 }
@@ -1673,6 +1692,24 @@ ipcRenderer.on('refresh-manual-cues', async () => {
     workQueueTracks = workQueueTracks.map(track => buildQueueTrack(track.fullPath, manualCuesDB[track.fullPath] || {}, track));
     initFuseEngine();
     applyCurrentSearchAndRender();
+});
+
+ipcRenderer.on('settings-updated', (e, payload) => {
+    try {
+        const prefsPath = path.join(configDir, 'general_settings.json');
+        let lang = 'es';
+        if (fs.existsSync(prefsPath)) {
+            const p = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+            lang = p.language || 'es';
+        }
+        i18n.init(lang);
+        i18n.applyToDOM();
+        loadLibraryPrefs(); // Reload columns with new translations
+        renderVirtualQueue();
+        refreshLibraryRootUi();
+    } catch(err) {
+        console.error("Error applying language from settings-updated:", err);
+    }
 });
 
 initializeExplorer();

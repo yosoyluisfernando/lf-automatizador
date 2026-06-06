@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Reglas de Separación Musical - LF Automatizador</title>
+    <title data-i18n="music_separation.title_window">Reglas de Separación Musical - LF Automatizador</title>
     <style>
         :root { --bg:#121212; --panel:#18181a; --header:#1a1a1c; --border:#333; --accent:#00a8ff; --text:#e0e0e0; --muted:#888; --active:#2ecc71; --danger:#e74c3c; --warning:#f39c12; }
         * { box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",sans-serif; }
@@ -50,63 +50,63 @@
 </head>
 <body>
     <div class="header">
-        <div class="logo-text">🎚️ Reglas de Separación Musical</div>
+        <div class="logo-text" data-i18n="music_separation.title_main">🎚️ Reglas de Separación Musical</div>
         <div class="header-actions">
-            <button class="btn" id="btn-cancel">Cerrar</button>
-            <button class="btn btn-save" id="btn-save">Guardar</button>
+            <button class="btn" id="btn-cancel" data-i18n="music_separation.btn_cancel">Cerrar</button>
+            <button class="btn btn-save" id="btn-save" data-i18n="music_separation.btn_save">Guardar</button>
         </div>
     </div>
 
     <div class="content">
         <div class="card">
-            <h2>Configuración Global</h2>
+            <h2 data-i18n="music_separation.card_global">Configuración Global</h2>
 
             <div class="field">
-                <label for="global-song-hours">Separación de canciones</label>
+                <label for="global-song-hours" data-i18n="music_separation.lbl_song_sep">Separación de canciones</label>
                 <input type="number" id="global-song-hours" min="1" max="48" value="12">
-                <span class="unit">horas</span>
-                <div class="hint">No se puede desactivar. Mínimo 1 h, máximo 48 h (predeterminado 12 h). Sincronizada con el panel de Reportes.</div>
+                <span class="unit" data-i18n="music_separation.unit_hours">horas</span>
+                <div class="hint" data-i18n="music_separation.hint_song_sep">No se puede desactivar. Mínimo 1 h, máximo 48 h (predeterminado 12 h). Sincronizada con el panel de Reportes.</div>
             </div>
 
             <div class="field">
                 <label for="global-artist-enabled" style="display:flex;align-items:center;gap:8px;">
                     <input type="checkbox" id="global-artist-enabled">
-                    Separación de artistas
+                    <span data-i18n="music_separation.lbl_artist_sep">Separación de artistas</span>
                 </label>
                 <input type="number" id="global-artist-hours" min="1" max="48" value="1">
-                <span class="unit">horas</span>
-                <div class="hint">Opcional (desactivada por defecto). Mínimo 1 h, máximo 48 h.</div>
+                <span class="unit" data-i18n="music_separation.unit_hours">horas</span>
+                <div class="hint" data-i18n="music_separation.hint_artist_sep">Opcional (desactivada por defecto). Mínimo 1 h, máximo 48 h.</div>
             </div>
 
             <div class="field">
-                <label for="global-subfolders">Incluir subcarpetas en carpetas aleatorias</label>
+                <label for="global-subfolders" data-i18n="music_separation.lbl_subfolders">Incluir subcarpetas en carpetas aleatorias</label>
                 <select id="global-subfolders" style="grid-column:2 / -1;">
-                    <option value="ask">Siempre preguntar</option>
-                    <option value="always">Siempre incluir</option>
-                    <option value="never">Nunca incluir</option>
+                    <option value="ask" data-i18n="music_separation.opt_ask">Siempre preguntar</option>
+                    <option value="always" data-i18n="music_separation.opt_always">Siempre incluir</option>
+                    <option value="never" data-i18n="music_separation.opt_never">Nunca incluir</option>
                 </select>
             </div>
         </div>
 
         <div class="card">
-            <h2>Configuración por Carpetas</h2>
+            <h2 data-i18n="music_separation.card_folders">Configuración por Carpetas</h2>
             <div class="toolbar">
-                <button class="icon-btn add" id="btn-add-folder" title="Agregar carpeta">+</button>
-                <button class="icon-btn del" id="btn-del-folder" title="Eliminar regla seleccionada" disabled>−</button>
-                <span class="footer-note">Las reglas por carpeta tienen prioridad sobre las globales. Deja un valor vacío para heredar el global.</span>
+                <button class="icon-btn add" id="btn-add-folder" title="Agregar carpeta" data-i18n="[title]music_separation.btn_add_folder">+</button>
+                <button class="icon-btn del" id="btn-del-folder" title="Eliminar regla seleccionada" data-i18n="[title]music_separation.btn_del_folder" disabled>−</button>
+                <span class="footer-note" data-i18n="music_separation.note_priority">Las reglas por carpeta tienen prioridad sobre las globales. Deja un valor vacío para heredar el global.</span>
             </div>
             <table>
                 <thead>
                     <tr>
-                        <th style="width:50%;">Carpeta</th>
-                        <th>Canciones (h)</th>
-                        <th>Artista</th>
-                        <th>Artista (h)</th>
+                        <th style="width:50%;" data-i18n="music_separation.th_folder">Carpeta</th>
+                        <th data-i18n="music_separation.th_songs_h">Canciones (h)</th>
+                        <th data-i18n="music_separation.th_artist">Artista</th>
+                        <th data-i18n="music_separation.th_artist_h">Artista (h)</th>
                     </tr>
                 </thead>
                 <tbody id="folder-rules-body"></tbody>
             </table>
-            <div class="empty" id="folder-empty">No hay reglas por carpeta. Usa el botón (+) para agregar una.</div>
+            <div class="empty" id="folder-empty" data-i18n="music_separation.empty_rules">No hay reglas por carpeta. Usa el botón (+) para agregar una.</div>
         </div>
     </div>
 

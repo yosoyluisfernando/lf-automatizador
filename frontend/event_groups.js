@@ -1,4 +1,28 @@
 const { ipcRenderer } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { getConfigDir } = require('../backend/utils/app_paths');
+const i18n = require('./i18n');
+
+const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
+
+function loadLanguage() {
+    let lang = 'es';
+    try {
+        const prefsPath = path.join(configDir, 'general_settings.json');
+        if (fs.existsSync(prefsPath)) {
+            const p = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+            lang = p.language || 'es';
+        }
+    } catch (e) {}
+    i18n.init(lang);
+    i18n.applyToDOM();
+}
+
+ipcRenderer.on('settings-updated', () => {
+    loadLanguage();
+    updatePreview();
+});
 
 let groupsDB = [];
 let currentSelectedId = null;
@@ -19,12 +43,12 @@ async function loadDB() {
             groupsDB = rows;
         } else {
             // Predeterminado en caso de que la DB esté vacía
-            groupsDB = [{ id: 'g_general', name: 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }];
+            groupsDB = [{ id: 'g_general', name: i18n.t('event_groups.dyn_general') || 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }];
             saveDB();
         }
     } catch(e){
         console.error("Error al cargar grupos desde SQLite vía IPC:", e);
-        groupsDB = [{ id: 'g_general', name: 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }];
+        groupsDB = [{ id: 'g_general', name: i18n.t('event_groups.dyn_general') || 'General', colorBg: '#222225', colorText: '#00a8ff', readonly: true }];
     }
     renderList();
     if(groupsDB.length > 0) selectGroup(groupsDB[0].id);
@@ -72,7 +96,7 @@ function updatePreview() {
     previewBox.style.backgroundColor = inputColorBg.value;
     previewText.style.color = inputColorTxt.value;
     previewArrow.style.color = inputColorTxt.value;
-    previewText.innerText = inputName.value || "Vista Previa del Grupo";
+    previewText.innerText = inputName.value || i18n.t('event_groups.preview_txt') || "Vista Previa del Grupo";
 }
 
 function updateCurrentGroup() {
@@ -107,7 +131,7 @@ document.getElementById('btn-reset-colors').addEventListener('click', (e) => {
 document.getElementById('btn-add-group').addEventListener('click', () => {
     const newId = 'g_' + Date.now();
     groupsDB.push({
-        id: newId, name: 'Nuevo Grupo', colorBg: '#222225', colorText: '#00a8ff', readonly: false
+        id: newId, name: i18n.t('event_groups.dyn_new_group') || 'Nuevo Grupo', colorBg: '#222225', colorText: '#00a8ff', readonly: false
     });
     selectGroup(newId);
 });
@@ -134,4 +158,7 @@ document.getElementById('btn-cancel').addEventListener('click', (e) => {
     window.close();
 });
 
-document.addEventListener('DOMContentLoaded', loadDB);
+document.addEventListener('DOMContentLoaded', () => {
+    loadLanguage();
+    loadDB();
+});

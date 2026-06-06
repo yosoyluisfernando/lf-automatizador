@@ -8,7 +8,7 @@ const fileTypesPath = path.join(configDir, 'file_types.json');
 const explicitTypesPath = path.join(configDir, 'explicit_types.json');
 const fs = require('fs');
 
-const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
+const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i;
 
 function loadJsonConfig(filePath, fallback) {
     try {

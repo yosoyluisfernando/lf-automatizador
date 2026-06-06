@@ -2,7 +2,7 @@ const { parentPort } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 
-const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
+const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i;
 const MAX_RECURSIVE_FILES = 100000;
 
 async function readDirSafe(dirPath) {

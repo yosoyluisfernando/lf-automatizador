@@ -5,11 +5,12 @@ module.exports = function(context) {
         lastVuLevels, buildVuPayload, scheduleVuBroadcast, broadcastVuLevels, auxCueSources,
         resolveLevel, resolveDb, resolveStereoPair, resolveStereoDbPair
     } = context;
+    const i18n = require('../i18n_main');
     let fileMetadataEditorWindow = null;
 
-    ipcMain.handle('dialog:askClearLibrary', async () => { const res = await dialog.showMessageBox(context.libraryWindow || context.mainWindow, { type: 'question', buttons: ['Guardar Lista', 'No Guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar Lista de Trabajo', message: '¿Desea guardar esta lista de trabajo antes de limpiarla?', noLink: true }); return res.response; });
-    ipcMain.handle('dialog:openLibraryList', async () => { const res = await dialog.showOpenDialog(context.libraryWindow || context.mainWindow, { title: 'Abrir Lista de Trabajo', properties: ['openFile'], filters: [{ name: 'LF Library File', extensions: ['lflib'] }] }); return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; });
-    ipcMain.handle('dialog:saveLibraryList', async () => { const res = await dialog.showSaveDialog(context.libraryWindow || context.mainWindow, { title: 'Guardar Lista de Trabajo', defaultPath: 'Mi_Libreria.lflib', filters: [{ name: 'LF Library File', extensions: ['lflib'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; });
+    ipcMain.handle('dialog:askClearLibrary', async () => { const res = await dialog.showMessageBox(context.libraryWindow || context.mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save_list'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.clear_library.title'), message: i18n.t('dialogs.clear_library.message'), noLink: true }); return res.response; });
+    ipcMain.handle('dialog:openLibraryList', async () => { const res = await dialog.showOpenDialog(context.libraryWindow || context.mainWindow, { title: i18n.t('dialogs.open_library.title'), properties: ['openFile'], filters: [{ name: 'LF Library File', extensions: ['lflib'] }] }); return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; });
+    ipcMain.handle('dialog:saveLibraryList', async () => { const res = await dialog.showSaveDialog(context.libraryWindow || context.mainWindow, { title: i18n.t('dialogs.save_library.title'), defaultPath: 'Mi_Libreria.lflib', filters: [{ name: 'LF Library File', extensions: ['lflib'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; });
     ipcMain.on('save-file-sync', (e, filePath, data) => { try { fs.writeFileSync(filePath, data, 'utf-8'); } catch(err) { writeLog("Error save-file-sync: " + err); } });
 
     ipcMain.handle('db-maintenance-vacuum', async () => {

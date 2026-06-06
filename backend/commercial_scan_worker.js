@@ -2,7 +2,7 @@ const { parentPort } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 
-const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
+const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i;
 
 function scanPath(targetPath, output) {
     let stat;

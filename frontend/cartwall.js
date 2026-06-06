@@ -61,16 +61,47 @@ function extractFirstDroppedPath(e) {
     return null;
 }
 
-function isValidAudioPath(p) { return !!p && /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(p); }
+function isValidAudioPath(p) { return !!p && /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i.test(p); }
+function cwHslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => {
+        const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        return Math.round(255 * c).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+}
 function getRandomDarkEffectColor() {
-    const palette = ['#164e3a', '#1f4b5f', '#47346b', '#61395a', '#653b2f', '#36502a', '#214a70', '#5a4630', '#285057', '#4d375f'];
-    return palette[Math.floor(Math.random() * palette.length)];
+    // Matiz aleatorio en todo el círculo (0-359) → máxima variedad. Saturación
+    // media y luminosidad baja para conservar el tono oscuro y texto legible.
+    const hue = Math.floor(Math.random() * 360);
+    const sat = 45 + Math.floor(Math.random() * 20);   // 45-64 %
+    const light = 22 + Math.floor(Math.random() * 10); // 22-31 %
+    return cwHslToHex(hue, sat, light);
+}
+
+// Sondeo de duración autocontenido (esta ventana no tiene getAudioDuration).
+// Lee solo los metadatos del archivo; se cachea por ruta para no repetir.
+const cwDurationCache = new Map();
+function cwProbeDuration(filePath) {
+    if (!filePath) return Promise.resolve(0);
+    if (cwDurationCache.has(filePath)) return Promise.resolve(cwDurationCache.get(filePath));
+    return new Promise((resolve) => {
+        const audio = new Audio();
+        const done = (val) => { cwDurationCache.set(filePath, val); resolve(val); };
+        const timeout = setTimeout(() => done(0), 4000);
+        audio.addEventListener('loadedmetadata', () => { clearTimeout(timeout); done(Number.isFinite(audio.duration) ? audio.duration : 0); });
+        audio.addEventListener('error', () => { clearTimeout(timeout); done(0); });
+        audio.preload = 'metadata';
+        audio.src = `file:///${filePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')}`;
+    });
 }
 
 function createEmptyCwButtons(total) {
     const botones = [];
     for (let i = 1; i <= total; i++) {
-        botones.push({ id: i, label: i.toString(), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '' });
+        botones.push({ id: i, label: i.toString(), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '', duration: 0 });
     }
     return botones;
 }
@@ -128,6 +159,8 @@ async function assignPathToButton(btnInfo, filePath) {
     btnInfo.name = (nombre || '').toUpperCase();
     btnInfo.bg = getRandomDarkEffectColor();
     btnInfo.text = '#FFFFFF';
+    // Análisis único al insertar: duración guardada en el perfil.
+    btnInfo.duration = await cwProbeDuration(filePath) || 0;
     await ipcRenderer.invoke('save-cartwall-profiles', cartwallState);
     renderCartwallGrid();
     return true;
@@ -340,6 +373,30 @@ async function loadState() {
     renderCartwallTabs();
     renderCartwallGrid();
     setCartwallUiState({ mode: 'floating' });
+    backfillCwDurations(); // segundo plano, una sola vez
+}
+
+// Calcula UNA sola vez las duraciones faltantes (perfiles viejos). Los botones
+// que ya tienen `duration` no se vuelven a sondear.
+let cwDurationsBackfilled = false;
+async function backfillCwDurations() {
+    if (cwDurationsBackfilled || !cartwallState?.profiles) return;
+    cwDurationsBackfilled = true;
+    let changed = false;
+    for (const profile of cartwallState.profiles) {
+        for (const paleta of (profile.paletas || [])) {
+            for (const b of (paleta.botones || [])) {
+                if (b && b.type === 'audio' && b.file && !(Number(b.duration) > 0)) {
+                    const d = await cwProbeDuration(b.file) || 0;
+                    if (d > 0) { b.duration = d; changed = true; }
+                }
+            }
+        }
+    }
+    if (changed) {
+        try { await ipcRenderer.invoke('save-cartwall-profiles', cartwallState); } catch (_) { }
+        renderCartwallGrid();
+    }
 }
 
 function getActiveCwPalette() {
@@ -425,7 +482,10 @@ function handleCartwallModalKeydown(event, acceptFn, cancelFn) {
 }
 
 function getCartwallButtonReadyText(btnInfo) {
-    return isCartwallButtonPlayable(btnInfo) ? 'LISTO' : '';
+    if (!isCartwallButtonPlayable(btnInfo)) return '';
+    // Duración total (mm:ss) si ya está calculada; si no, 'LISTO' como respaldo.
+    const d = Number(btnInfo?.duration) || 0;
+    return d > 0 ? formatCwTime(d) : 'LISTO';
 }
 
 function refreshCartwallModeMenu(btnInfo) {
@@ -459,7 +519,7 @@ function forgetFloatingPlayingTab(tabIndex) {
 }
 
 function createEmptyCwButtonForSlot(id) {
-    return { id, label: String(id), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '' };
+    return { id, label: String(id), file: '', type: 'audio', folder: '', name: '', bg: '', text: '#FFFFFF', vol: 1, loop: false, stopOther: false, overlap: false, restart: false, shortcut: '', duration: 0 };
 }
 
 async function moveCartwallButton(fromTabIndex, fromId, toTabIndex, toId) {
@@ -611,9 +671,10 @@ document.getElementById('menu-editar').onclick = () => {
     document.getElementById('cw-edit-filepath').value = (botonSeleccionado.type === 'time' || isCartwallClimateButton(botonSeleccionado)) ? (botonSeleccionado.folder || '') : (botonSeleccionado.file || '');
     document.getElementById('cw-edit-name').value = botonSeleccionado.name || ''; 
     document.getElementById('cw-edit-volume').value = botonSeleccionado.vol || 1; 
-    document.getElementById('cw-edit-bg-color').value = botonSeleccionado.bg || '#444444'; 
-    document.getElementById('cw-edit-text-color').value = botonSeleccionado.text || '#FFFFFF'; 
-    hideAllFloatingMenus(); 
+    // Efecto nuevo sin color → proponer uno aleatorio en vez del gris por defecto.
+    document.getElementById('cw-edit-bg-color').value = botonSeleccionado.bg || getRandomDarkEffectColor();
+    document.getElementById('cw-edit-text-color').value = botonSeleccionado.text || '#FFFFFF';
+    hideAllFloatingMenus();
     cwEditModal.style.display = 'flex';
     cwEditModal.tabIndex = -1;
     setTimeout(() => cwEditModal.focus(), 0);
@@ -621,8 +682,8 @@ document.getElementById('menu-editar').onclick = () => {
 
 document.getElementById('menu-limpiar').onclick = () => { 
     ipcRenderer.send('remote-cw-stop', { ...botonSeleccionado, _cwTabIndex: cwActiveTabIndex });
-    botonSeleccionado.file = ''; botonSeleccionado.folder = ''; botonSeleccionado.type = 'audio'; botonSeleccionado.name = ''; botonSeleccionado.bg = ''; botonSeleccionado.overlap = false; botonSeleccionado.restart = false; 
-    ipcRenderer.invoke('save-cartwall-profiles', cartwallState); renderCartwallGrid(); hideAllFloatingMenus(); 
+    botonSeleccionado.file = ''; botonSeleccionado.folder = ''; botonSeleccionado.type = 'audio'; botonSeleccionado.name = ''; botonSeleccionado.bg = ''; botonSeleccionado.overlap = false; botonSeleccionado.restart = false; botonSeleccionado.duration = 0;
+    ipcRenderer.invoke('save-cartwall-profiles', cartwallState); renderCartwallGrid(); hideAllFloatingMenus();
 };
 
 document.getElementById('menu-bucle').onclick = () => { if (isCartwallTimeButton(botonSeleccionado) || isCartwallClimateButton(botonSeleccionado)) return; botonSeleccionado.loop = !botonSeleccionado.loop; ipcRenderer.invoke('save-cartwall-profiles', cartwallState); hideAllFloatingMenus(); };
@@ -709,10 +770,14 @@ document.getElementById('btn-save-cw-edit').onclick = async () => {
     botonSeleccionado.name = document.getElementById('cw-edit-name').value; 
     botonSeleccionado.vol = parseFloat(document.getElementById('cw-edit-volume').value); 
     botonSeleccionado.bg = document.getElementById('cw-edit-bg-color').value; 
-    botonSeleccionado.text = document.getElementById('cw-edit-text-color').value; 
+    botonSeleccionado.text = document.getElementById('cw-edit-text-color').value;
     resetCartwallButtonModeOptions(botonSeleccionado);
-    await ipcRenderer.invoke('save-cartwall-profiles', cartwallState); 
-    renderCartwallGrid(); 
+    // Recalcular duración solo si es audio con archivo; si no, dejarla en 0.
+    botonSeleccionado.duration = (selectedType === 'audio' && botonSeleccionado.file)
+        ? (await cwProbeDuration(botonSeleccionado.file) || 0)
+        : 0;
+    await ipcRenderer.invoke('save-cartwall-profiles', cartwallState);
+    renderCartwallGrid();
     closeCwEditModal();
 };
 

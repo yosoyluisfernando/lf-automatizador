@@ -1247,7 +1247,7 @@ module.exports = function(context) {
 
     ipcMain.handle('dialog:openFile', async (event) => { 
         const currentWin = BrowserWindow.fromWebContents(event.sender) || context.eventEditorWindow || context.mainWindow; 
-        const res = await dialog.showOpenDialog(currentWin, { properties: ['openFile'], filters: [ { name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac'] } ] });
+        const res = await dialog.showOpenDialog(currentWin, { properties: ['openFile'], filters: [ { name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aiff', 'aif', 'mp2'] } ] });
         return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; 
     }); 
     

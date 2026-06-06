@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Acerca de LF Automatizador</title>
+    <title data-i18n="[text]about.window_title">Acerca de LF Automatizador</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -258,94 +258,101 @@
 
         <div class="sep"></div>
 
-        <div class="creator-label">Desarrollado por</div>
+        <div class="creator-label" data-i18n="about.developed_by">Desarrollado por</div>
         <div class="creator-name">Luis Fernando Velasquez</div>
 
-        <div class="links-label">Recursos y comunidad</div>
+        <div class="links-label" data-i18n="about.resources">Recursos y comunidad</div>
         <div class="links">
             <button class="link-btn" id="btn-github">
                 <span class="icon">🐙</span>
-                <span class="label">Código fuente en GitHub</span>
+                <span class="label" data-i18n="about.source_code">Código fuente en GitHub</span>
                 <span class="arrow">↗</span>
             </button>
             <button class="link-btn" id="btn-telegram-channel">
                 <span class="icon">📢</span>
-                <span class="label">Canal de novedades (Telegram)</span>
+                <span class="label" data-i18n="about.telegram_channel">Canal de novedades (Telegram)</span>
                 <span class="arrow">↗</span>
             </button>
             <button class="link-btn" id="btn-telegram-group">
                 <span class="icon">💬</span>
-                <span class="label">Grupo de la comunidad (Telegram)</span>
+                <span class="label" data-i18n="about.telegram_group">Grupo de la comunidad (Telegram)</span>
                 <span class="arrow">↗</span>
             </button>
             <button class="link-btn" id="btn-paypal">
                 <span class="icon">☕</span>
-                <span class="label">Apóyame (Donar por PayPal)</span>
+                <span class="label" data-i18n="about.donate">Apoya el proyecto (Donar por PayPal)</span>
                 <span class="arrow">↗</span>
             </button>
         </div>
 
         <details class="deps-details">
-            <summary class="deps-summary">Librerías de código abierto utilizadas</summary>
+            <summary class="deps-summary" data-i18n="about.libraries">Librerías de código abierto utilizadas</summary>
             <div class="deps-list">
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">electron</span><span class="dep-license">MIT</span></div>
-                    <div class="dep-desc">Framework principal que permite construir y ejecutar la aplicación de radio en el escritorio utilizando tecnologías web.</div>
+                    <div class="dep-desc" data-i18n="about.desc_electron">Framework principal que permite construir y ejecutar la aplicación de radio en el escritorio utilizando tecnologías web.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">electron-builder</span><span class="dep-license">MIT</span></div>
-                    <div class="dep-desc">Herramienta para empaquetar y generar los instaladores de la aplicación listos para su distribución.</div>
+                    <div class="dep-desc" data-i18n="about.desc_electron_builder">Herramienta para empaquetar y generar los instaladores de la aplicación listos para su distribución.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">@electron/rebuild</span><span class="dep-license">MIT</span></div>
-                    <div class="dep-desc">Recompila módulos nativos de Node.js para asegurar su compatibilidad con la versión interna de Node que usa Electron.</div>
+                    <div class="dep-desc" data-i18n="about.desc_electron_rebuild">Recompila módulos nativos de Node.js para asegurar su compatibilidad con la versión interna de Node que usa Electron.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">better-sqlite3</span><span class="dep-license">MIT</span></div>
-                    <div class="dep-desc">Librería rápida para SQLite3. Maneja la base de datos local (catálogos de canciones, pautas y horarios).</div>
+                    <div class="dep-desc" data-i18n="about.desc_better_sqlite3">Librería rápida para SQLite3. Maneja la base de datos local (catálogos de canciones, pautas y horarios).</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">ffmpeg-static</span><span class="dep-license">GPL-3.0</span></div>
-                    <div class="dep-desc">Binarios precompilados de FFmpeg. Se utiliza para el procesamiento y análisis técnico de los archivos de audio.</div>
+                    <div class="dep-desc" data-i18n="about.desc_ffmpeg_static">Binarios precompilados de FFmpeg. Se utiliza para el procesamiento y análisis técnico de los archivos de audio.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">fuse.js</span><span class="dep-license">Apache-2.0</span></div>
-                    <div class="dep-desc">Librería de búsqueda aproximada. Permite buscar rápidamente pistas, artistas o álbumes en la biblioteca.</div>
+                    <div class="dep-desc" data-i18n="about.desc_fuse_js">Librería de búsqueda aproximada. Permite buscar rápidamente pistas, artistas o álbumes en la biblioteca.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">node-id3</span><span class="dep-license">MIT</span></div>
-                    <div class="dep-desc">Lector y editor de metadatos. Extrae la información de las etiquetas ID3 (título, artista, etc.) de los audios.</div>
+                    <div class="dep-desc" data-i18n="about.desc_node_id3">Lector y editor de metadatos. Extrae la información de las etiquetas ID3 (título, artista, etc.) de los audios.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">cpal (Rust)</span><span class="dep-license">Apache-2.0</span></div>
-                    <div class="dep-desc">Librería de entrada/salida de audio. Interfaz de bajo nivel con las tarjetas de sonido del sistema.</div>
+                    <div class="dep-desc" data-i18n="about.desc_cpal">Librería de entrada/salida de audio. Interfaz de bajo nivel con las tarjetas de sonido del sistema.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">rodio (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
-                    <div class="dep-desc">Librería principal de reproducción de audio. Maneja decodificación, mezcla y envío al canal de audio.</div>
+                    <div class="dep-desc" data-i18n="about.desc_rodio">Librería principal de reproducción de audio. Maneja la mezcla, el control de los reproductores y el envío al canal de audio.</div>
+                </div>
+                <div class="dep-item">
+                    <div class="dep-header"><span class="dep-name">Symphonia (Rust)</span><span class="dep-license">MPL-2.0</span></div>
+                    <div class="dep-desc" data-i18n="about.desc_symphonia">Motor de decodificación de audio 100% en Rust. Da soporte a MP3, FLAC, WAV, OGG Vorbis, AAC/M4A, ALAC, AIFF, MP2, CAF y ADPCM.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">libc (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
-                    <div class="dep-desc">Enlaces directos a funciones fundamentales del sistema operativo (usado para leer el reloj nativo).</div>
+                    <div class="dep-desc" data-i18n="about.desc_libc">Enlaces directos a funciones fundamentales del sistema operativo (usado para leer el reloj nativo).</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">rtrb (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
-                    <div class="dep-desc">Estructura de memoria rápida (ring buffer) para transferir audio entre hilos sin interrupciones.</div>
+                    <div class="dep-desc" data-i18n="about.desc_rtrb">Estructura de memoria rápida (ring buffer) para transferir audio entre hilos sin interrupciones.</div>
                 </div>
                 <div class="dep-item">
                     <div class="dep-header"><span class="dep-name">base64 (Rust)</span><span class="dep-license">MIT / Apache-2.0</span></div>
-                    <div class="dep-desc">Permite codificar bloques de audio en texto plano para transmitirlos rápidamente hacia la interfaz.</div>
+                    <div class="dep-desc" data-i18n="about.desc_base64">Permite codificar bloques de audio en texto plano para transmitirlos rápidamente hacia la interfaz.</div>
                 </div>
             </div>
         </details>
 
-        <div class="footer">Motor de audio Rust &nbsp;·&nbsp; Construido con Electron</div>
+        <div class="footer"><span data-i18n="about.footer_rust">Motor de audio Rust</span> &nbsp;·&nbsp; <span data-i18n="about.footer_electron">Construido con Electron</span></div>
     </div>
 
     <script>
-        const { shell } = require('electron');
-
+        const i18n = require('./i18n');
         const params = new URLSearchParams(window.location.search);
+        i18n.init(params.get('lang') || 'es');
+        i18n.applyToDOM();
+
+        const { shell } = require('electron');
         const version = params.get('version') || '—';
         document.getElementById('version-label').textContent = `v${version}`;
 

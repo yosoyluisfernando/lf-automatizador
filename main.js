@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker } = require('electron');
+const i18n = require('./backend/i18n_main');
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
@@ -126,7 +127,7 @@ genres_injectDeps(db, {
         });
     },
     storeTrackFileSignature,
-    AUDIO_FILE_RE: /\.(mp3|wav|flac|ogg|m4a|aac)$/i,
+    AUDIO_FILE_RE: /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i,
     getTrackStmt: db.prepare("SELECT * FROM tracks WHERE file_path = ?"),
     upsertArtistProfile,
     artists_applyGenreToTrackPaths: applyGenreToTrackPaths,
@@ -607,6 +608,24 @@ function openMusicSeparationWindow() {
     musicSeparationWindow.on('closed', () => { musicSeparationWindow = null; });
 }
 
+function openFileTypesManagerWindow() {
+    if (fileTypesManagerWindow && !fileTypesManagerWindow.isDestroyed()) {
+        fileTypesManagerWindow.focus();
+        return;
+    }
+    fileTypesManagerWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+        width: 980,
+        height: 660,
+        minWidth: 820,
+        minHeight: 540,
+        title: 'Gestor de Tipos de Archivo',
+        autoHideMenuBar: true,
+        webPreferences: { nodeIntegration: true, contextIsolation: false }
+    });
+    fileTypesManagerWindow.loadFile('frontend/file_types_manager.html');
+    fileTypesManagerWindow.on('closed', () => { fileTypesManagerWindow = null; });
+}
+
 async function initializeCurationFromConfiguredRoot() {
     try {
         const rootPath = getConfiguredLibraryRoot();
@@ -743,8 +762,19 @@ const fileTypesPath = path.join(configDir, 'file_types.json');
 const explicitTypesPath = path.join(configDir, 'explicit_types.json');
 
 let mainWindow;
-let activePlaylistTab = 0; let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null; let musicSeparationWindow = null;
+let activePlaylistTab = 0;
+// Nombres + orden visual de las playlists para el menú "Lista". Cada entrada es
+// { index: <índice lógico 0-3>, name: <rótulo> }, en el orden visual elegido por
+// el usuario. El renderer lo sincroniza vía IPC 'playlist-names-changed'. El
+// `index` es lo que se envía al renderer al hacer click, así que el ruteo de
+// audio sigue ligado a la identidad lógica, nunca al nombre ni a la posición.
+let playlistMenuList = [
+    { index: 0, name: 'Playlist 1' }, { index: 1, name: 'Playlist 2' },
+    { index: 2, name: 'Playlist 3' }, { index: 3, name: 'Playlist 4' }
+];
+let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null; let musicSeparationWindow = null;
 let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let aboutWindow = null;
+let fileTypesManagerWindow = null;
 let ffmpegProcess = null; let activeEncoderConfig = null; let isAppQuitting = false; let forceQuit = false;
 let lastEditorSource = 'playlist'; 
 let lastVuLevels = {
@@ -1192,7 +1222,7 @@ const saveDbTrackStmt = db.prepare(`
         phora_active = @phora_active, phora_mode = @phora_mode, phora_time = @phora_time,
         file_size = @fileSize, file_mtime_ms = @fileMtimeMs
 `);
-const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
+const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i;
 
 
 
@@ -2287,123 +2317,186 @@ function menuShortcut(actionId) {
     return { accelerator: sc(actionId), registerAccelerator: false };
 }
 
-function createWindow() { mainWindow = new BrowserWindow({ icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),   width: 1280, height: 720, title: `LF Automatizador v${APP_VERSION}`, autoHideMenuBar: false, webPreferences: { nodeIntegration: true, contextIsolation: false, backgroundThrottling: false } }); mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); mainWindow.maximize(); mainWindow.loadFile('frontend/index.html'); mainWindow.on('close', (e) => { if (!forceQuit) { e.preventDefault(); mainWindow.webContents.send('request-close-check'); } }); mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); }); }
+function createWindow() {
+    mainWindow = new BrowserWindow({
+        icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
+        width: 1280, height: 720,
+        title: `LF Automatizador v${APP_VERSION}`,
+        autoHideMenuBar: false,
+        backgroundColor: '#1a1a1a', // evita el flash blanco mientras carga el renderer
+        webPreferences: { nodeIntegration: true, contextIsolation: false, backgroundThrottling: false }
+    });
+    mainWindow.setMenuBarVisibility(uiPrefs.menuVisible);
+    mainWindow.maximize();
+
+    // ── Carga auto-reparable del renderer ────────────────────────────────────
+    // Al arrancar JUNTO CON EL SISTEMA (inicio de sesión, recuperación tras un
+    // corte de luz) el renderer puede no llegar a pintar: el SO todavía está
+    // ocupado (GPU/compositor/disco/antivirus) y la carga falla o nunca termina.
+    // Sin reintento, la ventana queda en blanco mostrando sólo el menú nativo.
+    // Aquí: ruta ABSOLUTA (independiente del directorio de trabajo, que al
+    // autoarrancar suele ser C:\Windows\System32), reintento ante fallo de carga,
+    // recuperación si el proceso de render se cae, y un watchdog por si la carga
+    // se cuelga sin emitir error.
+    const INDEX_FILE = require('path').join(__dirname, 'frontend', 'index.html');
+    let rendererLoaded = false;
+    let reloadAttempts = 0;
+    const MAX_RELOAD_ATTEMPTS = 8;
+
+    const loadIndex = () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        Promise.resolve(mainWindow.loadFile(INDEX_FILE)).catch(() => {});
+    };
+    const scheduleReload = (reason) => {
+        if (rendererLoaded || !mainWindow || mainWindow.isDestroyed()) return;
+        if (reloadAttempts >= MAX_RELOAD_ATTEMPTS) {
+            try { writeLog(`[ARRANQUE] El renderer no cargó tras ${reloadAttempts} reintentos (${reason}). Ventana en blanco.`); } catch (_) {}
+            return;
+        }
+        reloadAttempts++;
+        const delay = Math.min(4000, 500 * reloadAttempts);
+        try { writeLog(`[ARRANQUE] Reintentando cargar la interfaz (intento ${reloadAttempts}/${MAX_RELOAD_ATTEMPTS}, motivo: ${reason}).`); } catch (_) {}
+        setTimeout(() => { if (!rendererLoaded) loadIndex(); }, delay);
+    };
+
+    mainWindow.webContents.on('did-finish-load', () => { rendererLoaded = true; });
+    mainWindow.webContents.on('did-fail-load', (e, errorCode, errorDesc, validatedURL, isMainFrame) => {
+        // -3 (ERR_ABORTED) ocurre en navegaciones/recargas normales: no es un fallo real.
+        if (isMainFrame === false || errorCode === -3) return;
+        scheduleReload(`did-fail-load ${errorCode} ${errorDesc || ''}`.trim());
+    });
+    mainWindow.webContents.on('render-process-gone', (e, details) => {
+        const reason = details && details.reason;
+        if (reason === 'clean-exit') return; // cierre normal: no recuperar
+        rendererLoaded = false;
+        scheduleReload(`render-process-gone:${reason}`);
+    });
+
+    loadIndex();
+    // Watchdog: si a los 20 s la interfaz nunca terminó de cargar, forzar recarga.
+    setTimeout(() => { if (!rendererLoaded) scheduleReload('watchdog-sin-carga-20s'); }, 20000);
+
+    mainWindow.on('close', (e) => { if (!forceQuit) { e.preventDefault(); mainWindow.webContents.send('request-close-check'); } });
+    mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); });
+}
 function syncCartwallMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-cartwall') : null; if (item) item.checked = checked; }
 function createApplicationMenu() {
+    const appMenuLanguage = loadJsonConfig(generalSettingsPath, {}).language || 'es';
+    i18n.init(appMenuLanguage);
     const template = [
         {
-            label: 'Archivo',
+            label: i18n.t('menu.file'),
             submenu: [
-                { label: '📂 Abrir Playlist...', ...menuShortcut('insert.open_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
-                { label: '💾 Guardar Playlist...', ...menuShortcut('insert.save_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
+                { label: '📂 ' + i18n.t('menu.open_playlist'), ...menuShortcut('insert.open_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'open'); } },
+                { label: '💾 ' + i18n.t('menu.save_playlist'), ...menuShortcut('insert.save_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'save'); } },
                 { type: 'separator' },
-                { label: '📄 Limpiar Playlist', ...menuShortcut('insert.clear_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
+                { label: '📄 ' + i18n.t('menu.clear_playlist'), ...menuShortcut('insert.clear_playlist'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } },
                 { type: 'separator' },
-                { label: 'Salir', click: () => { if (mainWindow) { mainWindow.webContents.send('request-close-check'); } else { app.quit(); } } }
+                { label: i18n.t('menu.exit'), click: () => { if (mainWindow) { mainWindow.webContents.send('request-close-check'); } else { app.quit(); } } }
             ]
         },
         {
-            label: 'Ver',
+            label: i18n.t('menu.view'),
             submenu: [
-                { label: 'Pantalla completa', role: 'togglefullscreen', accelerator: 'F11' },
+                { label: i18n.t('menu.full_screen'), role: 'togglefullscreen', accelerator: 'F11' },
                 { type: 'separator' },
                 {
-                    label: 'Posición de Controles (Play, Pause, etc.)',
+                    label: i18n.t('menu.controls_pos'),
                     submenu: [
-                        { label: 'Parte Superior', type: 'radio', checked: uiPrefs.controlsPos === 'top', click: () => { uiPrefs.controlsPos = 'top'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-controls-position', 'top'); } },
-                        { label: 'Parte Inferior', type: 'radio', checked: uiPrefs.controlsPos === 'bottom', click: () => { uiPrefs.controlsPos = 'bottom'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-controls-position', 'bottom'); } }
+                        { label: i18n.t('menu.top_pos'), type: 'radio', checked: uiPrefs.controlsPos === 'top', click: () => { uiPrefs.controlsPos = 'top'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-controls-position', 'top'); } },
+                        { label: i18n.t('menu.bottom_pos'), type: 'radio', checked: uiPrefs.controlsPos === 'bottom', click: () => { uiPrefs.controlsPos = 'bottom'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-controls-position', 'bottom'); } }
                     ]
                 },
                 { type: 'separator' },
-                { label: 'Temperatura', type: 'checkbox', checked: uiPrefs.temp, click: (item) => { uiPrefs.temp = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-temperature', item.checked); } },
-                { label: 'Humedad', type: 'checkbox', checked: uiPrefs.hum, click: (item) => { uiPrefs.hum = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-humidity', item.checked); } },
-                { label: 'Mostrar/Ocultar panel izquierdo', type: 'checkbox', checked: uiPrefs.leftPanel, click: (item) => { uiPrefs.leftPanel = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-left-panel', item.checked); } },
-                { label: 'Mostrar/Ocultar extensiones de canciones', type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
-                { id: 'view-toggle-cartwall', label: 'Mostrar/Ocultar botonera de efectos', type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
+                { label: i18n.t('menu.temperature'), type: 'checkbox', checked: uiPrefs.temp, click: (item) => { uiPrefs.temp = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-temperature', item.checked); } },
+                { label: i18n.t('menu.humidity'), type: 'checkbox', checked: uiPrefs.hum, click: (item) => { uiPrefs.hum = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-humidity', item.checked); } },
+                { label: i18n.t('menu.toggle_left_panel'), type: 'checkbox', checked: uiPrefs.leftPanel, click: (item) => { uiPrefs.leftPanel = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-left-panel', item.checked); } },
+                { label: i18n.t('menu.toggle_extensions'), type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
+                { id: 'view-toggle-cartwall', label: i18n.t('menu.toggle_cartwall'), type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
                 { type: 'separator' },
-                { label: 'Mostrar/Ocultar Mensaje del sistema (no recomendado)', type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
+                { label: i18n.t('menu.toggle_syslog'), type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
                 { type: 'separator' },
-                { label: '📊 Administrador de tareas LF', accelerator: 'Alt+T', click: () => openTaskManagerWindow() },
-                { label: '💻 Abrir Consola Virtual (Solo depuración)', accelerator: 'Alt+C', click: () => { ipcMain.emit('open-console'); } }
+                { label: '📊 ' + i18n.t('menu.task_manager'), accelerator: 'Alt+T', click: () => openTaskManagerWindow() },
+                { label: '💻 ' + i18n.t('menu.open_console'), accelerator: 'Alt+C', click: () => { ipcMain.emit('open-console'); } }
             ]
         },
         {
-            label: 'Lista',
+            label: i18n.t('menu.list'),
             submenu: [
-                { label: '🎵 Añadir pistas...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{name: 'Audio', extensions: ['mp3','wav','ogg','flac','m4a']}] }); if(!res.canceled) mainWindow.webContents.send('menu-add-files', res.filePaths); } },
-                { label: '📁 Añadir carpeta normal...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-folder', res.filePaths[0]); } },
-                { label: '🔀 Añadir carpeta aleatoria...', click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-random', res.filePaths[0]); } },
-                { label: '📅 Ejecutar evento...', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-event-command'); } },
-                { label: '⌚ Añadir locución de hora', ...menuShortcut('insert.time_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
-                { label: '🌡️ Añadir locución de temperatura', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-temperature'); } },
-                { label: '💧 Añadir locución de humedad', click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-humidity'); } },
+                { label: '🎵 ' + i18n.t('menu.add_tracks'), click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{name: 'Audio', extensions: ['mp3','wav','ogg','flac','m4a','aiff','aif','mp2']}] }); if(!res.canceled) mainWindow.webContents.send('menu-add-files', res.filePaths); } },
+                { label: '📁 ' + i18n.t('menu.add_folder'), click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-folder', res.filePaths[0]); } },
+                { label: '🔀 ' + i18n.t('menu.add_random_folder'), click: async () => { const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if(!res.canceled) mainWindow.webContents.send('menu-add-random', res.filePaths[0]); } },
+                { label: '📅 ' + i18n.t('menu.run_event'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-event-command'); } },
+                { label: '⌚ ' + i18n.t('menu.add_time_locution'), ...menuShortcut('insert.time_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-time'); } },
+                { label: '🌡️ ' + i18n.t('menu.add_temp_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-temperature'); } },
+                { label: '💧 ' + i18n.t('menu.add_hum_locution'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-insert-humidity'); } },
                 { type: 'separator' },
-                { label: '⏹ Añadir stop', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stop'); } },
+                { label: '⏹ ' + i18n.t('menu.add_stop'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stop'); } },
                 {
-                    label: '⏭️ Reproducir siguiente playlist',
-                    submenu: [
-                        { label: 'Playlist 1', enabled: activePlaylistTab !== 0, click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', 0); } },
-                        { label: 'Playlist 2', enabled: activePlaylistTab !== 1, click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', 1); } },
-                        { label: 'Playlist 3', enabled: activePlaylistTab !== 2, click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', 2); } },
-                        { label: 'Playlist 4', enabled: activePlaylistTab !== 3, click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', 3); } }
-                    ]
+                    label: '⏭️ ' + i18n.t('menu.play_next_playlist'),
+                    submenu: playlistMenuList.map(pl => ({
+                        label: pl.name,
+                        enabled: activePlaylistTab !== pl.index,
+                        click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', pl.index); }
+                    }))
                 },
-                { label: '📝 Añadir Nota', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
-                { label: '📡 Agregar URL de emisora... (Beta)', click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stream-url'); } },
+                { label: '📝 ' + i18n.t('menu.add_note'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
+                { label: '📡 ' + i18n.t('menu.add_stream_url'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stream-url'); } },
                 { type: 'separator' },
-                { label: '🎯 Marcar como Siguiente', ...menuShortcut('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
-                { label: '⏳ Marcar / Desmarcar como Temporal', ...menuShortcut('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
-                { label: '🔀 Mezclar lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-shuffle'); } },
+                { label: '🎯 ' + i18n.t('menu.set_next'), ...menuShortcut('playlist.set_next'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-set-next'); } },
+                { label: '⏳ ' + i18n.t('menu.toggle_temp'), ...menuShortcut('playlist.toggle_temp'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-toggle-temp'); } },
+                { label: '🔀 ' + i18n.t('menu.shuffle_list'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-shuffle'); } },
                 { type: 'separator' },
-                { label: '🧹 Limpiar pistas reproducidas', click: () => { if (mainWindow) mainWindow.webContents.send('menu-clear-played'); } },
-                { label: '🔗 Comprobar enlaces rotos', click: () => { if (mainWindow) mainWindow.webContents.send('menu-check-links'); } },
+                { label: '🧹 ' + i18n.t('menu.clear_played'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-clear-played'); } },
+                { label: '🔗 ' + i18n.t('menu.check_broken_links'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-check-links'); } },
                 { type: 'separator' },
-                { label: '❌ Eliminar seleccionadas', ...menuShortcut('playlist.delete_selected'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
-                { label: '🗑️ Vaciar toda la lista', click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } }
+                { label: '❌ ' + i18n.t('menu.delete_selected'), ...menuShortcut('playlist.delete_selected'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-delete-selected'); } },
+                { label: '🗑️ ' + i18n.t('menu.empty_list'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-action', 'clear'); } }
             ]
         },
         {
-            label: 'Emisión',
+            label: i18n.t('menu.emission'),
             submenu: [
-                { label: '📡 Abrir Emisor (Encoder)', click: () => { ipcMain.emit('open-encoder'); } },
+                { label: '📡 ' + i18n.t('menu.open_encoder'), click: () => { ipcMain.emit('open-encoder'); } },
                 { type: 'separator' },
-                { label: '▶️ Activar/Desactivar Eventos Automáticos', click: () => { if(mainWindow) mainWindow.webContents.send('menu-toggle-events'); } },
-                { label: '🔁 Activar/Desactivar Reproducción Infinita', click: () => { if(mainWindow) mainWindow.webContents.send('menu-toggle-loop'); } }
+                { label: '▶️ ' + i18n.t('menu.toggle_auto_events'), click: () => { if(mainWindow) mainWindow.webContents.send('menu-toggle-events'); } },
+                { label: '🔁 ' + i18n.t('menu.toggle_infinite_loop'), click: () => { if(mainWindow) mainWindow.webContents.send('menu-toggle-loop'); } }
             ]
         },
         {
-            label: 'Herramientas',
+            label: i18n.t('menu.tools'),
             submenu: [
-                { label: '⚙️ Configuración General', ...menuShortcut('app.open_settings'), click: () => { ipcMain.emit('open-settings'); } },
-                { label: '📚 Biblioteca de Música', ...menuShortcut('app.open_library'), click: () => { ipcMain.emit('open-library'); } },
-                { label: '🧩 Generador de playlist', click: () => { if (mainWindow) mainWindow.webContents.send('menu-open-rotation'); } },
+                { label: '⚙️ ' + i18n.t('menu.general_settings'), ...menuShortcut('app.open_settings'), click: () => { ipcMain.emit('open-settings'); } },
+                { label: '📚 ' + i18n.t('menu.music_library'), ...menuShortcut('app.open_library'), click: () => { ipcMain.emit('open-library'); } },
+                { label: '🧩 ' + i18n.t('menu.playlist_generator'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-open-rotation'); } },
                 { type: 'separator' },
-                { label: '📅 Gestor de Eventos', click: () => { ipcMain.emit('open-event-editor', null); } },
-                { label: '🏷️ Gestor de Grupos de Eventos', click: () => { ipcMain.emit('open-event-groups'); } },
+                { label: '📅 ' + i18n.t('menu.event_manager'), click: () => { ipcMain.emit('open-event-editor', null); } },
+                { label: '🏷️ ' + i18n.t('menu.event_group_manager'), click: () => { ipcMain.emit('open-event-groups'); } },
                 { type: 'separator' },
-                { label: '📇 Catálogo de Artistas', ...menuShortcut('app.open_catalog'), click: () => openArtistCatalogWindow() },
-                { label: '🎨 Editor de Géneros Musicales', ...menuShortcut('app.open_genre_editor'), click: () => openGenreEditorWindow() },
-                { label: '💼 Gestor de Comerciales', ...menuShortcut('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
+                { label: '📇 ' + i18n.t('menu.artist_catalog'), ...menuShortcut('app.open_catalog'), click: () => openArtistCatalogWindow() },
+                { label: '🎨 ' + i18n.t('menu.genre_editor'), ...menuShortcut('app.open_genre_editor'), click: () => openGenreEditorWindow() },
+                { label: '💼 ' + i18n.t('menu.commercial_manager'), ...menuShortcut('app.open_commercial_mgr'), click: () => openCommercialManagerWindow() },
                 { type: 'separator' },
-                { label: '🎚️ Reglas de separación musical', click: () => openMusicSeparationWindow() },
+                { label: '🎚️ ' + i18n.t('menu.music_separation_rules'), click: () => openMusicSeparationWindow() },
+                { label: '🗂️ ' + i18n.t('menu.file_types_manager'), click: () => openFileTypesManagerWindow() },
                 { type: 'separator' },
                 {
-                    label: '🚀 Inicializar curaduría desde carpeta raíz',
+                    label: '🚀 ' + i18n.t('menu.init_curation'),
                     click: async () => {
                         const result = await dialog.showMessageBox(mainWindow || libraryWindow, {
                             type: 'question',
-                            buttons: ['Inicializar ahora', 'Cancelar'],
+                            buttons: [i18n.t('menu.init_now'), i18n.t('menu.cancel')],
                             defaultId: 0,
                             cancelId: 1,
-                            title: 'Inicializar curaduría',
-                            message: 'Esto escaneará la carpeta raíz de música, leerá tags locales y creará artistas/géneros/enlaces en SQLite. No se ejecuta automáticamente.',
+                            title: i18n.t('menu.init_curation_title'),
+                            message: i18n.t('menu.init_curation_msg'),
                             noLink: true
                         });
                         if (result.response !== 0) return;
                         const initResult = await initializeCurationFromConfiguredRoot();
                         dialog.showMessageBox(mainWindow || libraryWindow, {
                             type: initResult.success ? 'info' : 'warning',
-                            title: 'Inicialización de curaduría',
+                            title: i18n.t('menu.init_curation_result_title'),
                             message: initResult.success
                                 ? `Listo. Archivos: ${initResult.files}. Pistas actualizadas: ${initResult.tracks}. Artistas/enlaces: ${initResult.artistLinks}. Géneros aplicados: ${initResult.genreTracks}.`
                                 : (initResult.error || 'No se pudo inicializar la curaduría.'),
@@ -2414,14 +2507,14 @@ function createApplicationMenu() {
             ]
         },
         {
-            label: 'Ayuda',
+            label: i18n.t('menu.help'),
             submenu: [
-                { label: '📖 Manual de Usuario (Próximamente)', enabled: false },
+                { label: '📖 ' + i18n.t('menu.user_manual'), enabled: false },
                 { type: 'separator' },
-                { label: '🎯 Guía de Primer Uso', click: () => { require('electron').shell.openPath(require('path').join(__dirname, 'Documentación', 'guia_primer_uso.jpg')).catch(()=>{}); } },
+                { label: '🎯 ' + i18n.t('menu.first_use_guide'), click: () => { require('electron').shell.openPath(require('path').join(__dirname, 'Documentación', 'guia_primer_uso.jpg')).catch(()=>{}); } },
                 { type: 'separator' },
-                { label: '⌨️ Atajos de Teclado', click: () => { ipcMain.emit('open-settings', null, 'tab-shortcuts'); }},
-                { label: 'ℹ️ Acerca de LF Automatizador', click: () => {
+                { label: '⌨️ ' + i18n.t('menu.keyboard_shortcuts'), click: () => { ipcMain.emit('open-settings', null, 'tab-shortcuts'); }},
+                { label: 'ℹ️ ' + i18n.t('menu.about'), click: () => {
                     if (aboutWindow) { aboutWindow.focus(); return; }
                     aboutWindow = new BrowserWindow({
                         icon: require('electron').nativeImage.createFromPath(require('path').join(__dirname, 'icon.ico')),
@@ -2431,13 +2524,13 @@ function createApplicationMenu() {
                         minHeight: 580,
                         maxWidth: 460,
                         maxHeight: 580,
-                        title: 'Acerca de LF Automatizador',
+                        title: i18n.t('menu.about_title'),
                         autoHideMenuBar: true,
                         resizable: false,
                         maximizable: false,
                         webPreferences: { nodeIntegration: true, contextIsolation: false }
                     });
-                    aboutWindow.loadFile('frontend/about.html', { query: { version: APP_VERSION } });
+                    aboutWindow.loadFile('frontend/about.html', { query: { version: APP_VERSION, lang: appMenuLanguage } });
                     aboutWindow.on('closed', () => { aboutWindow = null; });
                 }}
             ]
@@ -2473,7 +2566,15 @@ app.whenReady().then(() => {
         ps.unref();
     }
 }); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) powerSaveBlocker.stop(appSuspensionBlockerId); } catch (e) {} try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
-ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Salir', message: '¿Guardar playlist actual antes de salir?', noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: ['Guardar', 'No guardar', 'Cancelar'], defaultId: 0, cancelId: 2, title: 'Limpiar', message: '¿Guardar playlist actual antes de limpiarla?', noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: ['Sí', 'No'], defaultId: 1, cancelId: 1, title: 'Confirmación', message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
+ipcMain.on('playlist-names-changed', (e, list) => {
+    if (Array.isArray(list) && list.length) {
+        playlistMenuList = list
+            .filter(pl => pl && typeof pl.index === 'number')
+            .map(pl => ({ index: pl.index, name: (pl.name || `Playlist ${pl.index + 1}`).toString().slice(0, 40) }));
+    }
+    createApplicationMenu();
+});
+ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.on('preview-ui-layout', (e, data) => { if (mainWindow) mainWindow.webContents.send('preview-ui-layout', data); });
 ipcMain.on('revert-ui-layout', () => { if (mainWindow) mainWindow.webContents.send('revert-ui-layout'); });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
@@ -2486,6 +2587,25 @@ ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
     if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus();
     if (res.canceled || !res.filePaths || !res.filePaths.length) return '';
     return res.filePaths[0];
+});
+ipcMain.handle('dialog:pickAudioFiles', async (e, opts = {}) => {
+    const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+    const res = await dialog.showOpenDialog(ownerWindow, {
+        title: opts?.title || 'Seleccionar archivo de audio',
+        defaultPath: opts?.defaultPath || undefined,
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'aiff', 'aif', 'mp2'] }]
+    });
+    if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus();
+    if (res.canceled || !res.filePaths) return [];
+    return res.filePaths;
+});
+// Sincronizacion del Gestor de Tipos de Archivo <-> ventana principal.
+ipcMain.on('file-types-data-changed', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('file-types-data-updated');
+});
+ipcMain.on('file-types-assignments-changed', () => {
+    if (fileTypesManagerWindow && !fileTypesManagerWindow.isDestroyed()) fileTypesManagerWindow.webContents.send('file-types-data-updated');
 });
 ipcMain.handle('shell:openExternal', async (e, url) => {
     if (!url || typeof url !== 'string') return false;

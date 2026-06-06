@@ -142,7 +142,7 @@ module.exports = function(context) {
     });
 
     ipcMain.handle('commercial-dialog-add-files', async () => {
-        const res = await dialog.showOpenDialog(context.commercialManagerWindow || context.mainWindow, { title: 'Agregar comerciales', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Audio', extensions: ['mp3','wav','ogg','flac','m4a','aac'] }] });
+        const res = await dialog.showOpenDialog(context.commercialManagerWindow || context.mainWindow, { title: 'Agregar comerciales', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Audio', extensions: ['mp3','wav','ogg','flac','m4a','aac','aiff','aif','mp2'] }] });
         return (!res.canceled && res.filePaths.length > 0) ? res.filePaths : [];
     });
 

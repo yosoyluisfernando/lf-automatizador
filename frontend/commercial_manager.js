@@ -1,5 +1,7 @@
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
 const path = require('path');
+const i18n = require('./i18n');
 
 let categories = [];
 let assets = [];
@@ -142,10 +144,10 @@ function hierarchyKeyForType(type) {
     return 'temporary';
 }
 
-function setStatus(text) { statusText.textContent = text || 'Listo'; }
+function setStatus(text) { statusText.textContent = text || i18n.t('commercial_manager.lbl_ready') || 'Listo'; }
 function esc(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
 function basename(filePath) { return path.basename(filePath || ''); }
-function categoryName(id) { return categories.find(c => c.id === id)?.name || id || 'Otro'; }
+function categoryName(id) { return categories.find(c => c.id === id)?.name || id || i18n.t('commercial_manager.js_other') || 'Otro'; }
 function typeClass(asset) {
     const type = normalizeCommercialType(asset?.commercialType);
     return typeMap.find(item => item[0] === type)?.[2] || '';
@@ -180,7 +182,7 @@ function assetValidityLabel(asset) {
 }
 
 function optionLabel(options, value) {
-    return options.find(option => option[0] === value)?.[1] || value || 'Otro';
+    return options.find(option => option[0] === value)?.[1] || value || i18n.t('commercial_manager.js_other') || 'Otro';
 }
 
 function metadataCategoryName(asset) {
@@ -277,17 +279,17 @@ function renderAssetsTable() {
     const body = $('asset-body');
     body.replaceChildren();
     $('empty-assets').style.display = assets.length ? 'none' : 'block';
-    countText.textContent = `${assets.length} elemento(s)`;
+    countText.textContent = `${assets.length} ${i18n.t('commercial_manager.js_items') || 'elemento(s)'}`;
     assets.forEach(asset => {
         const tr = document.createElement('tr');
         tr.draggable = true;
         tr.className = selectedAssetPaths.has(asset.filePath) ? 'selected' : '';
         const dotClass = assetReady(asset) ? 'ok' : (asset.computedStatus === 'expired' ? 'bad' : 'warn');
-        const cueLabel = asset.duration ? `${secondsToClock(asset.duration)} / listo` : 'Pendiente';
+        const cueLabel = asset.duration ? `${secondsToClock(asset.duration)} / ${i18n.t('commercial_manager.js_ready') || 'listo'}` : (i18n.t('commercial_manager.js_pending') || 'Pendiente');
         tr.innerHTML = `
             <td><span class="status-dot ${dotClass}"></span></td>
             <td title="${esc(asset.filePath)}">${esc(asset.title || basename(asset.filePath))}</td>
-            <td>${esc(asset.clientName || asset.campaignName || '(Sin asignar)')}</td>
+            <td>${esc(asset.clientName || asset.campaignName || i18n.t('commercial_manager.js_unassigned') || '(Sin asignar)')}</td>
             <td><span class="badge ${typeClass(asset)}">${esc(typeShort(asset))}</span></td>
             <td>${esc(assetValidityLabel(asset))}</td>
             <td>${esc(cueLabel)}</td>`;
@@ -341,17 +343,17 @@ function renderSmartCards() {
         return end && end >= now && end <= soon;
     }).length;
     const orphans = assets.filter(asset => !assetReady(asset)).length;
-    $('expiring-card').textContent = `${expiring} spots por expirar pronto`;
-    $('orphans-card').textContent = `${orphans} spots sin metadata`;
+    $('expiring-card').textContent = `${expiring} ${i18n.t('commercial_manager.js_expiring') || 'spots por expirar pronto'}`;
+    $('orphans-card').textContent = `${orphans} ${i18n.t('commercial_manager.js_orphans') || 'spots sin metadata'}`;
 }
 
 function loadAssetIntoInspector(asset) {
     if (!asset) return;
     asset.commercialType = normalizeCommercialType(asset.commercialType || asset.category);
     syncDynamicDropdowns(asset.commercialType, asset.category, asset.billingMode);
-    $('asset-state-label').textContent = assetReady(asset) ? 'Listo' : 'Falta info';
+    $('asset-state-label').textContent = assetReady(asset) ? (i18n.t('commercial_manager.lbl_ready') || 'Listo') : (i18n.t('commercial_manager.js_missing_info') || 'Falta info');
     $('asset-file-label').textContent = asset.filePath || 'Selecciona un archivo';
-    $('asset-audio-info').textContent = `Dur: ${secondsToClock(asset.duration)} | dB: --`;
+    $('asset-audio-info').textContent = `${i18n.t('commercial_manager.js_dur') || 'Dur:'} ${secondsToClock(asset.duration)} | dB: --`;
     $('asset-client').value = asset.clientName || '';
     $('asset-campaign').value = asset.campaignName || asset.title || basename(asset.filePath);
     $('asset-validity-start').value = dateOnly(asset.validityStart);
@@ -421,7 +423,7 @@ function getCurrentBlock() {
 function createBlock(overrides = {}) {
     return {
         id: `com_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        name: 'Nueva pauta',
+        name: i18n.t('commercial_manager.js_new_block') || 'Nueva pauta',
         mode: $('mode-toggle')?.checked ? 'advanced' : 'basic',
         enabled: true,
         priority: 'normal',
@@ -454,7 +456,7 @@ function loadBlockEditor(block) {
 function readBlockEditor() {
     const block = getCurrentBlock();
     if (!block) return null;
-    block.name = $('block-name').value.trim() || 'Pauta comercial';
+    block.name = $('block-name').value.trim() || i18n.t('commercial_manager.js_pauta') || 'Pauta comercial';
     block.primaryTime = $('block-time').value || block.primaryTime || '10:00';
     block.priority = $('block-priority').value || 'normal';
     block.execution = $('block-execution').value || 'wait';
@@ -501,8 +503,8 @@ function renderBasicRows() {
     blocks.filter(block => block.mode !== 'advanced').forEach((block, index) => {
         const tr = document.createElement('tr');
         tr.className = block.id === currentBlockId ? 'selected' : '';
-        const names = (block.items || []).map(item => item.title || basename(item.filePath)).join(', ') || '(Sin spots)';
-        tr.innerHTML = `<td>${index + 1}</td><td>${esc(block.primaryTime || '--')}</td><td><strong>${esc(names)}</strong></td><td>${block.repeatActive ? `Cada ${block.repeatInterval || 0} min` : 'Hora exacta'}</td><td><button class="danger" data-delete="${esc(block.id)}">X</button></td>`;
+        const names = (block.items || []).map(item => item.title || basename(item.filePath)).join(', ') || i18n.t('commercial_manager.js_no_spots') || '(Sin spots)';
+        tr.innerHTML = `<td>${index + 1}</td><td>${esc(block.primaryTime || '--')}</td><td><strong>${esc(names)}</strong></td><td>${block.repeatActive ? `${i18n.t('commercial_manager.js_every') || 'Cada'} ${block.repeatInterval || 0} ${i18n.t('commercial_manager.js_min') || 'min'}` : (i18n.t('commercial_manager.js_exact_time') || 'Hora exacta')}</td><td><button class="danger" data-delete="${esc(block.id)}">X</button></td>`;
         tr.addEventListener('click', (event) => {
             if (event.target.dataset.delete) return;
             loadBlockEditor(block);
@@ -543,24 +545,24 @@ function renderGrid(host, editable) {
             cell.dataset.time = slotTime;
             const slotBlocks = blocks.filter(block => (block.primaryTime || '').slice(0, 5) === slotTime);
             if (!slotBlocks.length) {
-                cell.innerHTML = '<span style="font-size:10px;color:#555;text-align:center;margin-top:8px;">(Sin programar)</span>';
+                cell.innerHTML = `<span style="font-size:10px;color:#555;text-align:center;margin-top:8px;">${i18n.t('commercial_manager.js_unprogrammed') || '(Sin programar)'}</span>`;
             } else {
                 slotBlocks.forEach(block => {
                     const count = (block.items || []).length;
                     const total = (block.items || []).reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
                     const micro = document.createElement('div');
                     micro.className = 'micro';
-                    micro.innerHTML = `<span>${esc(block.name || 'Pauta')}</span><span>${count} / ${secondsToClock(total)}</span>`;
+                    micro.innerHTML = `<span>${esc(block.name || i18n.t('commercial_manager.js_pauta') || 'Pauta')}</span><span>${count} / ${secondsToClock(total)}</span>`;
                     cell.appendChild(micro);
                 });
             }
             cell.addEventListener('click', () => {
                 currentSlot = { day: Number($('advanced-day').value || 1), time: slotTime };
-                const block = slotBlocks[0] || createBlock({ name: `Pauta ${slotTime}`, primaryTime: slotTime, mode: editable ? 'advanced' : 'basic' });
+                const block = slotBlocks[0] || createBlock({ name: `${i18n.t('commercial_manager.js_pauta') || 'Pauta'} ${slotTime}`, primaryTime: slotTime, mode: editable ? 'advanced' : 'basic' });
                 if (!slotBlocks[0]) blocks.push(block);
                 currentBlockId = block.id;
                 loadBlockEditor(block);
-                $('selected-slot-label').textContent = `Bloque seleccionado: ${slotTime}`;
+                $('selected-slot-label').textContent = `${i18n.t('commercial_manager.js_sel_block') || 'Bloque seleccionado:'} ${slotTime}`;
                 renderAdvancedGrid();
                 renderContinuityGrid();
             });
@@ -570,7 +572,7 @@ function renderGrid(host, editable) {
                 const payload = JSON.parse(event.dataTransfer.getData('application/json') || '[]');
                 let block = slotBlocks[0];
                 if (!block) {
-                    block = createBlock({ name: `Pauta ${slotTime}`, primaryTime: slotTime, mode: editable ? 'advanced' : 'basic' });
+                    block = createBlock({ name: `${i18n.t('commercial_manager.js_pauta') || 'Pauta'} ${slotTime}`, primaryTime: slotTime, mode: editable ? 'advanced' : 'basic' });
                     blocks.push(block);
                 }
                 addAssetsToBlock(payload, block);
@@ -583,7 +585,15 @@ function renderGrid(host, editable) {
 function renderDayTabs() {
     const host = $('continuity-day-tabs');
     if (host.children.length) return;
-    ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'].forEach((label, index) => {
+    [
+        i18n.t('commercial_manager.day_sun_short') || 'Dom',
+        i18n.t('commercial_manager.day_mon_short') || 'Lun',
+        i18n.t('commercial_manager.day_tue_short') || 'Mar',
+        i18n.t('commercial_manager.day_wed_short') || 'Mie',
+        i18n.t('commercial_manager.day_thu_short') || 'Jue',
+        i18n.t('commercial_manager.day_fri_short') || 'Vie',
+        i18n.t('commercial_manager.day_sat_short') || 'Sab'
+    ].forEach((label, index) => {
         const button = document.createElement('button');
         button.textContent = label;
         button.className = index === 1 ? 'active' : '';
@@ -601,30 +611,30 @@ function renderTanda() {
     const host = $('tanda-items');
     host.replaceChildren();
     if (!block) {
-        $('tanda-title').textContent = 'Sin bloque seleccionado';
+        $('tanda-title').textContent = i18n.t('commercial_manager.lbl_no_block') || 'Sin bloque seleccionado';
         return;
     }
-    $('tanda-title').textContent = `${block.name || 'Pauta'} - ${block.primaryTime || '--'}`;
+    $('tanda-title').textContent = `${block.name || i18n.t('commercial_manager.js_pauta') || 'Pauta'} - ${block.primaryTime || '--'}`;
     const items = block.items || [];
     const total = items.reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
     const limit = 180;
     $('tanda-progress').style.width = `${Math.min(100, (total / limit) * 100)}%`;
     $('tanda-progress').style.background = total > limit ? 'var(--bad)' : (total > limit * .85 ? 'var(--warn)' : 'var(--ok)');
-    $('tanda-progress-text').innerHTML = `<span>Ocupado: ${secondsToClock(total)}</span><span>Limite: ${secondsToClock(limit)}</span>`;
+    $('tanda-progress-text').innerHTML = `<span>${i18n.t('commercial_manager.js_occupied') || 'Ocupado:'} ${secondsToClock(total)}</span><span>${i18n.t('commercial_manager.js_limit') || 'Limite:'} ${secondsToClock(limit)}</span>`;
     const opening = document.createElement('div');
     opening.className = 'tanda-item fixed';
-    opening.innerHTML = '<div class="tanda-title">Apertura de tanda / ID</div><div>00:05</div><div class="tanda-meta">Regla global del sistema</div>';
+    opening.innerHTML = `<div class="tanda-title">${i18n.t('commercial_manager.js_open_tanda') || 'Apertura de tanda / ID'}</div><div>00:05</div><div class="tanda-meta">${i18n.t('commercial_manager.js_global_rule') || 'Regla global del sistema'}</div>`;
     host.appendChild(opening);
     items.forEach((item, index) => {
         const row = document.createElement('div');
         row.className = 'tanda-item';
-        row.innerHTML = `<div class="tanda-title">${esc(item.title || basename(item.filePath))}</div><div>${secondsToClock(item.duration)}</div><div class="tanda-meta">Orden ${index + 1} | Temporal</div>`;
+        row.innerHTML = `<div class="tanda-title">${esc(item.title || basename(item.filePath))}</div><div>${secondsToClock(item.duration)}</div><div class="tanda-meta">${i18n.t('commercial_manager.js_order') || 'Orden'} ${index + 1} | ${i18n.t('commercial_manager.js_temp') || 'Temporal'}</div>`;
         host.appendChild(row);
     });
     const drop = document.createElement('div');
     drop.className = 'drop-hint';
     drop.style.margin = '4px 0';
-    drop.textContent = '+ Arrastra un spot aqui';
+    drop.textContent = i18n.t('commercial_manager.js_drag_spot') || '+ Arrastra un spot aqui';
     drop.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
     drop.addEventListener('drop', event => {
         event.preventDefault();
@@ -645,10 +655,10 @@ async function saveAsset() {
     if (!payload) return;
     const result = await ipcRenderer.invoke('commercial-save-asset-metadata', payload);
     if (!result?.success) {
-        alert(result?.error || 'No se pudo guardar el spot');
+        alert(result?.error || i18n.t('commercial_manager.js_save_err') || 'No se pudo guardar');
         return;
     }
-    setStatus('Spot guardado en SQLite');
+    setStatus(i18n.t('commercial_manager.js_spot_saved') || 'Spot guardado en SQLite');
     selectedAsset = payload;
     await loadAssets(true);
 }
@@ -658,10 +668,10 @@ async function saveBlock() {
     if (!block) return;
     const result = await ipcRenderer.invoke('commercial-save-block', block);
     if (!result?.success) {
-        alert(result?.error || 'No se pudo guardar la pauta');
+        alert(result?.error || i18n.t('commercial_manager.js_save_err') || 'No se pudo guardar');
         return;
     }
-    setStatus('Pauta guardada');
+    setStatus(i18n.t('commercial_manager.js_pauta_saved') || 'Pauta guardada');
     currentBlockId = result.id;
     await loadBlocks();
 }
@@ -670,25 +680,25 @@ async function setRoot(rootType) {
     const result = await ipcRenderer.invoke('commercial-set-root', rootType);
     if (result?.success) {
         await loadSettings();
-        setStatus('Raiz configurada');
+        setStatus(i18n.t('commercial_manager.js_root_set') || 'Raiz configurada');
     }
 }
 
 async function scanRoot(rootType) {
-    setStatus('Escaneando en worker...');
+    setStatus(i18n.t('commercial_manager.js_scan_worker') || 'Escaneando en worker...');
     const category = rootType === 'jingles' ? 'jingle' : $('import-category').value;
     const result = await ipcRenderer.invoke('commercial-scan-root', { rootType, category });
-    setStatus(result?.success ? `Escaneo listo: ${result.count} audio(s)` : (result?.error || 'No se pudo escanear'));
+    setStatus(result?.success ? `${i18n.t('commercial_manager.js_scan_ready') || 'Escaneo listo:'} ${result.count} ${i18n.t('commercial_manager.js_audio') || 'audio(s)'}` : (result?.error || 'No se pudo escanear'));
     await loadAssets(false);
 }
 
 async function importPaths(paths) {
     if (!paths.length) return;
-    setStatus('Importando en worker...');
+    setStatus(i18n.t('commercial_manager.js_import_worker') || 'Importando en worker...');
     const rootType = $('filter-root').value === 'jingles' ? 'jingles' : 'commercials';
     const category = $('import-category').value || 'paid';
     const result = await ipcRenderer.invoke('commercial-import-paths', { paths, rootType, category });
-    setStatus(result?.success ? `Importados ${result.count} audio(s)` : (result?.error || 'No se pudo importar'));
+    setStatus(result?.success ? `${i18n.t('commercial_manager.js_imported') || 'Importados'} ${result.count} ${i18n.t('commercial_manager.js_audio') || 'audio(s)'}` : (result?.error || 'No se pudo importar'));
     await loadAssets(false);
 }
 
@@ -704,10 +714,10 @@ function bindEvents() {
     $('btn-scan-commercials').addEventListener('click', () => scanRoot('commercials'));
     $('btn-scan-jingles').addEventListener('click', () => scanRoot('jingles'));
     $('btn-new-category').addEventListener('click', async () => {
-        const name = prompt('Nombre de la nueva categoria:');
+        const name = prompt(i18n.t('commercial_manager.js_new_cat_prompt') || 'Nombre de la nueva categoria:');
         if (!name?.trim()) return;
         const result = await ipcRenderer.invoke('commercial-save-category', { name: name.trim() });
-        if (!result?.success) return alert(result?.error || 'No se pudo crear');
+        if (!result?.success) return alert(result?.error || i18n.t('commercial_manager.js_save_err') || 'No se pudo guardar');
         await loadCategories();
         $('import-category').value = result.id;
     });
@@ -757,7 +767,7 @@ function bindEvents() {
         renderContinuityGrid();
     });
     $('btn-generate-grid').addEventListener('click', () => {
-        setStatus('Generador automatico preparado; falta motor de reparto en el siguiente paso');
+        setStatus(i18n.t('commercial_manager.js_gen_ready') || 'Generador automatico preparado...');
     });
     $('basic-drop').addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
     $('basic-drop').addEventListener('drop', event => {
@@ -782,6 +792,13 @@ function bindEvents() {
 
 (async function init() {
     bindEvents();
+    let lang = 'es';
+    try {
+        const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'general_settings.json'), 'utf8'));
+        lang = p.language || 'es';
+    } catch (e) {}
+    await i18n.init(lang);
+    i18n.applyToDOM();
     await loadCategories();
     await loadSettings();
     await loadAssets(false);

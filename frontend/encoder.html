@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Emisor de Radio (Encoder)</title>
+    <title data-i18n="[text]encoder.window_title">Emisor de Radio (Encoder)</title>
     <link rel="stylesheet" href="style.css">
     <style>
         body {
@@ -253,21 +253,21 @@
 <body>
     <div class="enc-header">
         <div style="display: flex; align-items: center; gap: 10px;">
-            <span id="enc-status-badge" class="status-badge status-off">Desconectado</span>
-            <span id="enc-summary" style="font-size: 12px; color: #8f96a3;">Sin transmisiones activas</span>
+            <span id="enc-status-badge" class="status-badge status-off" data-i18n="encoder.status_disconnected">Desconectado</span>
+            <span id="enc-summary" style="font-size: 12px; color: #8f96a3;" data-i18n="encoder.no_active_transmissions">Sin transmisiones activas</span>
         </div>
         <div id="enc-version" style="font-size: 11px; color: #555; font-weight: bold;">LF Automatizador</div>
     </div>
 
     <div class="enc-tabs">
-        <button id="tab-btn-status" class="tab-btn enc-tab active">&#128225; Estado y Logs</button>
-        <button id="tab-btn-config" class="tab-btn enc-tab">&#9881; Configuraci&oacute;n</button>
+        <button id="tab-btn-status" class="tab-btn enc-tab active">&#128225; <span data-i18n="encoder.tab_status">Estado y Logs</span></button>
+        <button id="tab-btn-config" class="tab-btn enc-tab">&#9881; <span data-i18n="encoder.tab_config">Configuraci&oacute;n</span></button>
     </div>
 
     <div id="tab-status" class="enc-pane active">
         <div class="enc-input-meter-container" id="enc-input-meter">
             <div class="enc-input-meter-header">
-                <span class="enc-input-meter-title">Entrada al encoder (compartida)</span>
+                <span class="enc-input-meter-title" data-i18n="encoder.input_shared">Entrada al encoder (compartida)</span>
                 <span class="enc-input-meter-values" id="enc-input-meter-values">Pico: -- dB | RMS: -- dB</span>
             </div>
             <div class="enc-input-meter-bar">
@@ -276,44 +276,44 @@
             </div>
         </div>
 
-        <p style="margin: 15px 0 6px 0; font-size: 11px; color: #888; font-weight: bold;">Transmisiones:</p>
+        <p style="margin: 15px 0 6px 0; font-size: 11px; color: #888; font-weight: bold;" data-i18n="encoder.transmissions_list">Transmisiones:</p>
         <div id="enc-server-status-list"></div>
 
-        <p style="margin: 15px 0 5px 0; font-size: 11px; color: #888; font-weight: bold;">Registro de Emisi&oacute;n (Log):</p>
+        <p style="margin: 15px 0 5px 0; font-size: 11px; color: #888; font-weight: bold;" data-i18n="encoder.log_title">Registro de Emisi&oacute;n (Log):</p>
         <div class="enc-log-box" id="enc-log"></div>
     </div>
 
     <div id="tab-config" class="enc-pane">
         <fieldset class="fieldset-dark">
-            <legend>Entrada de Audio (compartida por todos los servidores)</legend>
+            <legend data-i18n="encoder.input_audio_shared">Entrada de Audio (compartida por todos los servidores)</legend>
             <div class="row">
-                <label>Origen de Audio:</label>
+                <label data-i18n="encoder.audio_source">Origen de Audio:</label>
                 <select id="enc-source" class="enc-input dark-select">
-                    <option value="master">&#128187; Mezcla Interna (Master PC)</option>
-                    <option value="mic">&#127908; Entrada Externa (Consola de Audio/Mic)</option>
+                    <option value="master" data-i18n="encoder.source_master">&#128187; Mezcla Interna (Master PC)</option>
+                    <option value="mic" data-i18n="encoder.source_mic">&#127908; Entrada Externa (Consola de Audio/Mic)</option>
                 </select>
             </div>
             <div class="row" id="row-mic" style="display: none;">
-                <label>Tarjeta / L&iacute;nea:</label>
+                <label data-i18n="encoder.card_line">Tarjeta / L&iacute;nea:</label>
                 <select id="enc-mic" class="enc-input dark-select"></select>
             </div>
             <div class="row">
-                <label>Punto de escucha:</label>
+                <label data-i18n="encoder.tap_point">Punto de escucha:</label>
                 <select id="enc-tap-point" class="enc-input dark-select">
-                    <option value="postFx">Post-FX / procesado</option>
-                    <option value="preFx">Pre-FX / limpio</option>
+                    <option value="postFx" data-i18n="encoder.tap_post">Post-FX / procesado</option>
+                    <option value="preFx" data-i18n="encoder.tap_pre">Pre-FX / limpio</option>
                 </select>
             </div>
         </fieldset>
 
-        <p style="margin: 0 0 8px 2px; font-size: 11px; color: #00a8ff; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px;">Servidores de transmisi&oacute;n</p>
+        <p style="margin: 0 0 8px 2px; font-size: 11px; color: #00a8ff; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px;" data-i18n="encoder.transmission_servers">Servidores de transmisi&oacute;n</p>
         <div id="enc-servers"></div>
-        <button id="btn-add-server" class="enc-add-btn">&#10133; Agregar servidor</button>
+        <button id="btn-add-server" class="enc-add-btn">&#10133; <span data-i18n="encoder.btn_add_server">Agregar servidor</span></button>
     </div>
 
     <div class="footer-bar">
-        <button id="btn-disconnect-all" class="enc-btn stop">&#9209; DESCONECTAR TODO</button>
-        <button id="btn-connect-all" class="enc-btn">&#128225; CONECTAR TODO</button>
+        <button id="btn-disconnect-all" class="enc-btn stop">&#9209; <span data-i18n="encoder.btn_disconnect_all">DESCONECTAR TODO</span></button>
+        <button id="btn-connect-all" class="enc-btn">&#128225; <span data-i18n="encoder.btn_connect_all">CONECTAR TODO</span></button>
     </div>
 
     <script src="encoder.js"></script>
