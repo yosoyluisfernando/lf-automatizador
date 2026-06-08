@@ -4535,6 +4535,19 @@ function saveEventsDB() {
     });
 }
 
+function saveEventLastFired(ev) {
+    if (!ev?.id) return Promise.resolve({ success: false, error: 'missing event id' });
+    return ipcRenderer.invoke('db-update-event-last-fired', { id: ev.id, lastFired: ev.lastFired || null }).then(result => {
+        if (!result?.success) {
+            recordIncident(`[EVENTOS] No se pudo guardar lastFired de ${ev.name || ev.id}: ${result?.error || 'error desconocido'}.`, { category: 'events', level: 'error' });
+        }
+        return result;
+    }).catch(err => {
+        recordIncident(`[EVENTOS] No se pudo guardar lastFired de ${ev.name || ev.id}: ${err.message || err}.`, { category: 'events', level: 'error' });
+        return { success: false, error: err.message || String(err) };
+    });
+}
+
 let selectedEventId = null; let collapsedGroups = new Set(); let rightClickedGroupId = null;
 
 function updateSelectedEventControls() {
@@ -4544,8 +4557,12 @@ function updateSelectedEventControls() {
     btnMod.title = selectedEventId ? 'Modificar evento seleccionado' : 'Selecciona un evento para modificarlo';
 }
 
+let eventsRefreshSeq = 0;
 ipcRenderer.on('refresh-events', async (e, savedEvent) => {
-    eventsMasterDB = await ipcRenderer.invoke('db-get-events');
+    const refreshSeq = ++eventsRefreshSeq;
+    const freshEvents = await ipcRenderer.invoke('db-get-events');
+    if (refreshSeq !== eventsRefreshSeq) return;
+    eventsMasterDB = Array.isArray(freshEvents) ? freshEvents : [];
     eventRuntimeQueue.clear();
     eventPreflightPromises.clear();
     eventsMasterDB.forEach(ev => { ev.checkedForThisCycle = false; });
@@ -6500,7 +6517,7 @@ setInterval(() => {
                     const entry = getEventQueueEntryForOccurrence(ev, { date: new Date(now.getTime()), timeStr: currentStr });
                     if (entry) setEventQueueStatus(entry, 'skipped', 'OMITIDO', 'Requiere audio al aire');
                     ev.lastFired = fireId;
-                    saveEventsDB();
+                    saveEventLastFired(ev);
                     recordIncident(`[EVENTOS] ${ev.name}: omitido porque no habia audio al aire.`, { category: 'events', level: 'warn' });
                     renderEventTimeline(true);
                 }
@@ -6514,7 +6531,7 @@ setInterval(() => {
                 const todayStr = now.toDateString(); const fireId = getEventFireId(ev, tTime, now); const ignoreId = `${ev.id}_${tTime}_${todayStr}`;
                 if (ev.lastFired !== fireId && !ignoredEventTriggers.includes(ignoreId)) {
                     ev.lastFired = fireId;
-                    saveEventsDB();
+                    saveEventLastFired(ev);
                     queueEventForEmission(ev, { occurrence: { date: new Date(now.getTime()), timeStr: tTime } }).catch(() => {
                         recordIncident(`[EVENTOS] ${ev.name}: disparo bloqueado por error interno.`, { category: 'events', level: 'error' });
                     });

@@ -92,29 +92,16 @@ function syncSourceTypeUi() {
     syncDuckingAvailability();
 }
 
-/** Bloquea el radio "Borrar lista" cuando la fuente es stream_url o locution. */
+/** Mantiene disponible "Borrar lista"; las acciones potentes no se corrigen en silencio. */
 function syncStreamActionLock() {
-    const sourceType = document.querySelector('input[name="ev-source-type"]:checked')?.value || 'file';
     const clearRadio = document.getElementById('ev-action-clear');
     const clearLabel = document.getElementById('ev-action-clear-label');
     if (!clearRadio || !clearLabel) return;
 
-    const isStream   = sourceType === 'stream_url';
-    const isLocution = sourceType === 'locution';
-    const shouldLock = isStream || isLocution;
-
-    clearRadio.disabled = shouldLock;
-    clearLabel.style.opacity = shouldLock ? '0.4' : '';
-    clearLabel.style.cursor  = shouldLock ? 'not-allowed' : '';
-    clearLabel.title = isStream   ? (i18n.t('event_editor.title_stream_lock') || 'No disponible para emisoras de radio (riesgo de silencio)') :
-                       isLocution ? (i18n.t('event_editor.title_loc_lock') || 'No disponible para locuciones (la playlist principal no debe borrarse)') : '';
-
-    // Si estaba seleccionado y ahora lo bloqueamos, cambiar a 'append-end'
-    if (shouldLock && clearRadio.checked) {
-        const appendRadio = document.querySelector('input[name="ev-action"][value="append-end"]');
-        if (appendRadio) appendRadio.checked = true;
-        syncActionExecutionCompatibility();
-    }
+    clearRadio.disabled = false;
+    clearLabel.style.opacity = '';
+    clearLabel.style.cursor  = '';
+    clearLabel.title = '';
 }
 
 /** Habilita o deshabilita el radio "ducking" según el tipo de fuente. */
@@ -573,6 +560,8 @@ document.getElementById('ev-commercial-block').addEventListener('change', (e) =>
 
 document.getElementById('btn-save').addEventListener('click', async (e) => {
     e.preventDefault();
+    const saveButton = document.getElementById('btn-save');
+    if (saveButton?.disabled) return;
     const sourceType = document.querySelector('input[name="ev-source-type"]:checked').value;
 
     // ── Validación y preparación según tipo de fuente ──────────────────────
@@ -726,12 +715,15 @@ document.getElementById('btn-save').addEventListener('click', async (e) => {
     const newEvent = eventRules.normalizeEventConfig(rawEvent);
 
     // Enviamos a guardar a SQLite vía main.js
+    if (saveButton) saveButton.disabled = true;
     try {
         const result = await ipcRenderer.invoke('save-event', newEvent);
         if (!result?.success) {
+            if (saveButton) saveButton.disabled = false;
             alert(result?.error || i18n.t('event_editor.err_save') || 'No se pudo guardar el evento.');
         }
     } catch (err) {
+        if (saveButton) saveButton.disabled = false;
         alert(err?.message || i18n.t('event_editor.err_save') || 'No se pudo guardar el evento.');
     }
 });
@@ -748,6 +740,7 @@ ipcRenderer.on('load-event-data', (e, data) => {
         syncSourceTypeUi();
         return;
     }
+    data = eventRules.normalizeEventConfig(data);
     currentEventId = data.id;
     
     let sourceType = data.sourceType || 'file';

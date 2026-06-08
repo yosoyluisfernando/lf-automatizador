@@ -40,6 +40,27 @@ test('event rules normalize incompatible execution combinations', () => {
     });
     assert.equal(omitDelay.requirePlaying, true);
     assert.equal(rules.canExecuteWhenStopped(omitDelay), false);
+
+    const legacyDelay = rules.normalizeEventConfig({
+        action: 'add',
+        execution: 'wait',
+        maxDelayActive: true,
+        maxDelayMinutes: 1,
+        maxDelaySeconds: 15,
+        maxDelayAction: 'force'
+    });
+    assert.equal(legacyDelay.execution, 'max-delay');
+    assert.equal(legacyDelay.maxDelayActive, true);
+    assert.equal(legacyDelay.maxDelayAction, 'force');
+
+    const streamClear = rules.normalizeEventConfig({
+        sourceType: 'stream_url',
+        action: 'clear',
+        execution: 'max-delay',
+        maxDelayActive: true,
+        maxDelayAction: 'omit'
+    });
+    assert.equal(streamClear.action, 'clear');
 });
 
 test('event air state includes auxiliary Rust players', () => {

@@ -194,6 +194,18 @@ module.exports = function(context) {
         }
     });
 
+    ipcMain.handle('db-update-event-last-fired', (e, payload = {}) => {
+        try {
+            if (!payload.id) return { success: false, error: 'Missing event id' };
+            db.prepare('UPDATE events SET last_fired = ? WHERE id = ?').run(payload.lastFired || null, payload.id);
+            notifyEventsChanged({ id: payload.id, lastFired: payload.lastFired || null, partial: true });
+            return { success: true };
+        } catch (err) {
+            writeLog("Error update-event-last-fired: " + err);
+            return { success: false, error: err.message || String(err) };
+        }
+    });
+
     ipcMain.on('save-event', (e, savedEvent) => {
         try {
             saveEventToDb(savedEvent);

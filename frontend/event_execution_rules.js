@@ -3,7 +3,6 @@
     const EXECUTIONS = new Set(['interrupt', 'wait', 'max-delay']);
     const MAX_DELAY_ACTIONS = new Set(['force', 'omit']);
     const DUCKING_SOURCES = new Set(['file', 'locution']);
-    const CLEAR_LOCKED_SOURCES = new Set(['stream_url', 'locution']);
 
     function clampInt(value, min, max, fallback = min) {
         const n = parseInt(value, 10);
@@ -13,7 +12,6 @@
 
     function normalizeAction(action, sourceType = 'file') {
         let next = ACTIONS.has(action) ? action : 'add';
-        if (next === 'clear' && CLEAR_LOCKED_SOURCES.has(sourceType)) next = 'append-end';
         if (next === 'ducking' && !DUCKING_SOURCES.has(sourceType)) next = 'add';
         return next;
     }
@@ -30,7 +28,10 @@
     function normalizeEventConfig(eventObj = {}) {
         const sourceType = eventObj.sourceType || 'file';
         const action = normalizeAction(eventObj.action, sourceType);
-        const execution = normalizeExecution(action, eventObj.execution);
+        const rawExecution = eventObj.maxDelayActive === true && eventObj.execution === 'wait'
+            ? 'max-delay'
+            : eventObj.execution;
+        const execution = normalizeExecution(action, rawExecution);
         const maxDelayActive = execution === 'max-delay' && eventObj.maxDelayActive !== false;
         const minutes = maxDelayActive ? clampInt(eventObj.maxDelayMinutes, 0, 9999, 0) : 0;
         const seconds = maxDelayActive ? clampInt(eventObj.maxDelaySeconds, 0, 59, 0) : 0;
