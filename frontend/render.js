@@ -38,6 +38,9 @@ const { ShortcutManager, isEditableShortcutTarget } = require('./shortcut_manage
 const { DEFAULT_SHORTCUTS } = require('./command_registry');
 const { runAutoPlayOnStart } = require('./autostart_runtime');
 const { createPlaylistGeneratorCore } = require('../backend/services/playlist_generator_core');
+const eventRules = window.EventExecutionRules;
+const eventAirState = window.EventAirState;
+const eventRuntime = window.EventRuntimeQueue;
 const shortcutManager = new ShortcutManager();
 
 // Núcleo del Generador de Playlist (lógica pura extraída a backend/services).
@@ -1710,14 +1713,17 @@ function refreshAirIncidentStatus() {
 
 function isAuxiliaryAudioOnAir(status = null) {
     const source = status || rustAudioProbeStatus?.lastStatus || null;
-    const players = Array.isArray(source?.players) ? source.players : [];
-    return players.some(player => {
-        const id = String(player?.id || '');
-        const state = String(player?.status || '').toLowerCase();
-        return (id.startsWith('aux1-') || id.startsWith('aux2-'))
-            && player?.audioReady !== false
-            && (state === 'playing' || state === 'fading');
-    });
+    if (eventAirState?.isAuxiliaryOnAir(source)) return true;
+    return window.lfAuxiliaryPlaylistApi?.isOnAir?.() === true;
+}
+
+function stopAuxiliaryEmissionForEventInterrupt() {
+    if (!isAuxiliaryAudioOnAir()) return;
+    try {
+        window.lfAuxiliaryPlaylistApi?.stopAll?.();
+    } catch (err) {
+        recordIncident(`[EVENTOS] No se pudo detener auxiliares al interrumpir: ${err.message || err}.`, { category: 'events', level: 'warn' });
+    }
 }
 
 function refreshEventsIncidentStatus() {
@@ -4517,7 +4523,17 @@ function saveExplicitTypes() { try { fs.writeFileSync(EXPLICIT_TYPES_PATH, JSON.
 // historial). Cache en memoria; se recarga cuando el Gestor avisa por IPC.
 let fileTypeOptionsDB = fileTypeAssignments.readOptions();
 function reloadFileTypeOptions() { fileTypeOptionsDB = fileTypeAssignments.readOptions(); }
-function saveEventsDB() { ipcRenderer.send('db-save-events-full', eventsMasterDB); }
+function saveEventsDB() {
+    return ipcRenderer.invoke('db-save-events-full', eventsMasterDB).then(result => {
+        if (!result?.success) {
+            recordIncident(`[EVENTOS] No se pudo guardar la base de eventos: ${result?.error || 'error desconocido'}.`, { category: 'events', level: 'error' });
+        }
+        return result;
+    }).catch(err => {
+        recordIncident(`[EVENTOS] No se pudo guardar la base de eventos: ${err.message || err}.`, { category: 'events', level: 'error' });
+        return { success: false, error: err.message || String(err) };
+    });
+}
 
 let selectedEventId = null; let collapsedGroups = new Set(); let rightClickedGroupId = null;
 
@@ -5869,8 +5885,9 @@ setInterval(updateEventCountdowns, 1000);
 
 async function queueEventForEmission(ev, options = {}) {
     clearEventPreHold();
+    const trigger = eventRules.getTrigger(options);
     const manualNow = new Date();
-    const manualOccurrence = (options.manual || options.playlistCommand) ? {
+    const manualOccurrence = (trigger !== 'auto-schedule') ? {
         date: manualNow,
         timeStr: `${manualNow.getHours().toString().padStart(2, '0')}:${manualNow.getMinutes().toString().padStart(2, '0')}:${manualNow.getSeconds().toString().padStart(2, '0')}`
     } : null;
@@ -5881,7 +5898,7 @@ async function queueEventForEmission(ev, options = {}) {
         return false;
     }
 
-    const preflightReason = options.playlistCommand ? 'fire' : (options.manual ? 'manual' : 'fire');
+    const preflightReason = trigger === 'manual-button' ? 'manual' : 'fire';
     const inspection = await runEventPreflight(ev, entry, preflightReason);
     if (!inspection.ok) {
         setEventQueueStatus(entry, 'blocked', 'ERROR', inspection.message || 'Fuente no lista');
@@ -5889,12 +5906,13 @@ async function queueEventForEmission(ev, options = {}) {
         return false;
     }
 
-    setEventQueueStatus(entry, 'dispatching', 'ENVIO', options.playlistCommand ? 'Ejecucion desde playlist' : (options.manual ? 'Ejecucion manual' : 'Disparo automatico'));
+    setEventQueueStatus(entry, 'dispatching', 'ENVIO', trigger === 'playlist-command' || trigger === 'auxiliary-command' ? 'Ejecucion desde playlist' : (trigger === 'manual-button' ? 'Ejecucion manual' : 'Disparo automatico'));
     const executed = await executeEvent(ev, {
         queueKey: entry.key,
         scheduledTime: entry.timeStr,
-        manual: !!options.manual,
-        playlistCommand: options.playlistCommand === true,
+        trigger,
+        manual: trigger === 'manual-button',
+        playlistCommand: trigger === 'playlist-command' || trigger === 'auxiliary-command',
         duckingDurationMs: entry.duckingDurationMs || 0,   // pre-calculado en preflight
     });
     if (!executed) {
@@ -5903,7 +5921,7 @@ async function queueEventForEmission(ev, options = {}) {
         renderEventTimeline(true);
         return false;
     }
-    recordIncident(`[EVENTOS] ${ev.name}: enviado a emision${options.manual ? ' manual' : ''}.`, { category: 'events', level: 'success' });
+    recordIncident(`[EVENTOS] ${ev.name}: enviado a emision${trigger === 'manual-button' ? ' manual' : ''}.`, { category: 'events', level: 'success' });
     
     const timeNow = new Date();
     const timeStr = `${timeNow.getHours().toString().padStart(2, '0')}:${timeNow.getMinutes().toString().padStart(2, '0')}`;
@@ -5917,7 +5935,7 @@ async function queueEventForEmission(ev, options = {}) {
 document.getElementById('gm-edit').addEventListener('click', () => { ipcRenderer.send('open-event-groups'); hideAllMenus(); });
 document.getElementById('btn-events-add').addEventListener('click', () => ipcRenderer.send('open-event-editor', null));
 document.getElementById('btn-events-mod').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { ev.hasError = false; ev.errorLoggedFor = null; ipcRenderer.send('open-event-editor', ev); } });
-document.getElementById('eim-exec').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) queueEventForEmission(ev, { manual: true }); hideAllMenus(); });
+document.getElementById('eim-exec').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) queueEventForEmission(ev, { trigger: 'manual-button' }); hideAllMenus(); });
 document.getElementById('eim-ignore').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { const absoluteTarget = getNextAbsoluteOccurrence(ev, true); if (absoluteTarget) { const dateStr = absoluteTarget.date.toDateString(); const ignoreKey = `${ev.id}_${absoluteTarget.timeStr}_${dateStr}`; if (ignoredEventTriggers.includes(ignoreKey)) { ignoredEventTriggers = ignoredEventTriggers.filter(k => k !== ignoreKey); } else { ignoredEventTriggers.push(ignoreKey); if (ev.hasError) { ev.hasError = false; ev.errorLoggedFor = null; } } updateEventCountdowns(); } } hideAllMenus(); });
 document.getElementById('eim-mod').addEventListener('click', () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { ev.hasError = false; ev.errorLoggedFor = null; ipcRenderer.send('open-event-editor', ev); } hideAllMenus(); });
 document.getElementById('eim-del').addEventListener('click', async () => { const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) { hideAllMenus(); const confirm = await ipcRenderer.invoke('dialog:confirm', `Seguro que deseas eliminar el evento "${ev.name}"? Esta accion no se puede deshacer.`); if (confirm) { eventsMasterDB = eventsMasterDB.filter(e => e.id !== selectedEventId); emittedEventsToday = emittedEventsToday.filter(e => e.ev.id !== selectedEventId); selectedEventId = null; updateSelectedEventControls(); saveEventsDB(); renderEventsList(); } } });
@@ -5935,7 +5953,7 @@ document.getElementById('btn-events-list').addEventListener('click', (e) => {
 document.getElementById('em-save-all').addEventListener('click', () => { const blob = new Blob([JSON.stringify(eventsMasterDB, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `Respaldo_Total.eventoslf`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); hideAllMenus(); });
 document.getElementById('em-load').addEventListener('click', () => { document.getElementById('load-event-input').click(); hideAllMenus(); });
 document.getElementById('load-event-input').addEventListener('change', (e) => { if (e.target.files.length === 0) return; const file = e.target.files[0]; const reader = new FileReader(); reader.onload = (ev) => { try { const data = JSON.parse(ev.target.result); if (Array.isArray(data)) { eventsMasterDB = data; } else { const idx = eventsMasterDB.findIndex(ex => ex.id === data.id); if (idx >= 0) eventsMasterDB[idx] = data; else eventsMasterDB.push(data); } saveEventsDB(); } catch (err) { } }; reader.readAsText(file); e.target.value = ''; });
-document.getElementById('btn-events-exec').addEventListener('click', () => { if (!selectedEventId) return; const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) queueEventForEmission(ev, { manual: true }); });
+document.getElementById('btn-events-exec').addEventListener('click', () => { if (!selectedEventId) return; const ev = eventsMasterDB.find(e => e.id === selectedEventId); if (ev) queueEventForEmission(ev, { trigger: 'manual-button' }); });
 
 const EVENT_PRIORITY_RANK = { low: 0, normal: 1, high: 2, critical: 3 };
 
@@ -6162,7 +6180,38 @@ function markEventQueueAfterInsert(eventObj, runtimeOptions, firstInsertedRow, m
     renderEventTimeline(true);
 }
 
+function eventRuntimeText(key, fallback) {
+    const lookupKey = `event_runtime.${key}`;
+    const translated = i18n.t(lookupKey);
+    return translated && translated !== lookupKey ? translated : fallback;
+}
+
+function finalizeEventDelayForPlayback(row, reason = 'played') {
+    if (!row?.dataset?.queuedAt && !row?.dataset?.eventQueueKey) return;
+    const queueEntry = row.dataset.eventQueueKey ? eventRuntimeQueue.get(row.dataset.eventQueueKey) : null;
+    if (row.dataset.queuedAt) {
+        eventRuntime?.clearDelayBatch(row, { clearExecution: false });
+        if (queueEntry && queueEntry.status !== 'fired') {
+            const statusMessage = reason === 'stream'
+                ? eventRuntimeText('stream_tolerance_cancelled_status', 'Stream en emision; tolerancia cancelada')
+                : eventRuntimeText('event_tolerance_cancelled_status', 'Evento en emision; tolerancia cancelada');
+            setEventQueueStatus(queueEntry, 'fired', 'AL AIRE', statusMessage);
+        }
+        recordIncident(`[EVENTOS] ${row.dataset.eventName || queueEntry?.eventName || 'Evento'}: ${eventRuntimeText('tolerance_cancelled', 'tolerancia cancelada porque ya entro al aire')}.`, { category: 'events', level: 'success' });
+        renderEventTimeline(true);
+    }
+}
+
+function omitEventBeforePlaylistInsert(eventObj, runtimeOptions, message) {
+    const entry = runtimeOptions?.queueKey ? eventRuntimeQueue.get(runtimeOptions.queueKey) : null;
+    if (entry) setEventQueueStatus(entry, 'omitted', 'OMITIDO', message);
+    recordIncident(`[EVENTOS] ${eventObj.name}: ${message}.`, { category: 'events', level: 'warn' });
+    renderEventTimeline(true);
+    return true;
+}
+
 async function executeEvent(eventObj, runtimeOptions = {}) {
+    eventObj = eventRules.normalizeEventConfig(eventObj);
     let pistas = [];
 
     // ── Pisador / Superposición (action === 'ducking') ────────────────────
@@ -6290,7 +6339,16 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
     } else { let dur = 0; try { dur = Math.round(await getAudioDuration(eventObj.filePath)); } catch (e) { } pistas.push({ ruta: eventObj.filePath, nombre: path.basename(eventObj.filePath), duracion: dur, type: 'normal' }); }
 
     if (pistas.length === 0) return false;
-    const action = eventObj.action || 'add'; const execution = eventObj.execution || 'interrupt'; const maxDelayActive = execution === 'max-delay' && eventObj.maxDelayActive; const priority = getEventPriority(eventObj); const interruptAllowed = execution === 'interrupt' && canEventInterruptNow(eventObj, runtimeOptions); const fromPlaylistCommand = runtimeOptions.playlistCommand === true; const deferClearUntilExecution = action === 'clear' && currentPlayingRow && !interruptAllowed && !fromPlaylistCommand;
+    const action = eventObj.action || 'add'; const execution = eventObj.execution || 'interrupt'; const maxDelayActive = execution === 'max-delay' && eventObj.maxDelayActive; const priority = getEventPriority(eventObj); const interruptAllowed = execution === 'interrupt' && canEventInterruptNow(eventObj, runtimeOptions); const fromPlaylistCommand = runtimeOptions.playlistCommand === true; const programOnAir = isProgramAudioOnAir(); const canRunStopped = eventRules.canExecuteWhenStopped(eventObj); const deferClearUntilExecution = action === 'clear' && currentPlayingRow && !interruptAllowed && !fromPlaylistCommand;
+
+    if (action !== 'append-end' && !programOnAir) {
+        if (maxDelayActive && eventObj.maxDelayAction === 'omit') {
+            return omitEventBeforePlaylistInsert(eventObj, runtimeOptions, eventRuntimeText('omitted_no_audio', 'omitido porque no habia audio al aire'));
+        }
+        if (!canRunStopped) {
+            return omitEventBeforePlaylistInsert(eventObj, runtimeOptions, eventRuntimeText('omitted_requires_audio', 'omitido porque requiere audio al aire'));
+        }
+    }
 
     // El evento SIEMPRE debe cargarse en la playlist que está al aire (la de
     // programa, pgmTab), no en la que el operador tenga visible. `pgmTab` se
@@ -6380,8 +6438,11 @@ async function executeEvent(eventObj, runtimeOptions = {}) {
         if (firstInsertedRow) playRow(firstInsertedRow, false, 2, { forceFollowView: action === 'clear' });
         return true;
     }
-    if (action === 'append-end') { if (firstInsertedRow && !maxDelayActive && !isProgramAudioOnAir()) { playRow(firstInsertedRow, false); const entry = runtimeOptions.queueKey ? eventRuntimeQueue.get(runtimeOptions.queueKey) : null; if (entry) setEventQueueStatus(entry, 'fired', 'AL AIRE', 'Disparado a emision'); } return true; }
-    if (execution === 'interrupt' && interruptAllowed) { if (firstInsertedRow) playRow(firstInsertedRow, false, 2, { forceFollowView: action === 'clear' }); } else { if (firstInsertedRow && !maxDelayActive && !isProgramAudioOnAir()) { playRow(firstInsertedRow, false, 0, { forceFollowView: action === 'clear' }); } else if (firstInsertedRow) { syncQueuedNextAfterEventInsert(targetTbody, firstInsertedRow); } }
+    if (action === 'append-end') {
+        recordIncident(`[EVENTOS] ${eventObj.name}: ${eventRuntimeText('append_end_no_play', 'agregado al final sin reproducir')}.`, { category: 'events', level: 'success' });
+        return true;
+    }
+    if (execution === 'interrupt' && interruptAllowed) { if (firstInsertedRow) { stopAuxiliaryEmissionForEventInterrupt(); playRow(firstInsertedRow, false, 0, { forceFollowView: action === 'clear' }); } } else { if (firstInsertedRow && !maxDelayActive && !programOnAir) { playRow(firstInsertedRow, false, 0, { forceFollowView: action === 'clear' }); } else if (firstInsertedRow) { syncQueuedNextAfterEventInsert(targetTbody, firstInsertedRow); } }
     return true;
 }
 
@@ -6431,7 +6492,7 @@ setInterval(() => {
     eventsMasterDB.forEach(ev => {
         if (!isDateValidForEvent(now, ev)) return;
         if (isEventQueuedWithMaxDelay(ev.id)) return;
-        if (ev.requirePlaying && (!eventPreHoldActive && (!currentPlayingRow || isPlayerClockPaused(activePlayer)))) {
+        if (ev.requirePlaying && (!eventPreHoldActive && !isProgramAudioOnAir())) {
             let expandedTimes = getExpandedEventTimes(ev);
             if (expandedTimes.includes(currentStr)) {
                 const todayStr = now.toDateString(); const fireId = getEventFireId(ev, currentStr, now); const ignoreId = `${ev.id}_${currentStr}_${todayStr}`;
@@ -12045,6 +12106,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         const batchIdToKeep = tr.dataset.batchId || null;
         const originalIdx = parseInt(tr.dataset.originalTbodyIndex, 10);
         const eventClearBody = (Number.isInteger(originalIdx) && tbodys[originalIdx]) ? tbodys[originalIdx] : tr.closest('tbody');
+        finalizeEventDelayForPlayback(tr);
         if (tr.dataset.clearOnExecution === 'true' && batchIdToKeep) { clearPlaylistBodyForEventBatch(eventClearBody, batchIdToKeep); getBatchRowsInPlaylistBody(eventClearBody, batchIdToKeep).forEach(row => { delete row.dataset.clearOnExecution; delete row.dataset.queuedAt; delete row.dataset.originalTbodyIndex; }); calcularHorasPlaylist(); updateNextTrackVisuals(); }
         if (!isAutoMix && stopAfterCurrent) { stopAfterCurrent = false; applyStopAfterVisualState(); }
         if (typeof window.disableRepeatMode === 'function') window.disableRepeatMode();
@@ -12930,7 +12992,7 @@ async function executeEventCommandRow(commandRow) {
             recordIncident(`[PLAYLIST] No se pudo ejecutar "${eventName}": el evento ya no existe.`, { category: 'events', level: 'error', autoAction: true });
             return;
         }
-        executed = await queueEventForEmission(ev, { playlistCommand: true });
+        executed = await queueEventForEmission(ev, { trigger: 'playlist-command' });
         if (!executed) {
             recordIncident(`[PLAYLIST] Comando de evento fallido: ${ev.name}.`, { category: 'events', level: 'error', autoAction: true });
         }
@@ -13010,6 +13072,7 @@ function playNextAfterFailedStream(tr) {
  */
 async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds = 0) {
     stopActiveStream();
+    finalizeEventDelayForPlayback(tr, 'stream');
 
     // Replicar el comportamiento de playRow para pistas normales (línea 10939):
     // si queuedNextRow apunta a esta misma fila (el stream fue el "siguiente"
@@ -13300,10 +13363,10 @@ window.lfMainPlaylistApi = {
             recordIncident(`[EVENTOS] Comando auxiliar no ejecutado: evento no encontrado (${eventId || 'sin id'}).`, { category: 'events', level: 'warn' });
             return null;
         }
-        return executeEvent(eventObj, runtimeOptions);
+        return queueEventForEmission(eventObj, runtimeOptions);
     }
 };
-ipcRenderer.on('auxiliary-execute-event', (_e, { eventId } = {}) => window.lfMainPlaylistApi?.executeEventById?.(eventId, { playlistCommand: true }));
+ipcRenderer.on('auxiliary-execute-event', (_e, { eventId } = {}) => window.lfMainPlaylistApi?.executeEventById?.(eventId, { trigger: 'auxiliary-command' }));
 setInterval(() => { runPlaybackGuard(); }, PLAYBACK_GUARD_INTERVAL_MS);
 
 const btnMasterVol = document.getElementById('master-volume');

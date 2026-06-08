@@ -850,6 +850,13 @@
         return stopList(listIndex, true);
     }
 
+    window.lfAuxiliaryPlaylistApi = {
+        stopAll: async () => {
+            await Promise.all([0, 1].map(index => stopList(index)));
+        },
+        isOnAir: () => state.lists.some(list => list.status === 'playing')
+    };
+
     function getVisualNextIndex(listIndex) {
         const list = state.lists[listIndex];
         if (getPlaybackMode(listIndex) === 'manual' && list.status === 'playing') return -1;
@@ -879,7 +886,7 @@
     async function requestMainEventExecution(row) {
         const eventId = row?.eventId || row?.ruta || '';
         if (!eventId) return null;
-        if (window.lfMainPlaylistApi?.executeEventById) return window.lfMainPlaylistApi.executeEventById(eventId, { playlistCommand: true });
+        if (window.lfMainPlaylistApi?.executeEventById) return window.lfMainPlaylistApi.executeEventById(eventId, { trigger: 'auxiliary-command' });
         ipcRenderer.send('auxiliary-execute-event', { eventId });
         return null;
     }

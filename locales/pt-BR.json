@@ -717,6 +717,14 @@
         "encoder_error": "Erro",
         "encoder_disconnected": "Desconectado"
     },
+    "event_runtime": {
+        "stream_tolerance_cancelled_status": "Stream no ar; tolerância cancelada",
+        "event_tolerance_cancelled_status": "Evento no ar; tolerância cancelada",
+        "tolerance_cancelled": "tolerância cancelada porque já entrou no ar",
+        "omitted_no_audio": "omitido porque não havia áudio no ar",
+        "omitted_requires_audio": "omitido porque requer áudio no ar",
+        "append_end_no_play": "adicionado ao final sem reproduzir"
+    },
     "library": {
         "title": "Biblioteca de Músicas",
         "search_placeholder": "🔍 Buscar no banco de dados... (Busca Inteligente)",
@@ -997,6 +1005,10 @@
         "err_source": "Selecione um caminho válido na Origem de Áudio.",
         "err_week": "Você deve selecionar pelo menos uma semana do mês.",
         "err_wait": "Especifique um Tempo Máximo de Espera válido (mínimo 1 segundo).",
+        "exec_disabled_append": "Não compatível: Adicionar ao final apenas carrega o evento na playlist.",
+        "exec_disabled_ducking": "Não compatível: o pisador toca sobre o programa e não usa regras da playlist.",
+        "exec_stopped_disabled_omit": "Não compatível: ao omitir, o evento não deve executar com o reprodutor parado.",
+        "err_save": "Não foi possível salvar o evento.",
         "title_stream_lock": "Indisponível para estações de rádio (risco de silêncio)",
         "title_loc_lock": "Indisponível para locuções (a playlist principal não deve ser limpa)",
         "preview_secs": "({0} seg.)",

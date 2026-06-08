@@ -83,8 +83,123 @@ module.exports = function(context) {
         } catch(e) { return []; }
     });
 
+    const parseEventNumber = (val) => (val !== '' && val !== null && val !== undefined && !isNaN(val)) ? parseFloat(val) : null;
+
+    function saveEventToDb(savedEvent = {}) {
+        const stmt = db.prepare(`
+            INSERT INTO events (
+                id, name, group_id, source_type, file_path, primary_time, other_hours, day_mode,
+                specific_days, target_weeks, validity_start, validity_end, action, execution, priority,
+                color_text, color_bg, require_playing, max_delay_active, max_delay_minutes, max_delay_seconds,
+                max_delay_time, max_delay_action, cyclic_active, cyclic_interval, cyclic_unit, cyclic_limit,
+                last_fired,
+                stream_url, stream_stop_seconds, stream_connect_timeout, stream_max_retries,
+                stream_metadata_mode, stream_custom_metadata,
+                locution_type, event_ducking_volume, event_ducking_fade
+            ) VALUES (
+                @id, @name, @group, @sourceType, @filePath, @primaryTime, @otherHours, @dayMode,
+                @specificDays, @targetWeeks, @validityStart, @validityEnd, @action, @execution, @priority,
+                @colorText, @colorBg, @requirePlaying, @maxDelayActive, @maxDelayMinutes, @maxDelaySeconds,
+                @maxDelayTime, @maxDelayAction, @cyclicActive, @cyclicInterval, @cyclicUnit, @cyclicLimit,
+                @lastFired,
+                @streamUrl, @streamStopSeconds, @streamConnectTimeout, @streamMaxRetries,
+                @streamMetadataMode, @streamCustomMetadata,
+                @locutionType, @eventDuckingVolume, @eventDuckingFade
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                name=@name, group_id=@group, source_type=@sourceType, file_path=@filePath,
+                primary_time=@primaryTime, other_hours=@otherHours, day_mode=@dayMode,
+                specific_days=@specificDays, target_weeks=@targetWeeks, validity_start=@validityStart,
+                validity_end=@validityEnd, action=@action, execution=@execution, priority=@priority,
+                color_text=@colorText, color_bg=@colorBg, require_playing=@requirePlaying,
+                max_delay_active=@maxDelayActive, max_delay_minutes=@maxDelayMinutes,
+                max_delay_seconds=@maxDelaySeconds, max_delay_time=@maxDelayTime,
+                max_delay_action=@maxDelayAction, cyclic_active=@cyclicActive,
+                cyclic_interval=@cyclicInterval, cyclic_unit=@cyclicUnit, cyclic_limit=@cyclicLimit,
+                last_fired=@lastFired,
+                stream_url=@streamUrl, stream_stop_seconds=@streamStopSeconds,
+                stream_connect_timeout=@streamConnectTimeout, stream_max_retries=@streamMaxRetries,
+                stream_metadata_mode=@streamMetadataMode, stream_custom_metadata=@streamCustomMetadata,
+                locution_type=@locutionType, event_ducking_volume=@eventDuckingVolume,
+                event_ducking_fade=@eventDuckingFade
+        `);
+        stmt.run({
+            id: savedEvent.id,
+            name: savedEvent.name,
+            group: savedEvent.group || 'g_general',
+            sourceType: savedEvent.sourceType || 'file',
+            filePath: savedEvent.filePath || '',
+            primaryTime: savedEvent.primaryTime,
+            otherHours: JSON.stringify(savedEvent.otherHours || []),
+            dayMode: savedEvent.dayMode || 'daily',
+            specificDays: JSON.stringify(savedEvent.specificDays || []),
+            targetWeeks: JSON.stringify(savedEvent.targetWeeks || []),
+            validityStart: savedEvent.validityStart || null,
+            validityEnd: savedEvent.validityEnd || null,
+            action: savedEvent.action || 'add',
+            execution: savedEvent.execution || 'interrupt',
+            priority: savedEvent.priority || 'normal',
+            colorText: savedEvent.colorText || '#ffffff',
+            colorBg: savedEvent.colorBg || '#1a1a1c',
+            requirePlaying: savedEvent.requirePlaying ? 1 : 0,
+            maxDelayActive: savedEvent.maxDelayActive ? 1 : 0,
+            maxDelayMinutes: parseEventNumber(savedEvent.maxDelayMinutes) ?? 0,
+            maxDelaySeconds: parseEventNumber(savedEvent.maxDelaySeconds) ?? 0,
+            maxDelayTime: parseEventNumber(savedEvent.maxDelayTime) ?? 0,
+            maxDelayAction: savedEvent.maxDelayAction || 'omit',
+            cyclicActive: savedEvent.cyclicActive ? 1 : 0,
+            cyclicInterval: parseEventNumber(savedEvent.cyclicInterval) ?? 0,
+            cyclicUnit: savedEvent.cyclicUnit || 'minutes',
+            cyclicLimit: parseEventNumber(savedEvent.cyclicLimit) ?? 0,
+            lastFired: savedEvent.lastFired || null,
+            streamUrl: savedEvent.streamUrl || null,
+            streamStopSeconds: parseEventNumber(savedEvent.streamStopSeconds) ?? 0,
+            streamConnectTimeout: parseEventNumber(savedEvent.streamConnectTimeout) ?? 10,
+            streamMaxRetries: parseEventNumber(savedEvent.streamMaxRetries) ?? 3,
+            streamMetadataMode: savedEvent.streamMetadataMode || 'icy',
+            streamCustomMetadata: savedEvent.streamCustomMetadata || null,
+            locutionType: savedEvent.locutionType || 'time',
+            eventDuckingVolume: parseEventNumber(savedEvent.eventDuckingVolume) ?? 20,
+            eventDuckingFade: parseEventNumber(savedEvent.eventDuckingFade) ?? 500
+        });
+    }
+
+    function saveEventsFullToDb(events) {
+        db.transaction(() => {
+            db.prepare('DELETE FROM events').run();
+            for (const ev of (Array.isArray(events) ? events : [])) saveEventToDb(ev);
+        })();
+    }
+
+    ipcMain.handle('save-event', (e, savedEvent) => {
+        try {
+            saveEventToDb(savedEvent);
+            notifyEventsChanged(savedEvent);
+            if (context.eventEditorWindow && !context.eventEditorWindow.isDestroyed()) context.eventEditorWindow.close();
+            return { success: true };
+        } catch (err) {
+            writeLog("Error guardando evento: " + err);
+            return { success: false, error: err.message || String(err) };
+        }
+    });
+
+    ipcMain.handle('db-save-events-full', (e, events) => {
+        try {
+            saveEventsFullToDb(events);
+            notifyEventsChanged();
+            return { success: true };
+        } catch(err) {
+            writeLog("Error save-events-full: " + err);
+            return { success: false, error: err.message || String(err) };
+        }
+    });
+
     ipcMain.on('save-event', (e, savedEvent) => {
         try {
+            saveEventToDb(savedEvent);
+            notifyEventsChanged(savedEvent);
+            if (context.eventEditorWindow && !context.eventEditorWindow.isDestroyed()) context.eventEditorWindow.close();
+            return;
             const parseNum = (val) => (val !== '' && val !== null && val !== undefined && !isNaN(val)) ? parseFloat(val) : null;
             const stmt = db.prepare(`
                 INSERT INTO events (
@@ -161,13 +276,8 @@ module.exports = function(context) {
 
     ipcMain.on('db-save-events-full', (e, events) => {
         try {
-            db.transaction(() => {
-                db.prepare('DELETE FROM events').run();
-                const stmt = db.prepare(`INSERT INTO events (id, name, group_id, source_type, file_path, primary_time, other_hours, day_mode, specific_days, target_weeks, validity_start, validity_end, action, execution, priority, color_text, color_bg, require_playing, max_delay_active, max_delay_minutes, max_delay_seconds, max_delay_time, max_delay_action, cyclic_active, cyclic_interval, cyclic_unit, cyclic_limit, last_fired) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-                for(let ev of events) {
-                    stmt.run(ev.id, ev.name, ev.group||'g_general', ev.sourceType, ev.filePath, ev.primaryTime, JSON.stringify(ev.otherHours||[]), ev.dayMode, JSON.stringify(ev.specificDays||[]), JSON.stringify(ev.targetWeeks||[]), ev.validityStart, ev.validityEnd, ev.action, ev.execution, ev.priority || 'normal', ev.colorText, ev.colorBg, ev.requirePlaying?1:0, ev.maxDelayActive?1:0, ev.maxDelayMinutes, ev.maxDelaySeconds, ev.maxDelayTime, ev.maxDelayAction, ev.cyclicActive?1:0, ev.cyclicInterval, ev.cyclicUnit, ev.cyclicLimit, ev.lastFired);
-                }
-            })();
+            saveEventsFullToDb(events);
+            notifyEventsChanged();
         } catch(err) { writeLog("Error save-events-full: " + err); }
     });
 
