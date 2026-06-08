@@ -230,7 +230,7 @@ struct FxState {
 fn is_program_bus(bus_id: &str) -> bool {
     matches!(
         bus_id,
-        "master" | "jingle" | "cartwall" | "pl1" | "pl2" | "pl3" | "pl4"
+        "master" | "jingle" | "cartwall" | "pl1" | "pl2" | "pl3" | "pl4" | "aux1" | "aux2"
     )
 }
 
@@ -3792,6 +3792,10 @@ fn default_bus_for_player(player_id: &str) -> &'static str {
         "pl2" | "playlist-2" => "pl2",
         "pl3" | "playlist-3" => "pl3",
         "pl4" | "playlist-4" => "pl4",
+        "aux1" | "auxiliary-1" | "aux-playlist-1" => "aux1",
+        "aux2" | "auxiliary-2" | "aux-playlist-2" => "aux2",
+        id if id.starts_with("aux1-") || id.starts_with("auxiliary-1-") => "aux1",
+        id if id.starts_with("aux2-") || id.starts_with("auxiliary-2-") => "aux2",
         _ => "",
     }
 }

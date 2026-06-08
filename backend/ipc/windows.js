@@ -1257,7 +1257,7 @@ module.exports = function(context) {
         return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; 
     }); 
     
-    ipcMain.handle('dialog:savePlaylist', async (e, defName) => { const res = await dialog.showSaveDialog(context.mainWindow, { title: 'Guardar Playlist', defaultPath: defName || 'Mi_Playlist.LFPlay', filters: [{ name: 'LFPlay Playlist', extensions: ['lfplay'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; }); 
+    ipcMain.handle('dialog:savePlaylist', async (e, defName) => { const currentWin = BrowserWindow.fromWebContents(e.sender) || context.mainWindow; const res = await dialog.showSaveDialog(currentWin, { title: 'Guardar Playlist', defaultPath: defName || 'Mi_Playlist.LFPlay', filters: [{ name: 'LFPlay Playlist', extensions: ['lfplay'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; }); 
     
     ipcMain.handle('dialog:selectFolder', async (event) => { 
         const currentWin = BrowserWindow.fromWebContents(event.sender) || context.eventEditorWindow || context.libraryWindow || context.settingsWindow || context.mainWindow; 

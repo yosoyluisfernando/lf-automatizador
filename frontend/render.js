@@ -383,7 +383,7 @@ function clearPlayerPlaybackMeta(player) {
 }
 
 let uiPrefs = loadConfig(uiPrefsPath, { 
-    controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', playlistColumnWidths: [92, 520, 96, 82, 82],
+    controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', auxiliaryPanel: false, auxiliaryPanelLastMode: 'floating', auxiliaryPanelLayout: 'stacked', rightPanelView: 'cartwall', playlistColumnWidths: [92, 520, 96, 82, 82],
     controlsOrder: ['btn-play', 'btn-pause', 'btn-stop', 'btn-next', 'btn-stop-after', 'btn-talk'],
     controlsHidden: [],
     modesOrder: ['btn-mode-looplist', 'btn-mode-remove', 'btn-mode-repeat'],
@@ -454,8 +454,10 @@ function applyUILayout(prefs) {
 }
 
 let fxPrefs = loadConfig(fxPrefsPath, { preamp: 0, pan: 0, mono: false, eq_bands: [0, 0, 0, 0, 0, 0, 0, 0], eq_on: false, comp_on: false, lim_on: false, order: ['eq', 'comp', 'limiter'], custom_presets: {}, active_preset: 'def_Plano (Reset)' });
-let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', keyboardShortcutScope: 'contextual', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
+let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, { modeLoopPlaylist: false, playbackMode: 'normal', modeRemovePlayed: false, modeRepeatTrack: false, timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80, outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default', monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', encoderSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default', playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', auxiliaryOutputModes: ['master', 'master'], auxiliaryOutputs: ['default', 'default'], keyboardShortcutScope: 'contextual', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true, chk_mus_fadein: false, chk_mus_fadeout: false, chk_mus_fadeout_stop: true, chk_mus_fadeout_next: true, chk_mus_mix: true, chk_mus_mix_db: true, chk_mus_mix_fadeout: false, num_mus_fadein: 0, num_mus_fadeout: 2, num_mus_fadeout_stop: 2, num_mus_fadeout_next: 0.6, num_mus_mix: 0.6, num_mus_mix_db: -14, eventsMasterActive: true, eventsManualOnly: false, dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip' }));
 generalPrefs.modeRepeatTrack = false;
+generalPrefs.playbackMode = normalizePlaybackMode(generalPrefs.playbackMode || (generalPrefs.modeLoopPlaylist ? 'infinite' : 'normal'));
+generalPrefs.modeLoopPlaylist = generalPrefs.playbackMode === 'infinite';
 saveConfig(generalPrefsPath, generalPrefs);
 
 // Iniciar sistema de internacionalización
@@ -902,7 +904,7 @@ function syncRustPlaylistMode() {
         // Rust solo reproduce decks; no debe emitir decisiones de playlist.
         repeatTrack: false,
         removePlayed: false,
-        loopPlaylist: generalPrefs.modeLoopPlaylist === true,
+        loopPlaylist: isInfinitePlaybackMode(),
         repeatForgetProtectionEnabled: generalPrefs.repeatForgetProtectionEnabled === true,
         repeatForgetProtectionMax: Math.max(1, Math.min(999, parseInt(generalPrefs.repeatForgetProtectionMax, 10) || 10)),
         repeatDisableOnManualNext: generalPrefs.repeatDisableOnManualNext !== false,
@@ -1084,14 +1086,76 @@ function resolveNextOperationalRow(startRow, allowLoop = false) {
     return null;
 }
 
-function setQueuedNextManual(row) {
-    document.querySelectorAll('.playlist-table tr[data-manual-next="true"]').forEach(tr => {
-        delete tr.dataset.manualNext;
+function normalizePlaybackMode(mode) {
+    return ['normal', 'infinite', 'manual', 'random'].includes(mode) ? mode : 'normal';
+}
+
+function getPlaybackMode() {
+    const mode = normalizePlaybackMode(generalPrefs.playbackMode);
+    if (generalPrefs.playbackMode !== mode) generalPrefs.playbackMode = mode;
+    return mode;
+}
+
+function isInfinitePlaybackMode() {
+    return getPlaybackMode() === 'infinite';
+}
+
+function getOperationalRows(tbody) {
+    return Array.from(tbody?.children || []).filter(row => row?.parentNode && !isPlaylistNoteRow(row));
+}
+
+function getRandomOperationalRow(tbody) {
+    const rows = getOperationalRows(tbody);
+    if (!rows.length) return null;
+    return rows[Math.floor(Math.random() * rows.length)] || null;
+}
+
+function clearManualDeferredNext() {
+    document.querySelectorAll('.playlist-table tr[data-manual-deferred="true"]').forEach(row => {
+        delete row.dataset.manualDeferred;
     });
+}
+
+function markQueuedAsManualDeferred() {
+    clearManualDeferredNext();
+    if (queuedNextRow && document.body.contains(queuedNextRow)) queuedNextRow.dataset.manualDeferred = 'true';
+}
+
+function clearQueuedNextMarkers() {
+    document.querySelectorAll('.playlist-table tr[data-manual-next="true"], .playlist-table tr[data-manual-deferred="true"]').forEach(row => {
+        delete row.dataset.manualNext;
+        delete row.dataset.manualDeferred;
+    });
+}
+
+function setQueuedNextAfterRowStarted(row) {
+    if (queuedNextRow === row) {
+        delete row.dataset.manualNext;
+        delete row.dataset.manualDeferred;
+        queuedNextRow = null;
+    }
+    const mode = getPlaybackMode();
+    if (mode === 'manual') {
+        if (queuedNextRow && document.body.contains(queuedNextRow)) markQueuedAsManualDeferred();
+        else clearManualDeferredNext();
+        return;
+    }
+    clearManualDeferredNext();
+    if (mode === 'random') {
+        queuedNextRow = getRandomOperationalRow(row?.closest('tbody') || tbodys[pgmTab]);
+        if (queuedNextRow) delete queuedNextRow.dataset.manualNext;
+        return;
+    }
+    queuedNextRow = resolveNextOperationalRow(row?.nextElementSibling, mode === 'infinite');
+}
+
+function setQueuedNextManual(row) {
+    clearQueuedNextMarkers();
 
     queuedNextRow = row;
     if (queuedNextRow) {
         queuedNextRow.dataset.manualNext = "true";
+        if (getPlaybackMode() === 'manual' && currentPlayingRow) queuedNextRow.dataset.manualDeferred = 'true';
     }
     updateNextTrackVisuals();
     saveSessionSnapshot();
@@ -1637,10 +1701,23 @@ function recordIncident(msg, meta = {}) {
 }
 
 function refreshAirIncidentStatus() {
+    if (isAuxiliaryAudioOnAir()) { setIncidentStatus('air', i18n.t('incidents.air_on_air'), 'ok'); return; }
     if (currentPlayingRow && !isPlayerClockPaused(activePlayer)) { setIncidentStatus('air', i18n.t('incidents.air_on_air'), 'ok'); return; }
     if (currentPlayingRow && playbackHoldByUser) { setIncidentStatus('air', i18n.t('incidents.air_manual_pause'), 'manual'); return; }
     if (currentPlayingRow) { setIncidentStatus('air', i18n.t('incidents.air_waiting'), 'warn'); return; }
     setIncidentStatus('air', i18n.t('incidents.air_stopped'), 'manual');
+}
+
+function isAuxiliaryAudioOnAir(status = null) {
+    const source = status || rustAudioProbeStatus?.lastStatus || null;
+    const players = Array.isArray(source?.players) ? source.players : [];
+    return players.some(player => {
+        const id = String(player?.id || '');
+        const state = String(player?.status || '').toLowerCase();
+        return (id.startsWith('aux1-') || id.startsWith('aux2-'))
+            && player?.audioReady !== false
+            && (state === 'playing' || state === 'fading');
+    });
 }
 
 function refreshEventsIncidentStatus() {
@@ -2888,6 +2965,15 @@ function finishCurrentTrack({ isAutoMix = false } = {}) {
 
     repeatTrackFinishCount = 0;
     const rowToRemoveAfterAdvance = currentPlayingRow;
+    if (getPlaybackMode() === 'manual') {
+        if (!queuedNextRow || !document.body.contains(queuedNextRow)) {
+            queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, false);
+        }
+        if (queuedNextRow) delete queuedNextRow.dataset.manualDeferred;
+        stopAll();
+        removePlayedRowAfterFinish(rowToRemoveAfterAdvance);
+        return;
+    }
     playNext(isAutoMix);
     removePlayedRowAfterFinish(rowToRemoveAfterAdvance);
 }
@@ -2985,31 +3071,63 @@ function stopAllWithRemovePlayed() {
     removePlayedRowAfterFinish(rowToRemoveAfterStop);
 }
 
-function setLoopPlaylistMode(enabled, { announce = true } = {}) {
-    const nextValue = enabled === true;
-    if (generalPrefs.modeLoopPlaylist === nextValue) return;
-    generalPrefs.modeLoopPlaylist = nextValue;
-    saveConfig(generalPrefsPath, generalPrefs);
+function syncPlaybackModeControls() {
+    const mode = getPlaybackMode();
     const btnModeLoop = document.getElementById('btn-mode-looplist');
-    if (btnModeLoop) btnModeLoop.classList.toggle('active-loop', nextValue);
-    if (currentPlayingRow) {
-        if (!nextValue) {
-            // Al desactivar el loop siempre recalcular: un queuedNextRow que apunta hacia
-            // atrás (primera fila) es un pointer residual del loop, no una cola intencional.
-            queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, false);
-        } else if (!queuedNextRow || queuedNextRow.dataset.manualNext !== "true") {
-            queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, true);
-        }
+    if (btnModeLoop) btnModeLoop.classList.toggle('active-loop', mode === 'infinite');
+    const select = document.getElementById('playlist-playback-mode');
+    if (select && select.value !== mode) select.value = mode;
+}
+
+function setPlaybackMode(mode, { announce = true } = {}) {
+    const previousMode = getPlaybackMode();
+    const nextMode = normalizePlaybackMode(mode);
+    if (previousMode === nextMode) {
+        syncPlaybackModeControls();
+        return;
     }
+    generalPrefs.playbackMode = nextMode;
+    generalPrefs.modeLoopPlaylist = nextMode === 'infinite';
+    saveConfig(generalPrefsPath, generalPrefs);
+    syncPlaybackModeControls();
+
+    if (nextMode === 'random' && queuedNextRow?.dataset?.manualDeferred === 'true') {
+        delete queuedNextRow.dataset.manualNext;
+        delete queuedNextRow.dataset.manualDeferred;
+        queuedNextRow = null;
+    }
+    if (currentPlayingRow && document.body.contains(currentPlayingRow)) {
+        if (nextMode === 'manual') {
+            if (queuedNextRow && document.body.contains(queuedNextRow)) markQueuedAsManualDeferred();
+        } else {
+            clearManualDeferredNext();
+            if (nextMode === 'random') {
+                if (!queuedNextRow || queuedNextRow.dataset.manualNext !== 'true') queuedNextRow = getRandomOperationalRow(currentPlayingRow.closest('tbody'));
+            } else if (!queuedNextRow || queuedNextRow.dataset.manualNext !== 'true') {
+                queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, nextMode === 'infinite');
+            }
+        }
+    } else if (nextMode === 'random' && !queuedNextRow) {
+        queuedNextRow = getRandomOperationalRow(tbodys[pgmTab]);
+    } else if (nextMode !== 'manual') {
+        clearManualDeferredNext();
+    }
+
     syncRustPlaylistMode();
     updateNextTrackVisuals();
     if (announce) {
-        recordIncident(`[GUARDIA AIRE] Bucle de lista ${nextValue ? 'activado' : 'desactivado'}.`, {
+        const labels = { normal: 'Normal', infinite: 'Infinito', manual: 'Manual', random: 'Aleatorio' };
+        recordIncident(`[GUARDIA AIRE] Modo de reproduccion: ${labels[nextMode] || nextMode}.`, {
             category: 'guard',
             level: 'success',
-            throttleKey: 'loop-playlist-mode-toggle'
+            throttleKey: 'playlist-playback-mode-toggle'
         });
     }
+}
+
+function setLoopPlaylistMode(enabled, { announce = true } = {}) {
+    setPlaybackMode(enabled === true ? 'infinite' : 'normal', { announce });
+            // atrás (primera fila) es un pointer residual del loop, no una cola intencional.
 }
 
 function openRepeatTrackOptionsDialog() {
@@ -3485,11 +3603,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const btnModeLoop = document.getElementById('btn-mode-looplist');
     if (btnModeLoop) {
-        if (generalPrefs.modeLoopPlaylist) btnModeLoop.classList.add('active-loop');
         btnModeLoop.addEventListener('click', () => {
-            setLoopPlaylistMode(!generalPrefs.modeLoopPlaylist);
+            setLoopPlaylistMode(getPlaybackMode() !== 'infinite');
         });
     }
+    const playbackModeSelect = document.getElementById('playlist-playback-mode');
+    if (playbackModeSelect) {
+        playbackModeSelect.addEventListener('change', () => setPlaybackMode(playbackModeSelect.value));
+    }
+    syncPlaybackModeControls();
 
     const btnModeRemove = document.getElementById('btn-mode-remove');
     if (btnModeRemove) {
@@ -3686,6 +3808,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cwPanel) {
         cwPanel.style.display = uiPrefs.cartwall ? 'flex' : 'none';
         syncCartwallResizerVisibility();
+    }
+    const auxPanel = document.getElementById('right-panel-auxiliary');
+    if (auxPanel) {
+        auxPanel.style.display = uiPrefs.auxiliaryPanel ? 'flex' : 'none';
+        syncAuxiliaryResizerVisibility();
     }
 
     loadDatabasesFromSQLite().finally(() => {
@@ -4842,7 +4969,7 @@ ipcRenderer.on('menu-shuffle', () => { handleShuffleActivePlaylist(); });
 ipcRenderer.on('menu-clear-played', () => { handleClearPlayedTracks(); });
 ipcRenderer.on('menu-check-links', () => { handleCheckBrokenLinks(); });
 ipcRenderer.on('menu-open-rotation', () => { ipcRenderer.send('open-playlist-generator'); });
-ipcRenderer.on('menu-toggle-loop', () => { setLoopPlaylistMode(!generalPrefs.modeLoopPlaylist); });
+ipcRenderer.on('menu-toggle-loop', () => { setLoopPlaylistMode(getPlaybackMode() !== 'infinite'); });
 
 ipcRenderer.on('menu-add-stop', () => { insertSpecialRow('stop'); });
 ipcRenderer.on('menu-add-note', async () => {
@@ -5848,6 +5975,7 @@ function canEventInterruptNow(eventObj, runtimeOptions = {}) {
 // ESPERA o RETARDO confundiría una transición audible con "nada sonando" y se
 // dispararía al instante, saltándose su regla. Aquí consultamos a Rust.
 function isProgramAudioOnAir() {
+    if (isAuxiliaryAudioOnAir()) return true;
     if (currentPlayingRow && document.body.contains(currentPlayingRow) && !isPlayerClockPaused(activePlayer)) {
         return true;
     }
@@ -7027,6 +7155,10 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         e.dataTransfer.effectAllowed = 'copyMove';
         e.dataTransfer.setData('text/plain', 'internal_row');
         const selectedRows = Array.from(document.querySelectorAll('.selected-row'));
+        const playlistRows = selectedRows.map(row => serializePlaylistClipboardRow(row)).filter(item => item?.ruta);
+        if (playlistRows.length > 0) {
+            e.dataTransfer.setData('application/x-lf-playlist-rows', JSON.stringify(playlistRows));
+        }
         const paths = selectedRows.map(r => r.dataset.ruta).filter(Boolean).filter(p => !String(p).startsWith('playlist_'));
         if (paths.length > 0) {
             e.dataTransfer.setData('application/json', JSON.stringify(paths));
@@ -7277,7 +7409,8 @@ function serializePlaylistClipboardRow(tr, includeElement = false) {
         maxRetries: tr.dataset.maxRetries || null,
         prebufferSeconds: tr.dataset.prebufferSeconds || null,
         metadataMode: tr.dataset.metadataMode || null,
-        customMetadata: tr.dataset.customMetadata || null
+        customMetadata: tr.dataset.customMetadata || null,
+        recursive: tr.dataset.recursive === 'true'
     };
     if (includeElement) item.element = tr;
     return item;
@@ -8062,12 +8195,20 @@ ipcRenderer.on('pg-from-generator', async (e, msg) => {
 function updateNextTrackVisuals() {
     // Si no hay una pista elegida manualmente, recalculamos dinámicamente cuál será la siguiente
     // basándonos en el estado actual del modo bucle (Loop List).
-    if (currentPlayingRow && (!queuedNextRow || queuedNextRow.dataset.manualNext !== "true")) {
-        queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, generalPrefs.modeLoopPlaylist);
+    const playbackMode = getPlaybackMode();
+    if (currentPlayingRow && playbackMode !== 'manual' && (!queuedNextRow || queuedNextRow.dataset.manualNext !== "true")) {
+        queuedNextRow = playbackMode === 'random'
+            ? getRandomOperationalRow(currentPlayingRow.closest('tbody'))
+            : resolveNextOperationalRow(currentPlayingRow.nextElementSibling, playbackMode === 'infinite');
     }
     let visualNextRow = resolvePriorityNextRow(queuedNextRow);
+    const isManualDeferredVisual = playbackMode === 'manual'
+        && currentPlayingRow
+        && visualNextRow
+        && visualNextRow.dataset.manualDeferred === 'true';
+    if (playbackMode === 'manual' && currentPlayingRow && !isManualDeferredVisual) visualNextRow = null;
     const allRows = document.querySelectorAll('#playlist-table tr');
-    allRows.forEach(row => row.classList.remove('row-next'));
+    allRows.forEach(row => row.classList.remove('row-next', 'row-manual-next'));
 
     if (stopAfterCurrent && currentPlayingRow) {
         // "Pausar Fin" activo: quitar línea naranja y mostrar mensaje de pausa.
@@ -8078,7 +8219,7 @@ function updateNextTrackVisuals() {
     } else {
         if (txtSiguiente) txtSiguiente.style.color = "";
         if (visualNextRow) {
-            visualNextRow.classList.add('row-next');
+            visualNextRow.classList.add(isManualDeferredVisual ? 'row-manual-next' : 'row-next');
             let pureName = visualNextRow.dataset.pureName || visualNextRow.querySelector(".col-titulo").innerText;
 
             const nextTabIdx = tbodys.indexOf(visualNextRow.closest('tbody'));
@@ -9279,6 +9420,18 @@ function buildRustRouteSyncPlan(rustDevices = {}, browserOutputs = []) {
             plan.push({ bus: `pl${idx + 1}`, outputId: resolveRustRouteOutputId(playlistDeviceId, rustDevices, browserOutputs) });
         });
     }
+    [0, 1].forEach(idx => {
+        const mode = generalPrefs.auxiliaryOutputModes?.[idx] || 'master';
+        const auxBus = `aux${idx + 1}`;
+        if (mode === 'device') {
+            const deviceId = generalPrefs.auxiliaryOutputs?.[idx] || mainDeviceId;
+            plan.push({ bus: `${auxBus}-independent`, outputId: resolveRustRouteOutputId(deviceId, rustDevices, browserOutputs) });
+        } else if (mode === 'cue') {
+            plan.push({ bus: 'cue', outputId: resolveRustRouteOutputId(generalPrefs.outCue || mainDeviceId, rustDevices, browserOutputs) });
+        } else {
+            plan.push({ bus: auxBus, outputId: resolveRustRouteOutputId(mainDeviceId, rustDevices, browserOutputs) });
+        }
+    });
     return plan;
 }
 
@@ -9649,7 +9802,9 @@ function getAudioRouteSignature(prefs = {}) {
         playlistOutputMode: normalized.playlistOutputMode || 'disabled',
         playlistSharedDevice: normalized.playlistSharedDevice || normalized.outMain || 'default',
         playlistOutputs: Array.isArray(normalized.playlistOutputs) ? normalized.playlistOutputs.slice(0, 4) : [],
-        cartwallOutputMode: normalized.cartwallOutputMode || 'master'
+        cartwallOutputMode: normalized.cartwallOutputMode || 'master',
+        auxiliaryOutputModes: Array.isArray(normalized.auxiliaryOutputModes) ? normalized.auxiliaryOutputModes.slice(0, 2) : [],
+        auxiliaryOutputs: Array.isArray(normalized.auxiliaryOutputs) ? normalized.auxiliaryOutputs.slice(0, 2) : []
     });
 }
 
@@ -9836,6 +9991,8 @@ ipcRenderer.on('settings-updated', () => {
     const previousRouteSignature = getAudioRouteSignature(generalPrefs);
     const previousEngineMode = generalPrefs.audioEngineMode || 'rustAudio';
     generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, generalPrefs));
+    generalPrefs.playbackMode = normalizePlaybackMode(generalPrefs.playbackMode || (generalPrefs.modeLoopPlaylist ? 'infinite' : 'normal'));
+    generalPrefs.modeLoopPlaylist = generalPrefs.playbackMode === 'infinite';
     if (generalPrefs.weatherTemperatureFolder) generalPrefs.weatherTemperatureFolder = adaptStoredPath(generalPrefs.weatherTemperatureFolder, __projectRoot);
     if (generalPrefs.weatherHumidityFolder) generalPrefs.weatherHumidityFolder = adaptStoredPath(generalPrefs.weatherHumidityFolder, __projectRoot);
     if (generalPrefs.weatherFolder) generalPrefs.weatherFolder = adaptStoredPath(generalPrefs.weatherFolder, __projectRoot);
@@ -9856,8 +10013,7 @@ ipcRenderer.on('settings-updated', () => {
     if (currentPlayingRow && currentPlayingRow.dataset && currentPlayingRow.dataset.ruta) {
         currentTrackConfig = getCrossfadeConfig(getTrackTypeData(currentPlayingRow.dataset.ruta), currentPlayingRow.dataset.ruta);
     }
-    const btnModeLoop = document.getElementById('btn-mode-looplist');
-    if (btnModeLoop) btnModeLoop.classList.toggle('active-loop', generalPrefs.modeLoopPlaylist);
+    syncPlaybackModeControls();
 
     const btnModeRemove = document.getElementById('btn-mode-remove');
     if (btnModeRemove) btnModeRemove.classList.toggle('active-remove', generalPrefs.modeRemovePlayed);
@@ -10503,10 +10659,13 @@ function handleTimeUpdate(player) {
     // PreanÃ¡lisis inteligente (anti-silencios): unos segundos antes de terminar
     // asegura que la "siguiente" ya tenga inicio/fin/mix si faltan.
     if (timeLeft <= 12) {
-        let nextRow = resolveNextOperationalRow(queuedNextRow, generalPrefs.modeLoopPlaylist);
+        const playbackMode = getPlaybackMode();
+        let nextRow = playbackMode === 'manual' ? null : resolveNextOperationalRow(queuedNextRow, playbackMode === 'infinite');
         if (!nextRow && currentPlayingRow && document.body.contains(currentPlayingRow)) {
-            nextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, generalPrefs.modeLoopPlaylist);
-            if (!nextRow && generalPrefs.modeLoopPlaylist) nextRow = resolveNextOperationalRow(currentPlayingRow.closest('tbody').firstElementChild, false);
+            nextRow = playbackMode === 'random'
+                ? getRandomOperationalRow(currentPlayingRow.closest('tbody'))
+                : resolveNextOperationalRow(currentPlayingRow.nextElementSibling, playbackMode === 'infinite');
+            if (!nextRow && playbackMode === 'infinite') nextRow = resolveNextOperationalRow(currentPlayingRow.closest('tbody').firstElementChild, false);
         }
         if (nextRow && !isSpecialLocutionRow(nextRow) && nextRow.dataset.type !== 'random' && !isPlaylistCommandRow(nextRow)) {
             ensurePreanalysisForTrack(nextRow.dataset.ruta);
@@ -10618,7 +10777,7 @@ function handleTimeUpdate(player) {
             : getResolvedRowMixAbsolute(currentPlayingRow, currentTrackConfig);
 
         if (triggerAbsolute !== null) {
-            if (absTime >= triggerAbsolute && !crossfadeTriggered && !generalPrefs.modeRepeatTrack && !stopAfterCurrent) {
+            if (absTime >= triggerAbsolute && getPlaybackMode() !== 'manual' && !crossfadeTriggered && !generalPrefs.modeRepeatTrack && !stopAfterCurrent) {
                 const rowToRemoveAfterAdvance = currentPlayingRow;
                 crossfadeTriggered = true; crossfadeTriggeredForRow = currentPlayingRow;
                 playNext(true);
@@ -10627,7 +10786,7 @@ function handleTimeUpdate(player) {
         } else {
             const fallbackMixTrigger = getFallbackMixTriggerSeconds(currentTrackConfig);
             const effectiveMixTrigger = currentTrackConfig.mixTrigger > 0 ? currentTrackConfig.mixTrigger : fallbackMixTrigger;
-            if (effectiveMixTrigger > 0 && timeLeft <= effectiveMixTrigger && !crossfadeTriggered && !generalPrefs.modeRepeatTrack && !stopAfterCurrent && currentDuration > 0) {
+            if (effectiveMixTrigger > 0 && timeLeft <= effectiveMixTrigger && getPlaybackMode() !== 'manual' && !crossfadeTriggered && !generalPrefs.modeRepeatTrack && !stopAfterCurrent && currentDuration > 0) {
                 const rowToRemoveAfterAdvance = currentPlayingRow;
                 crossfadeTriggered = true; crossfadeTriggeredForRow = currentPlayingRow;
                 playNext(true);
@@ -11073,9 +11232,8 @@ function playTimeLocution(startDelayMs = 0) {
         // Ruta nueva: el motor Rust se encarga 100%. Electron solo entrega la
         // carpeta y espera el evento `timeLocutionEnded` (ver listener al final
         // de este archivo). No resolvemos archivos ni miramos el reloj acá.
-        playTimeLocutionViaRust(startDelayMs);
         ipcRenderer.send('update-metadata', ICON_CLOCK_LABEL);
-        return;
+        return playTimeLocutionViaRust(startDelayMs);
     }
 
     // Fallback WebAudio (modo legacy). Aquí sí seguimos resolviendo en JS
@@ -11087,6 +11245,7 @@ function playTimeLocution(startDelayMs = 0) {
 
     let currentIndex = 0; const playJingleSequence = () => { jingleElement.src = url.pathToFileURL(filesToPlay[currentIndex]).href; jingleElement.load(); jingleElement.oncanplay = () => { jingleElement.oncanplay = null; jingleElement.play().catch(e => { }); }; jingleElement.onended = () => { currentIndex++; if (currentIndex < filesToPlay.length) { playJingleSequence(); } else { isJinglePlaying = false; endProgramOverlayDucking(); jingleElement.onended = null; } }; }; playJingleSequence();
     ipcRenderer.send('update-metadata', ICON_CLOCK_LABEL);
+    return Promise.resolve({ ok: true });
 }
 
 function normalizeStreamRetries(value) {
@@ -11492,7 +11651,9 @@ function readRustProgramStereoPercent() {
     if (!shouldMirrorRustControlPlane()) return null;
     const byBus = readRustStereoMetersByBus();
     const explicitMaster = byBus.get('master');
-    if (explicitMaster) {
+    const auxiliaryProgram = mergeRustStereoLevels(['aux1', 'aux2'].map(bus => byBus.get(bus)));
+    const hasAuxiliaryProgram = !!(auxiliaryProgram && auxiliaryProgram.max > 0);
+    if (explicitMaster && (explicitMaster.max > 0 || !hasAuxiliaryProgram)) {
         return explicitMaster; // ← UN solo punto de verdad: post-fader.
     }
     // Camino fallback (sin meter master): suma manual de buses de programa.
@@ -11500,9 +11661,9 @@ function readRustProgramStereoPercent() {
     const pisadores = mergeRustStereoLevels(['jingle', 'cartwall'].map(bus => byBus.get(bus)));
     const playlistMode = generalPrefs.playlistOutputMode || 'disabled';
     if (playlistMode === 'independent') {
-        return mergeRustStereoLevels([pisadores]);
+        return mergeRustStereoLevels([auxiliaryProgram, pisadores]);
     }
-    return mergeRustStereoLevels([playlistProgram, pisadores]);
+    return mergeRustStereoLevels([playlistProgram, auxiliaryProgram, pisadores]);
 }
 
 function readRustPlaylistStereoPercents() {
@@ -11899,7 +12060,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
 
 
 
-        currentPlayingRow = tr; currentPlayingRow.classList.add('row-active'); queuedNextRow = resolveNextOperationalRow(currentPlayingRow.nextElementSibling, generalPrefs.modeLoopPlaylist);
+        currentPlayingRow = tr; currentPlayingRow.classList.remove('row-next', 'row-manual-next'); currentPlayingRow.classList.add('row-active'); setQueuedNextAfterRowStarted(currentPlayingRow);
         syncRustPlaylistSnapshot();
         syncRustPlaylistPlaybackContext(currentRustPlayerId || null);
         const eventQueueKey = tr.dataset.eventQueueKey;
@@ -12727,7 +12888,7 @@ function executeStopCommandRow(commandRow) {
 function executePlaylistJumpCommandRow(commandRow, isAutoMix = false, forcedFadeOutSeconds = 0) {
     const targetTab = parseInt(commandRow?.dataset?.targetTab, 10);
     const currentCommandTbody = commandRow?.closest('tbody');
-    const fallbackNext = resolveNextOperationalRow(commandRow?.nextElementSibling, generalPrefs.modeLoopPlaylist);
+    const fallbackNext = resolveNextOperationalRow(commandRow?.nextElementSibling, isInfinitePlaybackMode());
     const commandTab = tbodys.indexOf(currentCommandTbody);
     if (!Number.isInteger(targetTab) || !tbodys[targetTab] || targetTab === commandTab) {
         recordIncident('[PLAYLIST] Salto de playlist no ejecutado: destino invalido o igual a la playlist del comando.', { category: 'air', level: 'error', autoAction: true });
@@ -12740,7 +12901,7 @@ function executePlaylistJumpCommandRow(commandRow, isAutoMix = false, forcedFade
     if (!targetRow) {
         recordIncident(`[PLAYLIST] Salto no ejecutado: Playlist ${targetTab + 1} esta vacia o solo tiene notas.`, { category: 'air', level: 'error', autoAction: true });
         if (fallbackNext && fallbackNext.closest('tbody') === currentCommandTbody && fallbackNext !== commandRow) playRow(fallbackNext, isAutoMix, forcedFadeOutSeconds);
-        else if (generalPrefs.modeLoopPlaylist) {
+        else if (isInfinitePlaybackMode()) {
             const loopTarget = resolveNextOperationalRow(currentCommandTbody?.firstElementChild, false);
             if (loopTarget && loopTarget !== commandRow) playRow(loopTarget, isAutoMix, forcedFadeOutSeconds);
             else stopAll();
@@ -12776,7 +12937,7 @@ async function executeEventCommandRow(commandRow) {
     } catch (err) {
         recordIncident(`[PLAYLIST] Error ejecutando evento "${eventName}": ${err.message || err}.`, { category: 'events', level: 'error', autoAction: true });
     } finally {
-        const fallbackRow = commandRow?.parentNode ? resolveNextOperationalRow(commandRow.nextElementSibling, generalPrefs.modeLoopPlaylist) : null;
+        const fallbackRow = commandRow?.parentNode ? resolveNextOperationalRow(commandRow.nextElementSibling, isInfinitePlaybackMode()) : null;
         removeCommandRowAfterExecution(commandRow);
         if (!executed) {
             if (fallbackRow && document.body.contains(fallbackRow)) playRow(fallbackRow, false);
@@ -12831,7 +12992,7 @@ function stopActiveStream({ fadeSeconds = 0 } = {}) {
 
 function playNextAfterFailedStream(tr) {
     if (!queuedNextRow || queuedNextRow === tr) {
-        const nextRow = resolveNextOperationalRow(tr.nextElementSibling, generalPrefs.modeLoopPlaylist);
+        const nextRow = resolveNextOperationalRow(tr.nextElementSibling, isInfinitePlaybackMode());
         queuedNextRow = nextRow && nextRow !== tr ? nextRow : null;
     }
     if (currentPlayingRow === tr) {
@@ -12855,10 +13016,11 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
     // antes de empezar), resetear al siguiente natural. Si el usuario eligió
     // manualmente una fila DISTINTA como siguiente, respetarla.
     if (!queuedNextRow || queuedNextRow === tr) {
-        queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, generalPrefs.modeLoopPlaylist);
+        setQueuedNextAfterRowStarted(tr);
     }
     // Limpiar el flag manualNext del stream en sí (ya no es "siguiente", es el activo).
     delete tr.dataset.manualNext;
+    delete tr.dataset.manualDeferred;
 
     const url = tr.dataset.ruta || '';
     const displayName = (tr.dataset.pureName || '').replace(/^📡\s*/, '').trim() || url;
@@ -12891,7 +13053,7 @@ async function executeStreamUrlRow(tr, _isAutoMix = false, _forcedFadeOutSeconds
     }
     currentPlayingRow = tr;
     tr.classList.add('row-active');
-    tr.classList.remove('row-next');
+    tr.classList.remove('row-next', 'row-manual-next');
     trackStartTime = Date.now();
     isTrackReady = false; // bloquea playbackGuard durante la conexión
 
@@ -13001,6 +13163,12 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
         }
     }
     let target = null;
+    const playbackMode = getPlaybackMode();
+    if (playbackMode === 'manual' && currentPlayingRow && document.body.contains(currentPlayingRow)) {
+        if (queuedNextRow) delete queuedNextRow.dataset.manualDeferred;
+        stopAll();
+        return;
+    }
     if (queuedNextRow && document.body.contains(queuedNextRow)) {
         // Excepción intencional: si el operador marca manualmente como siguiente la
         // MISMA carpeta aleatoria que está sonando, quiere otra pista al azar de esa
@@ -13013,9 +13181,9 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
         // Si el loop está desactivado, rechazar queuedNextRow si apunta hacia atrás en la
         // lista (pointer residual de cuando el loop estaba activo). Cubre la race condition
         // donde el reloj virtual llama playNext() antes de que el clic procese la limpieza.
-        const isStaleLoopPointer = !isManualRandomReplay && (
+        const isStaleLoopPointer = playbackMode !== 'random' && !isManualRandomReplay && (
             queuedNextRow === currentPlayingRow
-            || (!generalPrefs.modeLoopPlaylist
+            || (playbackMode !== 'infinite'
             && currentPlayingRow
             && document.body.contains(currentPlayingRow)
             && queuedNextRow.closest('tbody') === currentPlayingRow.closest('tbody')
@@ -13030,9 +13198,12 @@ function playNext(isAutoMix = false, forcedFadeOutSeconds = 0) {
     } else if (!target) {
         target = tbodys[pgmTab].firstElementChild;
     }
-    target = resolvePriorityNextRow(resolveNextOperationalRow(target, generalPrefs.modeLoopPlaylist));
+    if (playbackMode === 'random' && !target) {
+        target = getRandomOperationalRow(currentPlayingRow?.closest('tbody') || tbodys[pgmTab]);
+    }
+    target = resolvePriorityNextRow(resolveNextOperationalRow(target, playbackMode === 'infinite'));
 
-    if (!target && generalPrefs.modeLoopPlaylist) target = resolveNextOperationalRow(tbodys[pgmTab].firstElementChild, false);
+    if (!target && playbackMode === 'infinite') target = resolveNextOperationalRow(tbodys[pgmTab].firstElementChild, false);
     if (target) playRow(target, isAutoMix, forcedFadeOutSeconds); else stopAll();
 }
 
@@ -13057,7 +13228,7 @@ function stopAll() {
     const preservedQueuedNextRow = (queuedNextRow && document.body.contains(queuedNextRow))
         ? queuedNextRow
         : ((currentPlayingRow && document.body.contains(currentPlayingRow))
-            ? resolveNextOperationalRow(currentPlayingRow.nextElementSibling, generalPrefs.modeLoopPlaylist)
+            ? resolveNextOperationalRow(currentPlayingRow.nextElementSibling, isInfinitePlaybackMode())
             : null);
     try { ipcRenderer.send('emergency-stop-playback'); } catch (err) { }
     // Detener stream de retransmisión si hay uno activo.
@@ -13096,6 +13267,7 @@ function stopAll() {
     clearRustTimeLocutionWatchdog();
     currentPlayingRow = null; trackStartTime = null; crossfadeTriggered = false; crossfadeTriggeredForRow = null; isPlaylistTimeActive = false; rustTimeLocutionContext = null; activeRustPlaylistDeckId = '';
     queuedNextRow = preservedQueuedNextRow && document.body.contains(preservedQueuedNextRow) ? preservedQueuedNextRow : null;
+    if (queuedNextRow) delete queuedNextRow.dataset.manualDeferred;
     const txtT = document.getElementById('txt-tiempo'); if (txtT) { txtT.innerText = "00:00.0"; txtT.classList.remove('time-warning-blue', 'time-warning-red', 'time-flash'); }
     clearAirTimeSegmentState();
     setIdleBroadcastMetadata(true);
@@ -13110,6 +13282,28 @@ function stopAll() {
 
 window.addEventListener('beforeunload', () => { saveSessionSnapshot(true); });
 setInterval(() => { saveSessionSnapshot(); }, SESSION_AUTOSAVE_MS);
+
+window.lfMainPlaylistApi = {
+    resume: () => resumeCurrentPlayback(),
+    jumpToPlaylist: (tabIndex) => {
+        const idx = Math.max(0, Math.min(3, parseInt(tabIndex, 10) || 0));
+        const target = resolveNextOperationalRow(tbodys[idx]?.firstElementChild, false);
+        if (target) return playRow(target, false);
+        recordIncident(`[PLAYLIST] Saltar a Playlist ${idx + 1} no ejecutado: lista vacia.`, { category: 'air', level: 'warn' });
+        return null;
+    },
+    getNames: () => (Array.isArray(uiPrefs.playlistNames) ? uiPrefs.playlistNames : PLAYLIST_DEFAULT_NAMES).slice(0, 4),
+    requestEventSelection: () => requestPlaylistEventSelection(),
+    executeEventById: (eventId, runtimeOptions = {}) => {
+        const eventObj = eventsMasterDB.find(ev => ev.id === eventId);
+        if (!eventObj) {
+            recordIncident(`[EVENTOS] Comando auxiliar no ejecutado: evento no encontrado (${eventId || 'sin id'}).`, { category: 'events', level: 'warn' });
+            return null;
+        }
+        return executeEvent(eventObj, runtimeOptions);
+    }
+};
+ipcRenderer.on('auxiliary-execute-event', (_e, { eventId } = {}) => window.lfMainPlaylistApi?.executeEventById?.(eventId, { playlistCommand: true }));
 setInterval(() => { runPlaybackGuard(); }, PLAYBACK_GUARD_INTERVAL_MS);
 
 const btnMasterVol = document.getElementById('master-volume');
@@ -13764,6 +13958,78 @@ ipcRenderer.on('sync-cartwall-state', () => {
 ipcRenderer.on('cartwall-ui-state', async (e, uiState) => {
     if (!cartwallState) await initCartwall();
     applyCartwallUiState(uiState, { render: true });
+});
+
+function getAuxiliaryPanel() {
+    return document.getElementById('right-panel-auxiliary');
+}
+
+function isDockedAuxiliaryVisible() {
+    const panel = getAuxiliaryPanel();
+    return !!panel && panel.style.display !== 'none';
+}
+
+function syncAuxiliaryResizerVisibility() {
+    const resizer = document.getElementById('auxiliary-resizer');
+    if (resizer) resizer.style.display = isDockedAuxiliaryVisible() ? 'flex' : 'none';
+}
+
+function rememberAuxiliaryMode(mode) {
+    uiPrefs.auxiliaryPanel = mode === 'docked';
+    if (['docked', 'floating'].includes(mode)) uiPrefs.auxiliaryPanelLastMode = mode;
+    saveConfig(uiPrefsPath, uiPrefs);
+}
+
+function showAuxiliaryDocked() {
+    const panel = getAuxiliaryPanel();
+    if (panel) panel.style.display = 'flex';
+    syncAuxiliaryResizerVisibility();
+    rememberAuxiliaryMode('docked');
+}
+
+function hideAuxiliaryDocked() {
+    const panel = getAuxiliaryPanel();
+    if (panel) panel.style.display = 'none';
+    syncAuxiliaryResizerVisibility();
+    rememberAuxiliaryMode('hidden');
+}
+
+function openAuxiliaryFloating() {
+    const panel = getAuxiliaryPanel();
+    if (panel) panel.style.display = 'none';
+    syncAuxiliaryResizerVisibility();
+    rememberAuxiliaryMode('floating');
+    ipcRenderer.send('open-auxiliary-window');
+}
+
+function showAuxiliaryPreferred() {
+    if ((uiPrefs.auxiliaryPanelLastMode || 'floating') === 'docked') return showAuxiliaryDocked();
+    return openAuxiliaryFloating();
+}
+
+ipcRenderer.on('menu-toggle-auxiliary', (_e, show) => {
+    if (show) showAuxiliaryPreferred();
+    else if (isDockedAuxiliaryVisible()) hideAuxiliaryDocked();
+    else ipcRenderer.send('auxiliary-hide');
+});
+
+ipcRenderer.on('auxiliary-docked', () => {
+    showAuxiliaryDocked();
+});
+
+ipcRenderer.on('auxiliary-floating-closed', () => {
+    rememberAuxiliaryMode(isDockedAuxiliaryVisible() ? 'docked' : 'hidden');
+});
+
+ipcRenderer.on('auxiliary-ui-state', (_e, uiState = {}) => {
+    if (uiState.mode === 'docked') showAuxiliaryDocked();
+    if (uiState.mode === 'hidden') hideAuxiliaryDocked();
+    if (uiState.mode === 'floating') {
+        const panel = getAuxiliaryPanel();
+        if (panel) panel.style.display = 'none';
+        syncAuxiliaryResizerVisibility();
+        rememberAuxiliaryMode('floating');
+    }
 });
 
 
@@ -15107,10 +15373,49 @@ function initCartwallResizer() {
     if (savedWidth) panel.style.width = savedWidth;
 }
 
+function initAuxiliaryResizer() {
+    const panel = document.getElementById('right-panel-auxiliary');
+    const resizer = document.getElementById('auxiliary-resizer');
+    if (!panel || !resizer) return;
+
+    let isResizing = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        resizer.classList.add('resizing');
+        document.body.style.cursor = 'col-resize';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const newWidth = window.innerWidth - e.clientX;
+        panel.style.width = `${Math.max(300, Math.min(Math.floor(window.innerWidth * 0.55), newWidth))}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            resizer.classList.remove('resizing');
+            document.body.style.cursor = '';
+            localStorage.setItem('lf-auxiliary-width', panel.style.width);
+        }
+    });
+
+    const savedWidth = localStorage.getItem('lf-auxiliary-width');
+    if (savedWidth) panel.style.width = savedWidth;
+}
+
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initCartwallResizer);
+    document.addEventListener('DOMContentLoaded', () => {
+        initCartwallResizer();
+        initAuxiliaryResizer();
+        syncAuxiliaryResizerVisibility();
+    });
 } else {
     initCartwallResizer();
+    initAuxiliaryResizer();
+    syncAuxiliaryResizerVisibility();
 }
 
 // Verificación de actualizaciones — corre en el renderer (proceso Chromium separado,
@@ -15223,6 +15528,7 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         try { releaseFinishedRustPlaylistDecks(); } catch (err) {}
         try { reconcileRustCartwallRuntimeStatus(message); } catch (err) {}
         try { reconcileRustOverlayRuntimeStatus(message); } catch (err) {}
+        try { refreshAirIncidentStatus(); } catch (err) {}
         return;
     }
 

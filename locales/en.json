@@ -970,7 +970,7 @@
         "action_after": "sec. Then:",
         "force": "Force event",
         "skip": "Skip this event",
-        "no_exec_stop": "Do not execute if the player is stopped.",
+        "exec_even_stopped": "Execute even if the player is stopped.",
         "priority": "Priority Level:",
         "p_low": "Low",
         "p_normal": "Normal",

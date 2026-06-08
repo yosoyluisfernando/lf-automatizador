@@ -644,7 +644,8 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
         colorBg: document.getElementById('ev-color-bg').value,
         lastFired: null,
         
-        requirePlaying: document.getElementById('chk-require-playing').checked,
+        // NOTA: 'chk-execute-even-stopped' es la lógica visual invertida de requirePlaying.
+        requirePlaying: !document.getElementById('chk-execute-even-stopped').checked,
         maxDelayActive: maxDelayActive,
         maxDelayMinutes: maxDelayActive ? Math.floor(maxDelayTotalSeconds / 60) : 0,
         maxDelaySeconds: maxDelayActive ? (maxDelayTotalSeconds % 60) : 0,
@@ -756,7 +757,8 @@ ipcRenderer.on('load-event-data', (e, data) => {
     const execRadio = document.querySelector(`input[name="ev-exec"][value="${execValue}"]`);
     if(execRadio) execRadio.checked = true;
 
-    document.getElementById('chk-require-playing').checked = data.requirePlaying || false;
+    // Inicializa el checkbox invertido visualmente
+    document.getElementById('chk-execute-even-stopped').checked = !(data.requirePlaying || false);
 
     if (data.maxDelayActive) {
         const savedMinutes = parseInt(data.maxDelayMinutes, 10);

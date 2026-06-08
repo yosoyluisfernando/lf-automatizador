@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker, nativeImage } = require('electron');
 const i18n = require('./backend/i18n_main');
 const path = require('path');
 const fs = require('fs');
@@ -167,11 +167,15 @@ function buildStartupRouteCommands() {
             : cartwallMode === 'cue'    ? outCue
             : cartwallMode === 'device' ? (cfg.outCartwall || outMain)
             : outMain;
+        const auxModes = Array.isArray(cfg.auxiliaryOutputModes) ? cfg.auxiliaryOutputModes : ['master', 'master'];
+        const auxOutputs = Array.isArray(cfg.auxiliaryOutputs) ? cfg.auxiliaryOutputs : ['default', 'default'];
         const routes = [
             { cmd: 'route', bus: 'master',   outputId: outMain },
             { cmd: 'route', bus: 'jingle',   outputId: outMain },
             { cmd: 'route', bus: 'cue',      outputId: outCue },
             { cmd: 'route', bus: 'cartwall', outputId: outCartwall },
+            { cmd: 'route', bus: auxModes[0] === 'cue' ? 'cue' : (auxModes[0] === 'device' ? 'aux1-independent' : 'aux1'), outputId: auxModes[0] === 'cue' ? outCue : (auxModes[0] === 'device' ? (auxOutputs[0] || outMain) : outMain) },
+            { cmd: 'route', bus: auxModes[1] === 'cue' ? 'cue' : (auxModes[1] === 'device' ? 'aux2-independent' : 'aux2'), outputId: auxModes[1] === 'cue' ? outCue : (auxModes[1] === 'device' ? (auxOutputs[1] || outMain) : outMain) },
         ];
         if (cfg.monitorEnabled === true) {
             routes.push({
@@ -219,6 +223,9 @@ const rustAudioEngine = new RustAudioEngineProbe({
             // que pinte sus VUs inmediatamente cuando Rust emite (~100ms).
             if (consoleWindow && !consoleWindow.isDestroyed()) {
                 consoleWindow.webContents.send('audio-engine-rust-event', message);
+            }
+            if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+                auxiliaryWindow.webContents.send('audio-engine-rust-event', message);
             }
             if (encoderWindow && !encoderWindow.isDestroyed()) {
                 encoderWindow.webContents.send('audio-engine-rust-event', message);
@@ -786,7 +793,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const configDir = getConfigDir(path.join(__dirname, 'config'), __dirname);
 
 const uiPrefsPath = path.join(configDir, 'ui_prefs.json');
-let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating' };
+let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', auxiliaryPanel: false, auxiliaryPanelLastMode: 'floating', auxiliaryPanelLayout: 'stacked', rightPanelView: 'cartwall' };
 try { if (fs.existsSync(uiPrefsPath)) uiPrefs = { ...uiPrefs, ...JSON.parse(fs.readFileSync(uiPrefsPath, 'utf-8')) }; } catch(e) {}
 function saveUiPrefs() { try { fs.writeFileSync(uiPrefsPath, JSON.stringify(uiPrefs, null, 2)); } catch(e) {} }
 if (uiPrefs.cartwall) uiPrefs.cartwallLastMode = 'docked';
@@ -810,7 +817,7 @@ let playlistMenuList = [
     { index: 2, name: 'Playlist 3' }, { index: 3, name: 'Playlist 4' }
 ];
 let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null; let musicSeparationWindow = null;
-let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let aboutWindow = null;
+let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let auxiliaryWindow = null; let auxiliaryDockRequested = false; let aboutWindow = null;
 let fileTypesManagerWindow = null;
 let ffmpegProcess = null; let activeEncoderConfig = null; let isAppQuitting = false; let forceQuit = false;
 let lastEditorSource = 'playlist'; 
@@ -2417,6 +2424,7 @@ function createWindow() {
     mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); });
 }
 function syncCartwallMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-cartwall') : null; if (item) item.checked = checked; }
+function syncAuxiliaryMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-auxiliary') : null; if (item) item.checked = checked; }
 function createApplicationMenu() {
     const appMenuLanguage = loadJsonConfig(generalSettingsPath, {}).language || 'es';
     i18n.init(appMenuLanguage);
@@ -2450,6 +2458,7 @@ function createApplicationMenu() {
                 { label: i18n.t('menu.toggle_left_panel'), type: 'checkbox', checked: uiPrefs.leftPanel, click: (item) => { uiPrefs.leftPanel = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-left-panel', item.checked); } },
                 { label: i18n.t('menu.toggle_extensions'), type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
                 { id: 'view-toggle-cartwall', label: i18n.t('menu.toggle_cartwall'), type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
+                { id: 'view-toggle-auxiliary', label: 'Playlists auxiliares', type: 'checkbox', checked: !!auxiliaryWindow || uiPrefs.auxiliaryPanel, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-auxiliary', item.checked); } },
                 { type: 'separator' },
                 { label: i18n.t('menu.toggle_syslog'), type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
                 { type: 'separator' },
@@ -2610,6 +2619,72 @@ ipcMain.on('playlist-names-changed', (e, list) => {
             .map(pl => ({ index: pl.index, name: (pl.name || `Playlist ${pl.index + 1}`).toString().slice(0, 40) }));
     }
     createApplicationMenu();
+});
+
+function updateAuxiliaryUiState(partial = {}) {
+    const mode = ['hidden', 'docked', 'floating'].includes(partial.mode) ? partial.mode : null;
+    if (mode) {
+        uiPrefs.auxiliaryPanel = mode === 'docked';
+        if (['docked', 'floating'].includes(mode)) uiPrefs.auxiliaryPanelLastMode = mode;
+        saveUiPrefs();
+        syncAuxiliaryMenuState(mode !== 'hidden');
+    }
+    const payload = { mode: mode || (uiPrefs.auxiliaryPanel ? 'docked' : 'hidden') };
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-ui-state', payload);
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) auxiliaryWindow.webContents.send('auxiliary-ui-state', { mode: 'floating' });
+}
+
+ipcMain.on('open-auxiliary-window', () => {
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+        if (auxiliaryWindow.isMinimized()) auxiliaryWindow.restore();
+        auxiliaryWindow.focus();
+        updateAuxiliaryUiState({ mode: 'floating' });
+        return;
+    }
+    auxiliaryDockRequested = false;
+    updateAuxiliaryUiState({ mode: 'floating' });
+    auxiliaryWindow = new BrowserWindow({
+        icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', 'main.png')),
+        width: 720,
+        height: 640,
+        title: 'Playlists auxiliares',
+        autoHideMenuBar: true,
+        webPreferences: { nodeIntegration: true, contextIsolation: false, webSecurity: false }
+    });
+    auxiliaryWindow.loadFile(path.join(__dirname, 'frontend', 'auxiliary_playlists.html'));
+    auxiliaryWindow.on('closed', () => {
+        const shouldDock = auxiliaryDockRequested;
+        auxiliaryDockRequested = false;
+        auxiliaryWindow = null;
+        updateAuxiliaryUiState({ mode: shouldDock ? 'docked' : 'hidden' });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(shouldDock ? 'auxiliary-docked' : 'auxiliary-floating-closed');
+    });
+});
+
+ipcMain.on('auxiliary-dock', () => {
+    if (!auxiliaryWindow || auxiliaryWindow.isDestroyed()) return;
+    auxiliaryDockRequested = true;
+    auxiliaryWindow.close();
+});
+
+ipcMain.on('auxiliary-hide', () => {
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+        auxiliaryDockRequested = false;
+        auxiliaryWindow.close();
+        return;
+    }
+    updateAuxiliaryUiState({ mode: 'hidden' });
+});
+
+ipcMain.on('auxiliary-main-resume', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-main-resume');
+});
+
+ipcMain.on('auxiliary-main-jump', (_event, targetIndex) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-main-jump', targetIndex);
+});
+ipcMain.on('auxiliary-execute-event', (_event, payload = {}) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-execute-event', payload);
 });
 ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.on('preview-ui-layout', (e, data) => { if (mainWindow) mainWindow.webContents.send('preview-ui-layout', data); });

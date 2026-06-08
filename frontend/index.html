@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>LF Automatizador v0.9.12-beta.7</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="auxiliary_playlists.css">
     <style>
         .fx-module {
             display: flex;
@@ -346,6 +347,12 @@
                         <button id="btn-talk" class="talk-btn" title="MIC / Pulsar para hablar (Clic derecho para configurar)" data-i18n="[title]main_window.controls.talk_title; main_window.controls.talk">🎤 MIC</button>
                     </div>
                     <div class="playback-modes">
+                        <select id="playlist-playback-mode" class="playback-mode-select" title="Modo de reproducción">
+                            <option value="normal">Normal</option>
+                            <option value="infinite">Infinito</option>
+                            <option value="manual">Manual</option>
+                            <option value="random">Aleatorio</option>
+                        </select>
                         <button id="btn-mode-looplist" class="mode-btn" title="Reproducción Infinita" data-i18n="[title]main_window.controls.loop_list_title; main_window.controls.loop_list">🔁</button>
                         <button id="btn-mode-remove" class="mode-btn" title="Eliminar al terminar" data-i18n="[title]main_window.controls.remove_played_title; main_window.controls.remove_played">🗑️</button>
                         <button id="btn-mode-repeat" class="mode-btn" title="Repetir canción" data-i18n="[title]main_window.controls.repeat_track_title; main_window.controls.repeat_track">🔂</button>
@@ -393,6 +400,9 @@
                 <div class="cw-grid-container" id="cw-grid">
                 </div>
             </div>
+
+            <div class="auxiliary-resizer" id="auxiliary-resizer" title="Arrastra para cambiar el tamaño" style="display: none;"></div>
+            <div id="right-panel-auxiliary" style="display: none;"></div>
 
         </div>
     </div>
@@ -1037,6 +1047,13 @@
     </div>
 
     <script src="render.js"></script>
+    <script src="auxiliary_playlists.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', function () {
+            var aux = document.getElementById('right-panel-auxiliary');
+            if (window.initAuxiliaryPlaylists && aux) window.initAuxiliaryPlaylists(aux);
+        });
+    </script>
 </body>
 </html>
 

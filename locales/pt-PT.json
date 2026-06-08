@@ -970,7 +970,7 @@
         "action_after": "seg. Então:",
         "force": "Forçar evento",
         "skip": "Ignorar este evento",
-        "no_exec_stop": "Não executar se o leitor estiver parado.",
+        "exec_even_stopped": "Executar mesmo se o leitor estiver parado.",
         "priority": "Nível de Prioridade:",
         "p_low": "Baixa",
         "p_normal": "Normal",

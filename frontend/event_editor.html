@@ -257,7 +257,14 @@
                 
                 <div class="row-item" style="margin-top: 10px;">
                     <label style="width: auto; margin-right: 10px;">
-                        <input type="checkbox" id="chk-require-playing"> <span data-i18n="event_editor.no_exec_stop">No ejecutar si el reproductor está detenido.</span>
+                        <!-- 
+                            NOTA PARA PROGRAMADORES / AI:
+                            Anteriormente la opción era "No ejecutar si el reproductor está detenido" (chk-require-playing).
+                            Ahora es "Ejecutar aunque el reproductor esté detenido" (chk-execute-even-stopped).
+                            La lógica se invierte SOLO EN LA UI, el backend sigue usando 'requirePlaying'.
+                            Cuando chk-execute-even-stopped está marcado (true), requirePlaying debe ser false.
+                        -->
+                        <input type="checkbox" id="chk-execute-even-stopped"> <span data-i18n="event_editor.exec_even_stopped">Ejecutar aunque el reproductor esté detenido.</span>
                     </label>
                 </div>
 

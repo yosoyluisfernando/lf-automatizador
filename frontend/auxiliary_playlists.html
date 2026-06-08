@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Playlists auxiliares</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="auxiliary_playlists.css">
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: #18181b;
+        }
+        #aux-floating-root {
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="aux-floating-root"></div>
+    <script src="auxiliary_playlists.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', function () {
+            var root = document.getElementById('aux-floating-root');
+            if (window.initAuxiliaryPlaylists && root) window.initAuxiliaryPlaylists(root, { floating: true });
+        });
+    </script>
+</body>
+</html>

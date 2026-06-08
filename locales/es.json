@@ -969,7 +969,7 @@
         "action_after": "seg. Acción:",
         "force": "Forzar evento",
         "skip": "Omitir este evento",
-        "no_exec_stop": "No ejecutar si el reproductor está detenido.",
+        "exec_even_stopped": "Ejecutar aunque el reproductor esté detenido.",
         "priority": "Nivel de Prioridad:",
         "p_low": "Baja",
         "p_normal": "Normal",

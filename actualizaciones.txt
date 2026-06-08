@@ -1,0 +1,1586 @@
+Hola Luis Fernando. Voy a investigar este bug a fondo antes de tocar nada. Por lo que describes hay potencialmente dos problemas entrelazados:
+
+1. **El evento se carga en la playlist *visible* en lugar de la playlist *que está sonando*.**
+2. **El evento se reproduce instantáneamente (o provoca un "next") en lugar de respetar la regla de espera/tolerancia/forzado.**
+
+Déjame mapear cómo funciona el sistema de eventos automáticos en el código antes de sacar conclusiones.
+
+Hay un documento que explica la consola virtual. Voy a leerlo primero porque seguramente describe la arquitectura de playlists y reproducción.
+
+`events.js` es solo la capa de persistencia. La lógica de runtime que dispara el evento en la playlist está en el frontend. Busquemos dónde se evalúan y disparan los eventos en tiempo real.
+
+Encontré el núcleo. Voy a leer toda la sección de inserción y disparo de eventos en `render.js` con detenimiento.
+
+Esto es muy revelador. Veo el patrón. Antes de concluir, necesito entender la variable central: `currentPlayingRow`. Mira estas dos líneas clave:
+
+- Línea 6056: `const targetTbody = currentPlayingRow ? currentPlayingRow.closest('tbody') : tbodys[currentViewTab] || tbodys[pgmTab];`
+- Línea 6133: si NO hay `currentPlayingRow`, reproduce **al instante** en vez de encolar.
+
+Ambos síntomas (playlist equivocada + reproducción instantánea) apuntan a que `currentPlayingRow` está en `null` mientras algo suena. Voy a investigar cómo se asigna y limpia.
+
+Veo varios puntos donde se anula `currentPlayingRow`. Necesito entender el modelo de pestañas/playlists y cuándo se pierde la referencia. Voy a leer los contextos clave.
+
+Necesito entender los modos de ejecución exactos y funciones auxiliares. Voy a leer varias piezas en paralelo: el editor de eventos (opciones de ejecución), y las funciones `canEventInterruptNow`, `queueEventForEmission`, y la cola de emisión.
+
+Confirmado: tres modos — `interrupt`, `wait` (espera a que termine la canción), `max-delay` (espera X tiempo). El usuario usa `wait` y `max-delay`, ninguno debería sonar al instante. Voy a leer las funciones de decisión y la cola de emisión.
+
+Necesito entender el reloj de reproducción (`isPlayerClockPaused`, `getPlayerClockTime`), `activePlayer` y la relación con la reproducción Rust, porque la condición de "sonar al instante" depende de ellos. También cómo se gestiona la pestaña on-air (`pgmTab`) vs la visible (`currentViewTab`).
+
+`isPlayerClockPaused`/`getPlayerClockTime` SÍ son Rust-aware: durante la reproducción normal Rust devuelven "no pausado", así que esa rama no dispararía el instant-play. Eso refuerza que la causa raíz es **`currentPlayingRow === null` mientras hay audio al aire**. Veamos dónde se anula durante transiciones. Línea 11785 y el `playRow`.
+
+Durante `playRow` el `currentPlayingRow` se anula en línea 11785 y se reasigna en 11912, todo síncrono (no observable por el timer). Necesito ver el ciclo de fin de pista / crossfade / fin de playlist, que es donde puede quedar `null` con audio aún sonando (cola del fade). Veamos `finishCurrentTrack`, `playNext` y el disparo de crossfade.
+
+Confirmo la lógica: con algo realmente al aire (Rust `playing`), `isPlayerClockPaused` es `false` y el evento se **encola** correctamente. El instant-play SOLO ocurre cuando `currentPlayingRow` es `null`. Es decir, ambos síntomas comparten una raíz: **el código usa `currentPlayingRow` como único proxy de "qué playlist está al aire" y "¿hay algo sonando?", pero esa referencia se vuelve `null` transitoriamente mientras aún hay audio** (cola de fade-out al terminar/parar, transiciones).
+
+Voy a buscar evidencia en el log y un detector robusto de "algo al aire", y confirmar la semántica de `pgmTab`.
+
+No hay evidencia en logs ni un helper de "algo al aire" existente. Necesito ver cómo se determina realmente la reproducción para construir un detector robusto y no romper nada. Voy a leer `setQueuedNextAutomatic`, `resolveNextOperationalRow`, y las estructuras de estado Rust (`rustAudioProbeStatus`, `findRustStatusPlayer`, `getPlaylistPlayerId`).
+
+`setQueuedNextAutomatic` solo marca la cola, no reproduce. Bien. Ahora las estructuras de estado Rust para un detector robusto de "al aire".
+
+Necesito el conjunto de IDs de decks de playlist para enumerar su estado en Rust. Y confirmar la verdad en modo webAudio.
+
+Tengo casi todo. Dos verificaciones antes de tocar: (1) confirmar el modo de motor por defecto, y (2) revisar una línea sospechosa (12137 mostró `\ BUG FIX` que podría ser un error de sintaxis). También miraré el historial de la línea 6056 por si es una regresión.
+
+
+El comentario en 12137 está bien (era `// BUG FIX`, el grep lo mostró mal). Sin error de sintaxis.
+
+Tu pista es muy pertinente y encaja con lo que venía viendo. El principio de diseño del propio documento es: **"Rust es la única fuente de verdad de posición/estado"** y en modo Rust **los `<audio>` HTML están siempre pausados a propósito**. Si alguna decisión de reproducción lee el estado crudo del player HTML (`.paused`/`.currentTime`/`.ended`) o un nivel de audio que viene de WebAudio (que está inerte en modo Rust), creería que "no hay nada sonando" aunque Rust SÍ esté emitiendo — y eso podría **anular `currentPlayingRow`** justo cuando suena. Voy a auditar ese conflicto.
+
+`lastProgramPeakPercent` en modo Rust viene de `rustProgramStereo.max` (los medidores reales de Rust), y la guarda de aire corta `pgmSilent=false` cuando `activePlayer` es el reloj virtual. O sea, la guarda de aire SÍ es Rust-aware. Los puntos de decisión del evento (`isPlayerClockPaused`/`getPlayerClockTime`) también. 
+
+Ahora la pregunta clave que planteas: ¿hay algún punto donde Rust (audio real) y el player HTML (reloj virtual) se **desincronicen** y eso **anule `currentPlayingRow`** o marque "fin de pista" en falso durante la reproducción real? Voy a auditar la detección de "fin de pista esperado" del reloj virtual.
+
+Voy a auditar la frontera Rust↔WebAudio donde se decide "fin de pista": el detector de fin esperado en Rust (2240-2320) y los manejadores de `ended` del player HTML (10600-10780, 15290-15310, 3900).
+
+El watcher de salud Rust↔WebAudio (`watchRustPlaylistOwnerHealth`) está bien blindado (exige coincidencia de `path` y deck activo antes de dar una pista por terminada), así que no anula `currentPlayingRow` en falso durante reproducción real.
+
+Tu intuición apunta a algo concreto que sí veo: la condición de "sonar al instante" usa `isPlayerClockPaused(activePlayer) && getPlayerClockTime(activePlayer) === 0`. En modo Rust, si un evento cae en la **ventana de carga/crossfade** (el deck nuevo aún no está confirmado como `playing` en Rust), `isPlayerClockPaused` cae al `<audio>` HTML —que **siempre está pausado a propósito**— y `getPlayerClockTime` devuelve 0 → la condición da verdadero y dispara instant-play aunque sí haya audio. **Ese es el conflicto Rust↔WebAudio que mencionas.** Déjame verificar si hay más lecturas crudas de estado del player que evadan los wrappers Rust-aware en la ruta de decisión.
+
+El código usa consistentemente los wrappers Rust-aware (`isPlayerClockPaused`/`getPlayerClockTime`); las lecturas crudas de `.ended` (1654, 3234, 11573) van siempre combinadas con `isPlayerClockPaused`, así que no hay conflicto ahí. El conflicto Rust↔WebAudio real está en los **puntos de decisión del evento** (5800, 6132, 6133): el patrón `isPlayerClockPaused(activePlayer) && getPlayerClockTime(activePlayer) === 0` lee el reloj del `activePlayer`, que en la ventana de carga/crossfade cae al `<audio>` HTML pausado.
+
+Tengo el diagnóstico completo. Marco el cierre de la investigación y empiezo la corrección.
+
+Ahora aplico la corrección. Primero, el detector robusto **Rust-aware** de "audio de programa al aire", que reemplaza el proxy frágil basado solo en `currentPlayingRow`/reloj del `<audio>` HTML.
+
+Ahora la **corrección #1**: el evento debe cargarse en la playlist **al aire** (`pgmTab`), nunca en la meramente visible.
+
+Ahora la **corrección #2 y #3**: el disparo. Reemplazo el proxy frágil (`!currentPlayingRow || (isPlayerClockPaused && time===0)`) por el detector Rust-aware, y excluyo `max-delay` de cualquier auto-disparo en la inserción (su temporizador de tolerancia ya decide forzar/omitir).
+
+Verifico la sintaxis del archivo completo.
+
+Reviso el flujo completo tras los cambios para confirmar coherencia (interacción con `deferClearUntilExecution`, `shouldQueueAfterCurrent` y el bloque `maxDelayActive`).
+
+Sintaxis OK y el flujo queda coherente. Déjame verificar que no quedó ningún otro punto de decisión de eventos con el patrón frágil, y confirmar el conteo de cambios.
+
+Listo. Confirmo que los otros dos resultados son benignos:
+- **5828** está dentro de `syncQueuedNextAfterEventInsert` — solo marca el puntero de "siguiente", no reproduce.
+- **11321** es una guarda temprana ajena al disparo de eventos.
+
+Los puntos de decisión del evento ya pasan todos por el detector Rust-aware.
+
+---
+
+## Diagnóstico (causa raíz única)
+
+Ambos síntomas que describiste son **la misma causa**: el código de emisión de eventos usaba `currentPlayingRow` (una sola referencia DOM) como **único proxy** de dos cosas distintas: *"¿en qué playlist estoy al aire?"* y *"¿hay algo sonando?"*. Esa referencia se vuelve `null` momentáneamente mientras **todavía hay audio** (cola de fundido al terminar/parar, ventana de carga de un crossfade). Y aquí entra **exactamente el conflicto Rust↔WebAudio que intuiste**:
+
+- En modo Rust, los `<audio>` HTML están **siempre pausados a propósito** (Rust es la única fuente de verdad).
+- La condición de disparo era `!currentPlayingRow || (isPlayerClockPaused(activePlayer) && getPlayerClockTime(activePlayer) === 0)`. En la ventana de carga/crossfade, `isPlayerClockPaused` cae al `<audio>` HTML (pausado) y el reloj da `0` → el código **creía que no había nada sonando**.
+
+Con `currentPlayingRow` en `null`, pasaban las dos cosas a la vez:
+1. **Playlist equivocada** ([render.js:6056 original](frontend/render.js)): el *fallback* era `tbodys[currentViewTab]` (la **visible**) y solo después `pgmTab`. Por eso el evento se cargó en la que tenías a la vista.
+2. **Sonó al instante** ([render.js:6133 original](frontend/render.js)): el `!currentPlayingRow` disparaba `playRow()` aunque la regla fuera *esperar* o *retardo*. Ese `playRow` sobre la fila del evento es lo que viste como un "next" automático (cambiaba el programa/cortaba la pista).
+
+Verifiqué además que la guarda de aire y el watcher de salud Rust **sí** son Rust-aware (usan medidores y estado reales de Rust, con blindaje por `path`+deck), así que **no** anulan `currentPlayingRow` en falso durante reproducción real. El conflicto estaba localizado en los puntos de decisión del evento.
+
+## La corrección (desde la raíz, Rust como fuente de verdad)
+
+**1. Detector robusto `isProgramAudioOnAir()`** ([render.js:5758](frontend/render.js:5758)) — pregunta a Rust por el estado real de los decks (`playing`/`fading`), no al `<audio>` HTML; en modo WebAudio puro sí usa los `<audio>`.
+
+**2. El evento siempre va a la playlist al aire** ([render.js:6089](frontend/render.js:6089)): `pgmTab` primero (se mantiene apuntando a la playlist de programa aunque `currentPlayingRow` quede `null`), y la visible solo como último recurso.
+
+**3 y 4. Respeta la regla en el disparo** ([render.js:6166](frontend/render.js:6166) y [6167](frontend/render.js:6167)): se reemplazó el proxy frágil por `!isProgramAudioOnAir()`, y se **excluye `max-delay`** de cualquier auto-disparo en la inserción (su temporizador de tolerancia es el único que decide *forzar* u *omitir*).
+
+## Comportamiento resultante (tus reglas)
+
+| Modo | Con audio al aire | Aire genuinamente vacío |
+|---|---|---|
+| **Interrumpir** | Corta y suena (1ª vía legítima) | Suena |
+| **Esperar (fin de canción)** | Se encola como *siguiente*, suena al terminar | Suena (no hay nada que esperar) |
+| **Retardo máx.** | Se encola; al vencer → *forzar* (2ª vía legítima) u *omitir* | Espera el tiempo y luego forza/omite |
+
+Ya **nunca** interrumpe salvo por las dos vías que indicaste, y **siempre** se carga en la playlist que está sonando.
+
+**Honestidad sobre un borde menor:** si un evento cae justo en el fundido de parada al **final** de una playlist (1-3 s, sin loop), ahora quedará *en cola* en vez de sonar para rellenar ese silencio. No es una interrupción indebida y es un caso muy raro; preferí proteger la ventana de crossfade (tu queja real) antes que rellenar ese silencio. Si prefieres que en ese borde sí suene, lo ajusto.
+
+`node --check` pasa. No toqué nada fuera de la ruta de eventos. ¿Quieres que lo verifiquemos en la app en marcha con un evento de prueba en modo *esperar* y *retardo*?
+
+
+
+Buena observación. Ese es un bug **distinto y en sentido contrario** al de eventos, pero de la misma familia "playlist equivocada":
+
+- **Eventos automáticos** → deben ir a la playlist **al aire** (lo que acabo de arreglar).
+- **Agregar manual desde el explorador** → debe ir a la playlist que **estás viendo** (currentViewTab), para pre-producir.
+
+Mi cambio anterior fue solo dentro de `executeEvent`, así que esto es un bug preexistente aparte. Probablemente el "agregar" inserta en la playlist de programa (o se bloquea) en vez de la visible, por eso "no se agrega" a tu vista. Voy a localizar los handlers de esas dos opciones del menú.
+
+Los handlers pasan `playlistBody` como destino, que debería ser la playlist visible. Voy a leer `createPlaylistRow`, `addRandomFolderToPlaylist` y `handleDroppedItem` para ver cómo resuelven el tbody destino y por qué "no se agrega".
+
+`createPlaylistRow` usa `bodyToUse = targetTbody || playlistBody`, y los handlers pasan `playlistBody`. Si `playlistBody` apunta a la pestaña visible, debería agregarse ahí. El que "a veces sí funcione" sugiere un desincronismo de estado. Voy a revisar todas las asignaciones de `playlistBody`/`currentViewTab` y la lógica de visibilidad de pestañas.
+
+Veo un patrón sospechoso. Los handlers usan `document.querySelector('.selected-row')` como punto de inserción (`insertTarget`), pero pasan `playlistBody` (pestaña visible) como tbody destino. Si hay una fila seleccionada en **otra** playlist (p. ej. la que suena), `createPlaylistRow` intentaría `insertBefore` relativo a una fila que **no pertenece** al tbody destino → excepción → se traga en el `catch` → "no se agrega". Y explicaría la intermitencia (solo falla si quedó una selección en otra lista). Voy a confirmar la lógica de inserción.
+
+Confirmado el segundo bug. En [render.js:6756](frontend/render.js:6756):
+
+```js
+if (insertTarget) {
+    if (position === 'top') bodyToUse.insertBefore(tr, insertTarget);
+    else bodyToUse.insertBefore(tr, insertTarget.nextSibling);
+} else {
+    bodyToUse.appendChild(tr);
+}
+```
+
+Si `insertTarget` (la fila `.selected-row` que quedó seleccionada en otra playlist) **no es hijo** de `bodyToUse` (la playlist visible), `insertBefore` lanza `NotFoundError`. En "Agregar todo" ese throw lo traga el `catch (err) {}` de `handleDroppedItem`; en "carpeta aleatoria" queda como promesa rechazada silenciosa. Resultado: **no se agrega nada**. Y es intermitente porque solo falla cuando hay una selección viva en otra lista (sin selección, `insertTarget` es `null` → `appendChild` → funciona).
+
+La causa raíz está en el único punto de inserción (`createPlaylistRow`), que confía en que `insertTarget` pertenece al tbody destino sin verificarlo. Lo blindo ahí —corrige toda esa clase de error para **todos** los llamadores (menú, drag-drop, etc.):
+
+Verifico sintaxis.
+
+Hecho. Sintaxis OK.
+
+## Segundo bug (independiente del de eventos)
+
+**Causa raíz:** Los handlers de "Agregar carpeta como pista aleatoria" y "Agregar todo el contenido" toman como punto de inserción `document.querySelector('.selected-row')` — una selección **global**, que puede vivir en otra playlist (la que suena). Pero insertan en la playlist **visible**. En [createPlaylistRow](frontend/render.js:6756), `bodyToUse.insertBefore(tr, insertTarget…)` exige que `insertTarget` sea hijo del tbody destino; si la fila seleccionada está en otra lista, lanza `NotFoundError`:
+- En "Agregar todo" → lo traga el `catch (err) {}` de `handleDroppedItem`.
+- En "carpeta aleatoria" → queda como promesa rechazada silenciosa.
+
+Por eso "no se agrega nada", y por eso es **intermitente**: solo falla cuando hay una selección viva en otra lista. Con el programa recién abierto (sin selección cruzada) `insertTarget` es `null` → `appendChild` → funciona.
+
+**La corrección** (en el único punto de inserción, así blinda a todos los llamadores: menú, drag-drop, etc.): si `insertTarget` no pertenece al tbody destino, se agrega al **final de la lista visible** —que es justo lo que esperas al pre-producir— en vez de reventar en silencio.
+
+```js
+if (insertTarget && insertTarget.parentNode === bodyToUse) {
+    …insertBefore…
+} else {
+    bodyToUse.appendChild(tr);   // destino correcto: la playlist que estás viendo
+}
+```
+
+Si la fila seleccionada **sí** está en la lista visible, sigue insertando junto a ella (comportamiento previo intacto).
+
+---
+
+### Resumen de la sesión (dos bugs, ambos de la familia "playlist equivocada")
+
+| Bug | Regla correcta | Estado |
+|---|---|---|
+| Evento automático sonaba al instante / iba a la lista visible | Va a la lista **al aire**; respeta esperar/retardo (detección Rust-aware) | ✅ Corregido |
+| Agregar carpeta/contenido no hacía nada en otra playlist | Va a la lista **visible** (pre-producción) | ✅ Corregido |
+
+Ambos pasan `node --check`. Son rutas de código distintas, así que conviene probar las dos. ¿Lanzamos la app y verificamos: (1) un evento en modo *esperar* mientras suena otra lista, y (2) agregar una carpeta a Playlist 4 con una fila seleccionada en Playlist 1?
+
+
+
+Vamos bien. Este es un problema clásico de **arranque automático con el sistema**: la ventana nativa (menú Archivo/Ver/Lista…) sí carga porque la crea el proceso principal, pero el **contenido del renderer queda en blanco**. Esto suele pasar cuando el `BrowserWindow` carga su HTML antes de que algo esté listo (o un error temprano en el init del renderer aborta el render), y al arrancar al boot el entorno aún no está preparado.
+
+Voy a investigar la implementación de auto-arranque y la creación/carga de la ventana.
+
+Veo que la ventana principal se crea en `createWindow()` tras `app.whenReady()`. Necesito ver cómo carga `index.html` y si hay manejo de `did-fail-load`. Voy a leer `createWindow` y el arranque.
+
+`createWindow` está en la línea 2320 (línea larga). Voy a leerla.
+
+No hay manejo de `did-fail-load` ni reintento en la ventana principal. La ventana se crea (por eso ves el menú nativo) pero `index.html`/renderer queda en blanco. Necesito ver qué hace el renderer en su init temprano y si un fallo de recurso al boot puede dejarlo en blanco. Voy a leer `index.html` y el arranque de `render.js`.
+
+`render.js` hace muchos `require` y construye buena parte de la UI. Para distinguir entre "la página no cargó" (`did-fail-load`) y "el JS del renderer murió temprano", necesito ver si el `<body>` de `index.html` es estático o se construye por JS. Voy a revisar el body.
+
+El `<body>` de `index.html` tiene **mucho markup estático** (pestañas, tablas, controles). Si la página hubiera cargado, verías esa estructura aunque `render.js` fallara — un `throw` de JS no borra el DOM ya parseado. Pero la captura está **completamente en blanco**: ni pestañas, ni cabeceras, ni controles. Eso indica que **la página no cargó** (`did-fail-load`) o que el proceso de render murió en el arranque. Y no hay reintento.
+
+Voy a leer la secuencia de arranque (`app.whenReady`) para ver si `createWindow` depende de algo que al boot no está listo.
+
+`createWindow()` se llama síncronamente en `whenReady`, y carga con **ruta relativa**: `mainWindow.loadFile('frontend/index.html')`. Esto es clave: cuando el programa arranca como **elemento de inicio de sesión en Windows**, el *working directory* suele ser `C:\Windows\System32`, no la carpeta de la app. Según cómo resuelva Electron esa ruta relativa, el archivo podría no encontrarse al boot → `did-fail-load` → ventana en blanco; en arranque manual el cwd es correcto y funciona.
+
+Voy a confirmar la versión de Electron y el patrón de arranque.
+
+Electron 41. En esta versión `loadFile` resuelve relativo a la raíz de la app (no al cwd), así que la ruta relativa probablemente no sea LA causa — pero es un riesgo latente que conviene eliminar. La causa más probable del "blanco al arrancar con el sistema" es una **falla/carrera de carga del renderer al boot** (recurso/GPU/compositor aún no listos) **sin reintento**. Voy a hacer el arranque **auto-reparable** y con log. Primero confirmo que existe `writeLog` en main.js y reviso el patrón de logging.
+
+`writeLog` existe (main.js:1003). Veo su implementación para usarlo correctamente.
+
+Todo confirmado. `writeLog` escribe en `configDir/ERROR_ANALYZER_LOG.txt` (el log que el usuario puede enviarnos). Ahora reescribo `createWindow` para que el arranque sea **auto-reparable**: ruta absoluta (elimina el riesgo latente del cwd), reintento ante `did-fail-load`, recuperación ante caída del proceso de render, un *watchdog* por si la carga nunca termina (blanco al boot), fondo oscuro para evitar el flash blanco, y log de cada incidencia para diagnóstico.
+
+Sintaxis OK. Un refinamiento: `render-process-gone` también se dispara en cierres normales (`clean-exit`), y no queremos reintentar/loguear en ese caso. Lo guardo.
+
+Listo. Sintaxis OK en ambos archivos.
+
+## Tercer problema: ventana en blanco al arrancar con el sistema
+
+**Diagnóstico.** La pista clave está en tu captura: se ve **solo el menú nativo** (Archivo, Ver, Lista…) y el resto **completamente blanco**. El menú lo crea el proceso principal; el blanco es el contenido web (`index.html`). Como `index.html` tiene **mucho markup estático** (pestañas, tablas, controles), si la página hubiera cargado verías esa estructura **aunque** el JS fallara —un error de JavaScript no borra el HTML ya pintado—. Que esté *todo* en blanco significa que **la página no llegó a cargar/pintar**, no que se rompió el script.
+
+Eso encaja con tu hipótesis: al arrancar **junto con el sistema** (inicio de sesión, recuperación tras corte de luz), el SO todavía está ocupado (GPU/compositor/disco/antivirus) y la carga del renderer falla o se cuelga. En [main.js:2320](main.js:2320) la ventana hacía `loadFile('frontend/index.html')` **una sola vez, sin reintento ni manejo de error** → si falla al boot, queda en blanco para siempre. En arranque manual el sistema ya está listo y por eso sí funciona.
+
+**Honestidad:** no pude reproducirlo en tu máquina ni tengo el log del usuario, así que en vez de adivinar el recurso exacto que falla, hice el **arranque auto-reparable** y añadí **registro** para capturar evidencia si reincide.
+
+**La corrección** (en `createWindow`, [main.js](main.js:2320)):
+- **Ruta absoluta** `path.join(__dirname,'frontend','index.html')` — elimina el riesgo latente de que, al autoarrancar, el *working directory* sea `C:\Windows\System32` y la ruta relativa no resuelva.
+- **Reintento ante `did-fail-load`** con backoff (hasta 8 intentos) — si la carga falla por el SO ocupado, reintenta hasta lograrlo.
+- **Recuperación ante caída del proceso de render** (`render-process-gone`, ignorando el cierre normal).
+- **Watchdog de 20 s**: si la interfaz nunca termina de cargar, fuerza una recarga (cubre el cuelgue silencioso sin error).
+- **Fondo oscuro** (`backgroundColor`) para que durante la carga no haya flash blanco.
+- Cada incidencia queda en `ERROR_ANALYZER_LOG.txt` con el motivo.
+
+El arranque manual normal **no cambia**: se carga una vez, `did-finish-load` marca éxito y los reintentos/watchdog quedan inertes. Sin riesgo de regresión. Aplica igual a Windows y Linux.
+
+**Para probar esto hace falta una build compilada** (es código del proceso principal). Sugerencia: generar la build, configurar inicio con el sistema, reiniciar y verificar. Si por algún caso extremo aún saliera en blanco, ahora el `ERROR_ANALYZER_LOG.txt` dirá el motivo (`did-fail-load`, `render-process-gone`, `watchdog…`) y con eso afinamos la causa exacta.
+
+¿Quieres que prepare un pequeño commit con los tres arreglos de esta sesión (eventos, agregar carpeta, y arranque), o prefieres revisarlos/probarlos en la app antes?
+
+
+
+Perfecto, sin problema. Aquí quedo cuando me confirmes.
+
+Resumen de lo que está hecho y **sin commitear** (working tree), por si lo quieres a mano:
+
+- **Eventos** ([render.js](frontend/render.js)) — van a la playlist al aire (`pgmTab`) y respetan esperar/retardo (detección Rust-aware).
+- **Agregar carpeta/contenido** ([render.js:6756](frontend/render.js:6756)) — ya no falla en silencio al pre-producir en otra playlist.
+- **Arranque con el sistema** ([main.js:2320](main.js:2320)) — carga auto-reparable con reintentos, watchdog y log.
+
+Los tres pasan `node --check`. Tómate tu tiempo.
+
+
+
+Entendido. Quiero asegurarme de hacerlo en el lugar exacto. **No me llegaron las imágenes en este mensaje** (no veo adjuntos), así que mientras tanto voy explorando el código para tener todo ubicado y, cuando me envíes las capturas, confirmo la redacción y posición exactas.
+
+Voy a revisar el editor de eventos (apartado 1 / fuentes, incluida "comerciales") y el gestor de comerciales.
+
+Ya ubiqué el **apartado 1 ("1. Origen del Audio")** en [event_editor.html:43-50](frontend/event_editor.html:43). El orden actual es: Archivo, Playlist, Carpeta Rotativa, **Comerciales**, Emisora (URL), Locuciones. Mover "Comerciales" al final (tras Locuciones) es directo.
+
+Como los textos ahora son i18n (`data-i18n`), necesito tocar también los `locales/`. Reviso las traducciones, los estilos de "badge" existentes y el título del Gestor de Comerciales.
+
+Tengo el panorama. Veo dos detalles a respetar:
+- El **título visible** del Gestor está en [commercial_manager.html:108](frontend/commercial_manager.html:108) (`Gestor de Pautas`), con su propio CSS.
+- En el editor, los handlers usan el `value="commercial"` (no la posición), pero quiero confirmar la estructura del apartado 1 antes de mover el `<label>` para no separar controles asociados. Leo esa zona y el handler de cambio de fuente.
+
+Los radios y sus sub-controles están separados (los controles se muestran/ocultan por `value`, no por posición), así que mover el `<label>` es seguro. Y veo el patrón existente: el badge va como `<span>` **hermano** del `<span data-i18n>` (línea 50). Necesito confirmar cómo aplica i18n las traducciones (textContent vs innerHTML) para no colocar el badge donde se borre, y ver la barra del gestor.
+
+Confirmado: i18n usa `el.innerHTML = translated`, así que el badge debe ir como **hermano** del elemento `data-i18n` (si va dentro, se borra al traducir). En el editor eso ya es el patrón (línea 50). En el gestor envolveré título+badge.
+
+Procedo. Los textos no me llegaron como imagen, pero tus instrucciones son claras y esto es cosmético/reversible; lo aplico y lo verificas contra tus capturas.
+
+**1) Editor de eventos** — estilo del badge + mover "Comerciales" al final del apartado 1 con marca Experimental:
+
+**2) Mover "Comerciales" al final del apartado 1** (tras Locuciones) y marcarlo Experimental:
+
+Ahora el **Gestor de Comerciales**: estilo del badge + marca Experimental junto al título visible.
+
+Listo. Resumen de lo aplicado (cosmético, reversible):
+
+**Editor de eventos automáticos** ([event_editor.html](frontend/event_editor.html:43)) — Apartado *1. Origen del Audio*:
+- "Comerciales" ahora es la **última** opción (tras *Locuciones*), para que con el `flex-wrap` se acomode según el espacio.
+- Lleva una etiqueta **EXPERIMENTAL** (badge ámbar) junto al texto.
+- Los handlers van por `value="commercial"`, no por posición, así que mover el radio no afecta la lógica.
+
+**Gestor de Comerciales** ([commercial_manager.html:108](frontend/commercial_manager.html:108)):
+- Etiqueta **EXPERIMENTAL** junto al título visible "Gestor de Pautas" (envuelto en un `.title-group` para que el badge quede pegado al título sin romper la barra).
+
+Detalles de implementación:
+- El badge es un `<span>` **hermano** del elemento `data-i18n` (no hijo), porque i18n reescribe el `innerHTML` del nodo traducido y borraría un badge interno. Mismo patrón que el badge "Próximamente" existente.
+- "Experimental" va como texto fijo (igual que "Próximamente"); es la misma palabra en es/en/pt, así que no requiere tocar `locales/`.
+
+Tienes ambas ventanas en el **panel de previsualización**. Dos cosas a confirmar contra tus capturas:
+1. En el Gestor marqué el **título principal** ("Gestor de Pautas"). Si querías el badge en otro punto, me dices.
+2. Usé un **badge** "EXPERIMENTAL". Si prefieres el texto literal "(Experimental)" en minúsculas/paréntesis, lo cambio en un momento.
+
+
+
+
+
+Dos cosas: primero el ajuste rápido de i18n del "Experimental", y luego la investigación de estabilidad/rendimiento (que es más seria y la haré con cuidado).
+
+Empiezo por lo rápido: voy a hacer que "Experimental" sea una clave i18n real en los `locales/` (ahora está fija). Reviso la estructura de los archivos de idioma.
+
+Cada idioma tiene `event_editor.opt_com` y `commercial_manager.title_main`. Añadiré una clave `experimental` en ambos namespaces de cada idioma y haré que los badges la usen. Veo el formato exacto.
+
+Añado la clave `experimental` en ambos namespaces de cada idioma y hago que los badges la usen. Primero actualizo los badges en el HTML y reviso el template.
+
+`_template.json` tiene otra estructura, lo omito. Añado la clave `experimental` en los 4 idiomas activos (ambos namespaces).
+
+Las ediciones de `es.json` se aplicaron. Los otros 3 archivos requieren lectura previa. Los leo.
+
+Valido que los 4 JSON sigan bien formados.
+
+✅ "Experimental" ahora es clave i18n real en los 4 idiomas (badges con `data-i18n`), JSON válido. Se mostrará traducido (misma palabra en es/en/pt, lista para localizar a futuro).
+
+---
+
+Ahora el tema serio: **estabilidad y rendimiento en las versiones compiladas**. Antes de tocar nada, déjame ser claro sobre el método, porque esto es delicado:
+
+- Son síntomas **intermitentes, reportados por terceros, solo en builds compiladas**, sin error registrado. No los puedo reproducir aquí ni tengo sus logs.
+- El motor de audio es **Rust + reloj virtual WebAudio** (intrincado). Cambiar a ciegas ahí es alto riesgo — justo lo que no quieres.
+
+Mi hipótesis unificadora (a confirmar con el código): los tres síntomas —**bucle en el segundo 2, lentitud al elegir canción, y locuciones que se saltan sin error**— encajan con **bloqueo del hilo del renderer durante la transición de pista**. En una máquina compilada (más lenta, antivirus, lectura desde asar), ese bloqueo hace que el *polling* del reloj Rust y los *handoffs* de locución lleguen tarde → el watchdog malinterpreta un “stall” y re-siembra/reinicia la pista (bucle), o la locución pierde su ventana y se salta.
+
+Voy a verificar esa hipótesis en el código (trabajo síncrono pesado en la ruta caliente de selección/transición y en las locuciones).
+
+Voy a buscar trabajo síncrono pesado en la ruta caliente (lectura de archivos, duración, resolución de carpeta aleatoria) y el bucle de sondeo del estado Rust.
+
+Veo varios `readFileSync` y la resolución de carpeta aleatoria. Leo el sondeo de estado Rust, `getAudioDuration` y `takeRandomFolderFile` para evaluar bloqueo síncrono y dependencia del reloj.
+
+Confirmo algo clave: el estado Rust llega por **push cada 100 ms** (`audio-engine-rust-event`) y de ahí dependen el reloj virtual y el watchdog. Si el hilo del renderer se **bloquea** sincrónicamente, esos eventos se encolan y el watchdog ve datos viejos → puede malinterpretar un “stall”. `takeRandomFolderFile` se llama **síncrono** en la ruta caliente vía `getRandomFolderFilesFast`. Veo si hace un escaneo de directorio síncrono (bloqueante).
+
+**Hallazgo concreto #1 (lentitud):** `getRandomFolderFilesFast` usa `fs.readdirSync` recursivo (random_folder_source.js:71) — un **escaneo de directorio SÍNCRONO** en el hilo del renderer, ejecutado al resolver una pista de carpeta aleatoria. En una biblioteca grande sobre disco lento (build compilada), esto bloquea el hilo varios segundos → lentitud visible y, de paso, atasca el procesamiento de los push de 100 ms del reloj Rust. Necesito ver si hay caché o si re-escanea en cada selección.
+
+Hay caché (TTL 60 s) pero la lectura sincrónica bloqueante (`readRelativeSync`) se usa cuando el caché está frío/vencido. Con TTL de 60 s, **cada minuto** la siguiente selección aleatoria re-escanea sincrónicamente → congelamiento periódico ("lentitud a veces al seleccionar"). Hay un `warmRandomFolder` async, pero hay que ver si se usa proactivamente en la ruta de reproducción. Leo `hydrateRandomRowFromLibrary` y `takeRandomFolderFileAvoidingRecentMusic`.
+
+El diseño ya tiene pre-calentamiento async (`warmUpcomingRows` → `warmRandomFolder` → hidrata) y cachea `resolvedRandomPath` por fila, así que la ruta aleatoria está bastante cubierta para filas de playlist. El escaneo síncrono solo golpea en bordes (eventos de carpeta, TTL vencido). Así que el random no es claramente la causa dominante.
+
+Déjame mirar el síntoma más "findable": **locuciones que se saltan sin error**. Busco la ruta de locución hora/clima y dónde puede avanzar/saltar silenciosamente.
+
+Veo el watchdog de locución horaria. Leo su lógica y la ejecución de la fila de locución en `playRow`, que es donde una locución podría saltarse silenciosamente.
+
+Veo la ruta de locución. Hay skips que **sí** escriben en el log de sistema (`[SKIP]`/`[GUARDIA]`), pero van al panel de sistema, no al Centro de Incidencias que el usuario mira → por eso "sin error". Y el riesgo real: el renderer confía en `result.ok`/`durationMs` de Rust; si Rust responde ok pero no suena, o si el watchdog (`dur*1000+1500`) vence con una duración mal leída, la locución se corta/salta. Eso es una **carrera en la frontera Rust↔WebAudio**, difícil de arreglar a ciegas sin romper.
+
+Antes de concluir, verifico los llamadores de las funciones síncronas de carpeta aleatoria para evaluar el único arreglo de rendimiento que sí es seguro y de raíz: **eliminar el escaneo de directorio síncrono del hilo principal**.
+
+Veo los llamadores. El cambio seguro y de raíz: el path caliente de filas aleatorias (`takeRandomFolderFileAvoidingRecentMusic`, async) usa el lector **síncrono** en 4215. Cambiarlo al lector **async** (`warmRandomFolder`) elimina el bloqueo del hilo sin cambiar el contrato (ya es async). Reviso el uso en 10008 para no romperlo.
+
+En 10006-10008 ya usa el patrón seguro (warm async → fast cache-hit), así que ese está bien. Los únicos `readdir` síncronos sin warm previo son el path caliente de filas aleatorias (4215) y los eventos de carpeta (4091→6071). Aplico el mismo patrón seguro (warm async) para que **nunca** se escanee el directorio síncronamente en el hilo principal.
+
+Ahora el de eventos de carpeta: convierto `takeRandomFolderFile` a async con lector no bloqueante y actualizo su único llamador.
+
+Sintaxis OK. Resumen honesto de esta parte:
+
+## Estabilidad / rendimiento (builds compiladas)
+
+Investigué los tres síntomas. Importante ser transparente: **no puedo reproducirlos aquí ni tengo logs de las máquinas afectadas**, y el motor Rust↔WebAudio es delicado. Así que apliqué **solo** el arreglo de raíz del que estoy seguro, y para el resto te explico qué encontré y qué necesito para no parchar a ciegas.
+
+### ✅ Arreglo aplicado (seguro, de raíz): escaneo de carpeta síncrono → asíncrono
+
+En modo Rust, el estado del motor llega por **push cada 100 ms** y de ahí dependen el reloj virtual y el *watchdog* de aire. Encontré que la resolución de pistas de **carpeta aleatoria** caía en `fs.readdirSync` **recursivo** ([random_folder_source.js:71](frontend/random_folder_source.js:71)) en el hilo del renderer, en dos rutas calientes:
+- Filas aleatorias de playlist ([render.js:4215](frontend/render.js:4215))
+- Eventos de carpeta ([render.js:4091→6077](frontend/render.js:6077))
+
+En una biblioteca grande sobre disco lento (típico de una build instalada), ese escaneo **congela el hilo varios segundos**. Eso explica directamente la **"lentitud al seleccionar canción"**, y —de forma indirecta— alimenta los otros dos: mientras el hilo está bloqueado, los push de 100 ms se **encolan**; al desbloquear, el watchdog ve un "hueco" y puede malinterpretarlo como *stall* → re-siembra/reinicia la pista (**bucle**) o fuerza el avance antes de tiempo (**locución saltada**).
+
+Lo cambié al lector **asíncrono** que ya existía (`warmRandomFolder`, mismo listado y caché, pero con `fs.promises.readdir` que cede el hilo). Es el mismo patrón seguro que el código ya usaba en [render.js:10006](frontend/render.js:10006). Comportamiento idéntico, sin bloqueo. `node --check` pasa.
+
+### ⚠️ Bucle en el segundo 2 y locuciones saltadas — NO los toco a ciegas
+
+Lo que vi en el código:
+- **Bucle:** el watchdog de aire ([watchRustPlaylistOwnerHealth](frontend/render.js:2286)) hace `seek(posición)+play` cuando cree que hay *stall*. Si el motor reporta una posición baja/atascada (o por el bloqueo de arriba), re-siembra y la pista reinicia cerca de ese punto → bucle corto.
+- **Locución saltada:** el renderer confía en `result.ok`/`durationMs` de Rust; si Rust responde OK pero no suena, o el watchdog de locución vence con una duración mal leída ([armRustTimeLocutionWatchdog](frontend/render.js:3885), `dur*1000+1500`), la voz se corta/salta. Los `[SKIP]`/`[GUARDIA]` **sí** se loguean, pero al *log de sistema*, no al Centro de Incidencias → por eso el usuario "no ve error".
+
+Ambos son **carreras de tiempo en la frontera Rust↔WebAudio**. Cambiar umbrales o la lógica del watchdog sin evidencia es justo el "parche sobre parche" que no quieres, y podría empeorar.
+
+**Para arreglarlos de raíz necesito evidencia de una build compilada:**
+1. El archivo `ERROR_ANALYZER_LOG.txt` (en la carpeta de config) de una máquina donde ocurra, justo tras el fallo.
+2. Si es posible, el log del propio motor Rust.
+3. El minuto/segundo exacto del video del bucle.
+
+**Mi propuesta:** dame luz verde y agrego **diagnóstico de bajo riesgo** (solo escribe al log, no cambia comportamiento) en esos puntos —stall-recovery con su posición, fin-esperado, y el skip/forzado de locución— para que el próximo reporte señale la causa exacta. Con eso sí ataco la raíz con seguridad.
+
+¿Avanzo con esa instrumentación, o prefieres primero probar si el arreglo del escaneo asíncrono ya reduce los tres (a veces el bloqueo era el detonante común)?
+
+
+
+
+Voy a revisar primero cómo está configurada la compilación en GitHub (workflows) y el estado del repo, para disparar el build correctamente sin crear release. También quiero validar el formato de versión.
+
+Hay un solo workflow: `.github/workflows/release.yml`. Y noto que el árbol de trabajo tiene **muchísimos cambios sin commitear** (no solo los míos) y varios archivos sin trackear (incluido `locales/`). Antes de tocar versión o hacer push, necesito leer el workflow para saber cómo se dispara y si crea release.
+
+El workflow es claro y conveniente:
+- **`push` a `main`** o **`workflow_dispatch`** → corre el job `build` → genera instaladores como **artifacts** (sin release).
+- El job `publish-release` SOLO corre con **tag `v*`**. 
+
+O sea: para "compilar sin release", basta con **push a main** (o disparar el workflow manualmente). No crear tag.
+
+Pero antes de hacer algo irreversible (push a main dispara CI), hay dos asuntos técnicos que debo verificar, porque el árbol está **muy** sucio:
+
+Dos hechos importantes confirmados:
+
+1. **`0.9.13.1` no es una versión válida** (semver la rechaza → `null`). electron-builder usa semver y el build **fallaría**. Necesito un formato válido.
+2. `locales/`, `app_launch_log.txt`, notas `.md`, etc. están **sin trackear** (no ignorados). Hay **46 cambios** en el árbol. Un push a `main` dispara el CI y compila lo que se haya commiteado.
+
+Déjame ver el `.gitignore` para proponerte bien el alcance del commit.
+
+
+
+
+
+Entendido — pausamos la compilación (la versión `0.9.13.1` además no es semver válida; lo retomamos luego). Esto es un rediseño grande y conectado, así que primero hago la **auditoría que pediste (puntos 1-3)** sobre el código real, y con eso encima te propongo el diseño y te hago preguntas concretas. No escribo código todavía.
+
+Voy a localizar el generador automático de playlist, el motor de reglas de separación musical, y rastrear de dónde toma los archivos y qué papel tiene Rust.
+
+Voy a ubicar el generador en sí. Busco su disparador y lógica en render.js e index.html.
+
+El generador es la función **"rotation"** (Generador de Playlists, marcado "en desarrollo"). Voy a leer su UI y toda su lógica.
+
+Todo el generador ("rotation/clockwheel") vive en **render.js (frontend), no en Rust**. Usa categorías de género, un patrón tipo *clockwheel*, y reglas de separación. Voy a leer el núcleo: de dónde toma los candidatos (archivos) y cómo arma el plan.
+
+Tengo el núcleo de la auditoría. Antes de redactar, dos verificaciones para hacerte buenas preguntas: (a) si Rust hoy expone algún comando de escaneo/listado de archivos, y (b) cómo el "Gestor de Tipos de Archivo" guarda las rutas raíz (para la conexión que describes).
+
+Hecho el reconocimiento. Te doy la **auditoría (1-3)** con base en el código real, y luego unas decisiones para diseñarlo bien.
+
+## Auditoría del Generador actual ("Generador de Playlists 🧩", marcado *en desarrollo*)
+
+**1. ¿Quién genera la playlist?**
+La genera **100% el frontend** (`render.js`, función [`buildRotationPlan()`](frontend/render.js:7765)), corriendo en el hilo del renderer. **Rust NO participa**: `audio-engine-rust/src/main.rs` es solo el motor de audio (decks, buses, DSP); no escanea archivos ni arma listas. Así que hoy el "trabajo pesado" no está en Rust.
+
+**2. ¿De dónde toma los archivos?**
+De **`manualCuesDB`** — la **biblioteca curada en memoria** (los tracks escaneados en la Librería). Por cada track lo clasifica por: tipo de archivo (Gestor de Tipos), **género/subgénero** de la metadata, e inferencia por ruta ([render.js:7687](frontend/render.js:7687)). No escanea carpetas: **solo "ve" lo que está en la biblioteca**.
+
+**3. Fallas / limitaciones actuales:**
+- Depende totalmente de **biblioteca bien curada + géneros etiquetados**; si faltan, la categoría queda vacía → error *"Faltan canciones"*. (Tu dolor exacto.)
+- **No** se puede agregar una carpeta directamente.
+- Todo en el **hilo del renderer** (contra la filosofía "control remoto humilde").
+- Duración de locuciones = *placeholder* de 5 s (la real depende del momento).
+
+## Sobre tu punto 1 ("que lo haga Rust")
+Te lo digo con franqueza de ingeniería: aquí el trabajo pesado es **I/O** (escanear carpetas + leer duración/metadata), no cálculo. Eso se resuelve mejor con **lectura asíncrona / un *worker* de Node** (que ya existe en el proyecto: `random_folder_source.js` async, `library_worker.js`), no metiéndolo en Rust. Rust es el **motor de audio**; reescribir la generación allí sería un esfuerzo grande, de alto riesgo y beneficio marginal. La selección (clockwheel) en sí es liviana. Mi recomendación: **mantener la lógica en JS pero fuera del hilo principal**, y **alimentarla desde carpetas** con el escáner async que ya tenemos. Buena noticia: el **Gestor de Tipos** ya guarda raíces con `includeSubfolders` en `config/file_type_options.json` — justo la pieza que necesitamos reutilizar.
+
+Antes de diseñar el resto (accesos directos, modal conectado al Gestor, locuciones), tres decisiones que cambian la arquitectura:
+
+¿Dónde vive el trabajo pesado de generación (escaneo de carpetas + selección)?
+
+
+
+
+
+Recibido. Plan de acción según tus respuestas:
+- **Motor**: JS async + worker (sin Rust), y además **sacar el generador de la interfaz principal a una ventana independiente**, aislado en archivos nuevos para que `render.js` no siga creciendo.
+- **Fuentes**: cada paso del patrón puede ser **género O carpeta**.
+- **Procedo**: primero **respaldo en GitHub**, luego **plan detallado** (compatible con i18n).
+
+Empiezo por el **respaldo**. Primero reviso el estado completo del árbol para no subir basura ni nada sensible.
+
+`origin/main` está sincronizado pero **no tiene nada** de estos 46 cambios — el respaldo los salvaguardará. Dos detalles: `app_launch_log.txt` es un log de runtime (no debe subirse) y `entendiendo la consola virtual.md` ya lo intentaste ignorar (pero la línea del `.gitignore` tiene comillas y no funciona). Respeto esa intención y de paso corrijo el `.gitignore`.
+
+Para un **respaldo puro sin disparar el CI**, lo subiré a una **rama de respaldo** (`main` solo dispara build; una rama no). Leo el `.gitignore` para corregirlo.
+
+`.gitignore` corregido (`app_launch_log.txt` y la nota local ahora sí se ignoran). Preparo el commit y verifico que NO se cuele lo que no debe.
+
+49 archivos staged, **sin basura ni secretos** (el log y la nota local quedaron fuera). Hago el commit de respaldo y lo subo a una **rama de respaldo** (no a `main`, así no se dispara el CI).
+
+✅ **Respaldo hecho.** Subido a la rama **`respaldo/pre-generador-playlist-2026-06-05`** en GitHub (no a `main`, así que **no disparó ningún build**). 49 archivos, sin logs ni datos sensibles. Tu código está a salvo en la nube antes de empezar el rediseño.
+
+Ahora preparo el **plan detallado**. Para que sea concreto y correcto, reviso rápido tres piezas que el plan debe integrar: la ventana de "Reglas de separación musical" (tu base sugerida), el explorador y sus accesos, y el modal actual del generador que voy a extraer.
+
+Tengo todo lo necesario para el plan. Confirmé las piezas de integración:
+- **Explorador** (`#file-explorer`, [`loadDrives()` render.js:6257](frontend/render.js:6257)) ya arma accesos directos (Escritorio, Descargas, Música) — ahí se inyectan los nuevos.
+- **Generador actual** = modal `#rotation-modal` en index.html + lógica en render.js → lo extraigo a ventana propia.
+- **Reglas de Separación** es ventana propia con layout de *cards* (buena referencia de estilo, pero no tiene "explorador izq / reglas der" — eso es nuevo).
+- **Raíces de tipos** ya viven en `config/file_type_options.json` (carpeta + `includeSubfolders`) — la pieza a reutilizar.
+
+---
+
+# 📋 Plan detallado — Generador de Playlist v2 (para tu aprobación, aún sin código)
+
+## Principios
+- **Ventana independiente**, aislada en **archivos nuevos** (render.js no crece). El botón 🧩 abrirá la ventana; se elimina el modal.
+- **Trabajo pesado en Node async/worker** (no Rust, no en el hilo de UI). Reutiliza `random_folder_source` (async) y patrón de workers existente.
+- **Cada paso del patrón = género O carpeta.**
+- **Todo i18n** (nuevo namespace en los 4 idiomas + `_template.json`).
+
+## Arquitectura de archivos (nuevos)
+| Archivo | Rol |
+|---|---|
+| `frontend/playlist_generator.html` | Ventana: explorador izq (angosto) + reglas/config der |
+| `frontend/playlist_generator.js` | Controlador de la ventana (UI, IPC) |
+| `backend/playlist_generator_worker.js` | Worker: escaneo + construcción de candidatos + selección (clockwheel) |
+| `backend/services/playlist_generator_core.js` | Lógica pura reutilizable (extraída de render.js) + tests |
+| main.js | `createPlaylistGeneratorWindow()` + IPC `generate-playlist` |
+| `locales/*` | namespace `playlist_generator.*` (es/en/pt-BR/pt-PT/_template) |
+
+## Fases
+**Fase 0 — Aislar (sin cambiar comportamiento):** extraer la lógica de `rotation` de render.js al core; crear la ventana y abrirla desde el botón 🧩; quitar el modal. *Checkpoint: funciona igual que hoy, pero en ventana.*
+
+**Fase 1 — Motor fuera del hilo:** mover escaneo/selección al worker; la ventana solo envía config y recibe el plan. *Checkpoint: ya no bloquea.*
+
+**Fase 2 — Fuentes por carpeta:** el patrón acepta tokens de carpeta (`@folder:RUTA`) además de géneros; explorador izq para elegir/añadir carpetas con la pregunta **¿incluir subcarpetas?** (reutiliza `askIncludeSubfolders` + `file_type_options.json`).
+
+**Fase 3 — Accesos directos en explorador principal** (IDs / Comerciales / Pisadores): se inyectan en `loadDrives` leyendo `file_type_options.json`. Doble-click sin raíz → **modal conectado al Gestor de Tipos** (elegir raíz + ¿subcarpetas?). Click derecho → opciones habituales + **"Modificar acceso directo"** → mismo modal (con **mostrar/ocultar**). Configurable desde el Gestor o desde la interfaz principal.
+
+**Fase 4 — Locuciones en el generador:** hora/temp/humedad como pasos del patrón (duración estimada/placeholder, archivo real se resuelve al sonar, igual que al enlistarlas).
+
+**Fase 5 — i18n, tests y pulido.**
+
+## Riesgos
+- Extraer de render.js sin romper (mitigado por Fase 0 con checkpoint de paridad).
+- Esquema de `file_type_options.json` se extiende (mostrar/ocultar, tipo de acceso directo) — compatible hacia atrás.
+- Cobertura i18n completa.
+
+---
+
+## Dudas antes de implementar (para hacerlo bien)
+1. **Resultado del generador:** sigue insertándose en una playlist de la interfaz principal (¿en la pestaña visible? ¿elegible 1-4?), o ¿también permite exportar `.lfplay`?
+2. **Presets:** ¿quieres guardar patrones/configuraciones con nombre (ej. "Hora musical AM", "Madrugada"), o una sola config como hoy?
+3. **Accesos directos:** ¿exactamente estos tres tipos (Identificaciones de emisora, Comerciales, Pisadores)? ¿Uno por tipo, o varias raíces por tipo?
+4. **Locuciones en explorador:** confirmo que hora/temp/humedad son **solo visuales** (no se edita su raíz aquí; se leen de Ajustes).
+5. ¿Guardo este plan como documento en el repo (ej. `PLAN_GENERADOR_PLAYLIST.md`) para seguirlo, o lo dejamos en el chat?
+
+Cuando me confirmes estas 5, empiezo por la **Fase 0**. ¿Te hace sentido el enfoque por fases o ajustamos algo?
+
+
+
+
+
+Entendido, procedo. Le doy unos segundos a la transición de la desconexión (para que la GPU del escritorio local tome el control) y tomo la captura.
+
+¡**Resuelto y confirmado!** Al desconectarte del remoto, la GPU local tomó control y la app **pinta perfecto y está al aire**:
+
+- 🟢 **Sonando ahora:** *Galy Galiano - Fue Su Primera Vez* (02:49.6, VU con señal) → **auto-reproducción OK**.
+- **Siguiente:** *Jingle - Escuchas La 106.9 FM*.
+- Playlist 1 poblada, explorador, reloj 21:45, 21°C / 84%, "AIRE: En aire", "SESION: Restaurada".
+
+**Conclusión de la línea base:** mis cambios de esta sesión (arranque auto-reparable, eventos, carpetas async, locales, "Experimental") **no rompieron nada** — la app arranca, pinta y suena. El recuadro negro de antes era **100% la sesión de escritorio remoto** (GPU), no el código.
+
+> 💡 Nota útil: esto confirma que el **escritorio remoto / GPU** produce justo la "ventana en blanco". Es muy plausible que algunos de los reportes de "no carga al arrancar con el sistema" sean por GPU/drivers en esas máquinas — mi arreglo de reintento+watchdog ayuda, pero vale tenerlo presente.
+
+Tengo una **base visual sana** para comparar. Ahora arranco la **Fase 0** del generador:
+
+**Fase 0 — Paso A (seguro y testeable):** extraer la lógica pura del generador (`buildRotationPlan` y compañía) de `render.js` a un módulo nuevo `backend/services/playlist_generator_core.js`, sin cambiar comportamiento. `render.js` lo seguirá usando igual. Checkpoint: la app abre, suena y el generador (botón 🧩) funciona idéntico.
+
+¿Te parece que proceda con el Paso A y lo pruebe cerrando/reabriendo, o prefieres que primero te muestre el esqueleto del core extraído para revisarlo antes de conectarlo?
+
+
+
+
+Perfecto — entonces fue el remoto o la Lupa; la app está sana. Procedo con la **Fase 0, Paso A**: extraer la lógica pura del generador a `backend/services/playlist_generator_core.js` (reutilizable por el futuro worker), dejando que `render.js` la siga usando igual — sin cambiar comportamiento, y de paso adelgazando render.js.
+
+Para extraer con dependencias correctas, leo el bloque de funciones que aún no vi completo.
+
+Tengo el mapa completo de dependencias. Antes de extraer, debo confirmar que ninguna de las funciones "puras" se usa FUERA del bloque del generador (si se reusan en otro lado, no puedo quitarlas sin más). Verifico usos externos de las que tienen nombres genéricos.
+
+Confirmado: **ninguna** de estas funciones se usa fuera del bloque del generador, así que la extracción es segura. Tengo el mapa exacto de dependencias. Tengo respaldo en GitHub como red de seguridad.
+
+Creo el módulo core nuevo (paso no destructivo: mientras no reconecte render.js, todo sigue igual). Usa *getters* inyectados para los datos dinámicos (manualCuesDB, fileTypesData, genreProfiles) y helpers.
+
+El módulo core está creado (paso no destructivo). Verifico sintaxis y corrijo el rango unicode de `normalizeRotationText` para que sea exactamente el escape original `\u0300-\u036f` (evito caracteres combinantes literales).
+
+Déjame inspeccionar los bytes reales de ese regex para confirmar que el rango sea correcto.
+
+El rango es correcto (U+0300 a U+036F, idéntico al original). Pero por robustez ante futuros editores/encodings, lo convierto a la forma con escapes explícitos `\u0300-\u036f`:
+
+El rango funciona (es exactamente U+0300–U+036F). Verifico en runtime que el core normaliza bien (quita tildes) y que `buildRotationPlan` opera con datos inyectados de prueba:
+
+Core extraído **funciona** (normaliza tildes y genera plan con datos inyectados). Ahora conecto render.js al core y elimino las funciones duplicadas. Primero agrego el `require` y un *getter* perezoso (evita problemas de orden/TDZ con `ICON_CLOCK_LABEL`).
+
+Ahora elimino los dos bloques de funciones duplicadas de render.js mediante un script por anclas (robusto ante saltos de línea), con verificación.
+
+14.5k caracteres menos, sintaxis OK. Ahora verifico qué referencias quedaron a las funciones eliminadas, para reconectarlas al core y detectar cualquier llamada huérfana.
+
+Limpio: solo quedan las **4 llamadas de frontera** en funciones de UI conservadas (8 referencias), sin huérfanas. Las reconecto al core:
+
+El script de borrado modificó el archivo fuera del Edit, invalidando su caché. Hago las 4 reconexiones por script (más fiable), con conteo y verificación.
+
+Las 8 reconexiones aplicadas, sintaxis OK. Verifico el estado final: todas las referencias deben estar prefijadas con `getPlaylistGenCore().` y no debe quedar ninguna huérfana.
+
+✅ **Extracción limpia y completa.** Las 8 referencias quedaron correctamente en `getPlaylistGenCore().X`, sin huérfanas. render.js bajó ~14.5k chars; 19 funciones puras viven ahora en el core (probado en aislamiento). Sintaxis OK.
+
+Ahora la prueba real: cierro la instancia en ejecución (solo la de este proyecto, sin tocar otras apps Electron como Claude) y reabro para cargar el código nuevo.
+
+
+
+
+
+Procesos cerrados (incluido el motor Rust `lf-audio-engine`). Relanzo con el código nuevo.
+
+Arranque limpio a las 00:45:36 con el código nuevo (Rust audio listo, sin errores). El nuevo `require` del core no rompió la carga. Capturo para confirmar UI + reproducción.
+
+✅ **Reabrió sano con el código nuevo:** sonando *Ramon Orlando - No Voy a Volver a Llorar* (00:04.2, VU activo), siguiente [Aleatorio] SALSA, playlist poblada. La extracción **no rompió arranque ni reproducción**.
+
+Ahora pruebo el **generador** (botón 🧩) para validar el core reconectado de extremo a extremo. Ubico el botón en la barra superior.
+
+La barra: 📄 nuevo, 📁 abrir, 💾 guardar, 🧩 (verde = Generador), ▦ rejilla. Hago clic en el 🧩 para abrir el generador.
+
+El generador abrió y renderizó perfecto: el **patrón guardado**, las **categorías** (Musica, Comercial, Locuciones, Station ID, Pisadores, géneros: Salsa, Bachata…) — todas vienen de `getPlaylistGenCore().getRotationCategoryDefs()` → **el core reconectado funciona**. El resumen también (`getDefaultRotationPattern`).
+
+Falta validar la ruta pesada: clic en **Preflight** para que ejecute `buildRotationPlan` del core.
+
+El zoom usó la captura previa. Tomo una nueva para ver el resultado del Preflight.
+
+El botón Preflight está en hover pero el resumen no cambió — el clic quizá no disparó el cálculo. Lo pulso de nuevo, espero y capturo el resultado en una sola secuencia.
+
+El resumen no cambia porque el botón **Preflight** (`btn-preview-rotation`) **no está cableado** a `runRotationPreflight` en `initRotationModal` — es un **bug preexistente**, no de mi extracción (la palette de categorías y el resumen YA se renderizaron desde el core, prueba de que está conectado).
+
+Para validar end-to-end el core en la app, uso la ruta real **"Generar en playlist"** (sí cableada → `core.buildRotationPlan`), insertando en **Playlist 4** (vacía, no al aire) para no afectar el aire.
+
+**¡Validado!** Apareció el selector "¿En cuál playlist deseas cargar?" — eso significa que `core.buildRotationPlan(readRotationPrefsFromUi())` **se ejecutó con éxito en la app real** y devolvió un plan válido (si hubiera fallado, mostraría una alerta de error, no el selector). Elijo **Playlist 4** (vacía, no al aire) para confirmar la inserción.
+
+🎉 **Validación end-to-end EXITOSA.** El generador, con el core extraído, funcionó idéntico en la app real:
+- Cambió la vista a **Playlist 4** y la **pobló** con la rotación generada según el patrón (Locución/Salsa/Salsa/Station ID/Salsa…): *JINGLER de salsa, Paquito Guzmán - 25 Rosas, IDENTIFICACION 106.09, Marc Anthony, Tips de salsa, Alexis y Fido…*
+- **Duración Lista Activa: 06:17:35** (objetivo 360 min cumplido).
+- El **aire siguió intacto** en Playlist 1 (*Ramon Orlando*, VU activo).
+
+Esto prueba que `core.buildRotationPlan(readRotationPrefsFromUi())` + la inserción funcionan exactamente como antes.
+
+## ✅ Fase 0 · Paso A — COMPLETADO y verificado
+- Lógica pura (19 funciones) → `backend/services/playlist_generator_core.js` (probado aislado y en vivo).
+- `render.js` adelgazado ~14.5k caracteres; reconectado vía `getPlaylistGenCore()`.
+- App arranca, suena, genera. **Sin regresión.** Respaldo en GitHub como red.
+
+## Hallazgo (bug preexistente, no de mi cambio)
+El botón **"Preflight"** (`btn-preview-rotation`) **no está cableado** a `runRotationPreflight` en `initRotationModal` — por eso no calcula. Es trivial de arreglar (un `addEventListener`). Como esa UI se va a reconstruir en la ventana nueva, lo puedo arreglar ahora o dejarlo para la migración.
+
+## Notas
+- **Playlist 4 quedó con ~6h de pistas de prueba.** El aire está en Playlist 1, así que no suena, pero si quieres la dejo limpia (dime y la vacío).
+- La app sigue abierta.
+
+**¿Cómo seguimos?** Opciones: (a) continuar la **Fase 0** sacando la UI del generador a la **ventana independiente** + IPC (el siguiente gran paso); (b) primero arreglar el botón Preflight; (c) limpiar Playlist 4 y revisar algo. Tú decides.
+
+
+
+¡**Validación end-to-end exitosa!** El generador pobló Playlist 4 con un plan real → confirma que `core.buildRotationPlan` funciona en la app. **Fase 0 (extracción) completa y verificada.**
+
+Y tienes toda la razón sobre la **lógica de generación** — esos son **bugs reales** (preexistentes, no de mi extracción):
+- **No respeta el patrón** (Hora / 2 temas / ID / 2 temas…). Causa principal: con la **biblioteca mal curada**, las categorías de género quedan mal/vacías y "Salsa" arrastra cualquier cosa (Aventura/Bachata). Justo lo que resuelve el **sourcing por carpetas** (Fase 2).
+- **Repite el mismo tema/título seguido** y **apila dos IDs juntos**: el selector degrada a un *fallback* que permite repetir, sin guardas de "no consecutivo".
+
+Tu instinto es correcto: aprovechar el traslado para reconstruir el selector. Voy a:
+1. **Arreglar Preflight** (cableado faltante) y verificar.
+2. **Endurecer el selector en el core** ahora (guardas contra repetición consecutiva y IDs apilados) — el rediseño completo con carpetas llega en Fase 2.
+
+Empiezo localizando el cableado del modal y la lógica del selector.
+
+Confirmado: el botón **Preflight** (`btn-preview-rotation`) no tiene handler. Lo cableo a `runRotationPreflight`:
+
+Preflight cableado. Ahora endurezco el selector en el core. Releo `pickRotationTrack` y `buildRotationPlan` para editarlos con precisión.
+
+Pero antes, un hallazgo importante mientras analizo tu captura: el primer paso del patrón **"Locución horaria" no se está aplicando** porque ese texto **no coincide** con ninguna categoría (la categoría se llama "Locuciones"), así que ese paso se **descarta** del patrón. Eso, sumado a la biblioteca mal curada (un género arrastra otros), es lo que la **reconstrucción con carpetas (Fase 2)** resuelve de raíz. Ahora aplico las guardas duras (no repetir tema/título seguido, no apilar IDs), que es la mejora inmediata y de bajo riesgo.
+
+Reescribo `pickRotationTrack` con guardas duras (no repetir archivo/título seguidos, no apilar IDs; se relaja solo si la categoría no tiene alternativa) y hago que `buildRotationPlan` le pase el track anterior:
+
+Ahora hago que `buildRotationPlan` rastree y pase el track anterior:
+
+Verifico sintaxis de ambos y pruebo en runtime que las guardas eviten repetición consecutiva de título y IDs apilados, con un escenario adverso (pocas pistas).
+
+**Guardas validadas:** en un escenario adverso (3 temas, 2 IDs), **0 títulos repetidos consecutivos** y **0 IDs apilados** (antes era el bug). Y la salida alterna bien (tema, otro tema, ID, tema distinto…). Sintaxis OK en core y render.
+
+Ahora verifico en la app real (Preflight + generación mejorada). Reinicio con el código nuevo.
+
+Arranque limpio (01:00:54). Abro el generador y pruebo Preflight.
+
+La ventana de la app no está al frente (el shell del escritorio quedó en foco tras el reinicio). La traigo al frente.
+
+Déjame ver el estado actual con una captura (no requiere foco).
+
+`open_application "Electron"` abrió una **segunda ventana** (la de bienvenida por defecto de Electron, sin app) que quedó encima. La cierro; detrás está mi app (se ve "LF Automatizador", "Andy Montañez" sonando, y el tooltip del 🧩).
+
+El foco quedó en el escritorio y hay una ventana extra de Electron. Para no matar el proceso equivocado (la app y la bienvenida comparten exe), identifico por línea de comandos cuál es la ventana de bienvenida (sin la app) y la cierro.
+
+Identificado: la ventana de bienvenida es un grupo aparte (user-data-dir `\Roaming\Electron`, `default_app.asar`, main PID 4964). La app real usa `\Roaming\LF Automatizador` (main PID 20064). Cierro solo el grupo de bienvenida.
+
+Ventana de bienvenida cerrada (0 restantes); la app real sigue viva. Veo el estado actual.
+
+App al frente y sana (Andy Montañez sonando). Abro el generador y pruebo Preflight.
+
+La ventana está visible pero no es la **activa** (el SO considera el escritorio al frente). La activo por su título con WScript.Shell, sin clic.
+
+`AppActivate` no bastó para el gate de control de pantalla. Uso la vía recomendada: permiso de "File Explorer" para activar la app desde la barra de tareas.
+
+El sistema está en español; el nombre es "Explorador de archivos".
+
+Concedido. Veo la barra de tareas para ubicar el ícono de la app y activarla.
+
+App visible; su ícono está activo en la barra (x≈355). Tengo permiso de Explorador ahora. Hago: activar desde barra → abrir 🧩 → Preflight → captura.
+
+✅ **Preflight funciona** — el resumen ahora calcula: **"Generaria: 112 pista(s) / 360:02"**. Esto confirma de paso que el **core con el selector endurecido corre en la app real** sin error. Cierro el modal para dejar la app limpia.
+
+Modal cerrado, app sigue sonando. **Checkpoint de Fase 0 completado y verificado en vivo.**
+
+## Resumen de lo logrado en esta sesión de trabajo
+
+**✅ Fase 0 — Aislamiento del Generador (extracción del core):**
+- 19 funciones puras movidas de `render.js` → **`backend/services/playlist_generator_core.js`** (factory con *getters* inyectados; reutilizable por el futuro worker).
+- `render.js` **adelgazó ~14.500 caracteres**; todas las llamadas reconectadas vía `getPlaylistGenCore()`.
+- **Verificado en la app real:** arranca y suena igual, el generador abre, las categorías se pintan desde el core, y **generó una playlist completa en Playlist 4** (lo confirmaste con tus capturas).
+
+**✅ Bug del botón Preflight** (preexistente: `btn-preview-rotation` sin handler) → cableado a `runRotationPreflight`. **Verificado en vivo:** ahora calcula → *"Generaria: 112 pista(s) / 360:02"*.
+
+**✅ Endurecimiento del selector** (guardas duras): nunca repite el mismo archivo/título seguidos, nunca apila dos identificaciones. Validado en aislamiento (**0 títulos consecutivos, 0 IDs apilados**) y corre en vivo.
+
+**🔎 Diagnóstico clave para la reconstrucción (Fase 2):** el patrón "Locución horaria" **no se aplicaba** porque ese texto no coincide con la categoría (se llama "Locuciones") → el paso se descartaba. Sumado a la biblioteca mal curada (un género arrastra otros), por eso no se respetaba el patrón. Esto se resuelve de raíz con el **sourcing por carpetas** (cada paso = género O carpeta), justo como acordamos.
+
+---
+
+**Estado:** dejé la app **abierta y sonando** (como la mantienes para pruebas). El trabajo nuevo está en el árbol (sin commitear; el plan local sigue en `PLAN_GENERADOR_PLAYLIST.md`, fuera de GitHub).
+
+**Siguiente fase disponible — Fase 1:** mover el trabajo pesado (escaneo + construcción) a un **worker de Node**, para que ni la ventana ni el renderer bloqueen. El core ya está aislado y listo para esto.
+
+¿Avanzo con la **Fase 1 (worker)**, o prefieres que primero ataque la **Fase 2 (sourcing por carpetas + ventana independiente)** que es la que arregla de raíz la calidad de la generación? Tú decides el orden.
+
+
+
+
+
+Entendido — de ahora en más **solo verifico arrancando/cerrando** (vía logs, sin manipular la UI ni capturas, para no gastar tus tokens). Avanzo con lo que pueda.
+
+Voy con un arreglo concreto, valioso y barato de verificar: que el patrón reconozca la **locución horaria** (hoy "Locución horaria" no coincide con la categoría "Locuciones" y el paso se descarta). Lo hago en el core y lo pruebo con un test de Node (sin GUI).
+
+Inyección OK, sintaxis OK. Test de Node: que "Locución horaria" ahora resuelva y emita la fila de hora.
+
+**Patrón respetado:** "Locución horaria / Salsa / Salsa" ahora produce `HORA mus mus HORA mus mus…` (3 filas de hora emitidas). 
+
+Verifico que la app arranca limpia con este cambio (solo logs, sin GUI). Cierro y relanzo.
+
+App arranca limpia con el cambio (01:11:17, sin errores). ✅ Verificación barata (solo log) funcionando.
+
+Avanzo con la pieza **headline**: que el generador pueda tomar archivos **directamente de una carpeta** (con subcarpetas), no solo géneros. Lo implemento en el **motor** (core), unit-testeable sin GUI; la UI del explorador para elegirlas llega con la ventana independiente. Leo las dos funciones a modificar.
+
+Implemento el sourcing por carpetas en el motor. Agrego el scanner inyectable y el reconocimiento de tokens `@folder:<ruta>` (recursivo) / `@folderflat:<ruta>` (solo raíz) en el patrón.
+
+Ahora el armado del pozo de candidatos por carpeta dentro de `buildRotationPlan`:
+
+Conecto el escáner en render.js (usando el `random_folder_source` async existente):
+
+Verifico sintaxis y pruebo el sourcing por carpeta con un escáner simulado (token `@folder:`), sin GUI:
+
+**Folder sourcing OK** — y lo más importante: funcionó con **biblioteca vacía** (`manualCuesDB={}`), demostrando que con carpetas el generador **ya no depende de curar la biblioteca**. Recursivo toma raíz+subcarpetas; `@folderflat` solo la raíz; 0 repeticiones consecutivas.
+
+Verifico arranque limpio (solo log):
+
+Arranque limpio (01:15:10, sin errores). El motor con carpetas carga bien. *(El "failed 255" es el `npm start` anterior que se cerró al relanzar — normal.)*
+
+## Resumen del avance (todo verificado de forma barata: tests de Node + arranque por logs)
+
+**Motor del Generador — progreso real:**
+1. ✅ **Fase 0** — lógica extraída a `backend/services/playlist_generator_core.js` (render.js −14.5k chars). Verificado en vivo.
+2. ✅ **Botón Preflight** cableado (estaba muerto). Verificado en vivo → "Generaria: 112 pistas".
+3. ✅ **Selector endurecido** — nunca repite tema/título seguidos ni apila IDs.
+4. ✅ **Locución horaria** en el patrón ahora se respeta (antes el paso se descartaba).
+5. ✅ **Sourcing por carpetas (headline)** — tokens `@folder:<ruta>` (incluye subcarpetas) y `@folderflat:<ruta>` (solo raíz). **Funciona con biblioteca vacía** → ya no depende de curar géneros.
+
+**Estado de uso ahora mismo:** el motor de carpetas ya funciona escribiendo `@folder:C:\ruta` en el cuadro "Patrón del reloj". La parte que falta es la **UI cómoda** (explorador a la izquierda para elegir carpetas + la pregunta "¿incluir subcarpetas?"), que va con la **ventana independiente** (la pieza grande que conviene hacer fresca, ya que necesitará verificación visual).
+
+App corriendo. Trabajo en el árbol sin commitear (tú manejas commits; el plan sigue local).
+
+**Próximo paso natural:** la **ventana independiente** del generador (explorador + reglas + preview + destino playlist/`.lfplay`). Es la fase grande y la única que sí pediría algo de verificación visual. ¿La encaro cuando tengas tokens, o prefieres que mientras tanto siga afinando el motor (p. ej. leer carpetas raíz de `file_type_options.json` para Comerciales/IDs/Pisadores sin escribir rutas a mano)?
+
+
+
+
+
+Diagnóstico claro con tus dos imágenes — y **no es curación**:
+
+**Por qué solo toma 2 salsas y las repite:** el generador por género lee `manualCuesDB`, que es la **caché parcial del renderer** (solo las pistas ya cargadas en sesión/playlists), **no la biblioteca completa**. Por eso solo ve "Marc Anthony" y "Paquito" (que están en Playlist 1), aunque tu biblioteca tenga 1913 pistas de salsa. 
+
+**Tu intuición es correcta:** con **carpetas se soluciona** — `@folder:D:\Music\SALSA` escanea la carpeta real y trae **todas** las salsas, sin pasar por esa caché. (El arreglo del modo género requiere leer la BD completa, que es justo lo que hará el worker más adelante.)
+
+Avanzo con la **ventana independiente** (y la haré **cross-platform Windows/Linux**: rutas con `path`, nada específico de un SO). Primero reviso el patrón de ventanas separadas y los IPC que ya existen, para reutilizar y no inflar.
+
+`fileTypesData` viene de un config (`loadFileTypes`/`loadConfig`), `genreProfiles` por IPC `lib-get-genre-profiles`, y las ventanas separadas usan el patrón `new BrowserWindow + loadFile` abierto por IPC `open-X`. 
+
+Para que la ventana del generador **además arregle el bug de los 2 temas**, conviene que lea la **biblioteca completa** (no `manualCuesDB`). Busco el IPC que usa la ventana de Biblioteca para cargar todas las pistas.
+
+`lib-get-db-tracks` toma rutas específicas (la biblioteca completa es trabajo del worker — fase posterior). Para no quemar tus tokens en una integración grande, haré la ventana con el **modelo relay**: la ventana es UI delgada y la ventana principal (que ya tiene el core + datos + carpetas + inserción) hace el trabajo vía IPC. Reúso todo, agrego mínimo, y lo construyo **aditivo** (el modal sigue funcionando hasta que la ventana esté verificada).
+
+Leo el patrón exacto de creación de ventana separada para reflejarlo.
+
+Tengo el patrón. Construyo la ventana (modelo relay, aditivo). **main.js** — creación de ventana + IPC para abrirla + relay con la principal:
+
+**render.js** — agrego el manejador del relay y la función de generar+insertar (reutiliza el core y la inserción existente):
+
+Ahora las dos piezas de la ventana. **HTML** — explorador/carpetas a la izquierda, reglas a la derecha, con botón para añadir carpeta al patrón (hace usable el sourcing por carpetas desde la UI):
+
+**JS** de la ventana — controlador delgado que habla con la principal por el relay, con selector de carpetas usable:
+
+Cambio el botón 🧩 (y el menú) para abrir la **ventana nueva** en vez del modal (el modal queda como fallback, no lo borro aún):
+
+Sintaxis OK en todo. Verifico syntaxis del JS de la ventana y relanzo para confirmar arranque limpio; luego una sola captura para confirmar que la ventana nueva abre y pinta.
+
+App arranca limpia (01:28:49, sin errores) con todo el código de la ventana nueva. Para confirmar que la ventana **abre y pinta**, una captura para ubicar y activar.
+
+La pantalla volvió a salir **oscura/en blanco** — pero es el **mismo síntoma del escritorio remoto / Lupa (GPU)** que ya comprobamos antes (no es mi código): la app está **viva y sana** (6 procesos, log limpio a las 01:28:49, sin errores). No tiene sentido gastar tokens forzando capturas mientras el render está afectado por el entorno.
+
+## Estado — Ventana independiente construida ✅ (verificada por arranque)
+
+**Lo hecho este turno (todo con `node --check` + arranque limpio):**
+- **main.js** — nueva ventana `Generador de Playlist` + IPC `open-playlist-generator` + **relay** (`pg-to-main`/`pg-reply`) con la ventana principal.
+- **render.js** — manejador del relay (categorías, preview, generar, prefs, pestaña al aire) + `generatePlanIntoPlaylist()` (construye con el core e inserta en la playlist elegida). El botón 🧩 y el menú ahora **abren la ventana** (el modal sigue ahí como respaldo, no lo borré).
+- **frontend/playlist_generator.html + .js** — ventana nueva: explorador/carpetas a la izquierda, reglas a la derecha. Incluye **"📁 Añadir carpeta…"** → elige carpeta + pregunta *¿incluir subcarpetas?* → la inserta como `@folder:` / `@folderflat:` en el patrón. **Esto hace usable el sourcing por carpetas desde la UI** (la solución de raíz al bug de "2 temas").
+- **Cross-platform:** rutas con `path.join`, `loadFile` absoluto, sin nada específico de un SO.
+
+**Arquitectura:** la ventana es UI delgada; la principal (que tiene core + datos + carpetas + inserción) hace el trabajo por el relay. Single source of truth, lista para el worker después.
+
+**Para que confirmes tú (1 clic, sin gastar tus tokens en mí):** cuando tu pantalla renderice normal (sin Lupa/remoto), pulsa **🧩** — debe abrir la ventana nueva. Prueba **"Añadir carpeta"** con tu carpeta `D:\Music\SALSA` → genera y verás **todas** las salsas, no 2.
+
+**Pendiente (menor):** claves i18n `playlist_generator.*` para en/pt (ahora funciona en español por los textos por defecto del HTML); y pulido de preview/guardar `.lfplay`.
+
+¿Sigo con las claves i18n y el guardar `.lfplay`, o prefieres probar primero la ventana y me dices?
+
+
+
+
+
+
+¡Abre y pinta bien! 🎉 (y veo el bug del diálogo mostrando la clave `playlist_generator.ask_subfolders` cruda).
+
+Tu dirección es clara y tiene sentido: en vez del botón + texto, querés el **explorador embebido** + **arrastrar carpetas** + lista de pasos **interactiva (reordenable ↑↓)** porque el texto plano se ve raro. 
+
+Voy por partes (token-eficiente, verifico por arranque ya que el control de pantalla se desconectó):
+1. **Arreglo el i18n** (el diálogo mostraba la clave cruda).
+2. **Convierto el patrón de texto → lista de pasos interactiva con ↑ ↓ ✕** (esto resuelve "se ve raro" y "subir/bajar").
+3. El **explorador embebido con arrastrar** es la pieza grande siguiente.
+
+Primero el i18n + CSS de la lista de pasos:
+
+Ahora reemplazo el textarea por el contenedor de pasos en el cuerpo:
+
+Ahora reescribo el JS de la ventana: helper `T()` (arregla el bug del diálogo), modelo de **lista de pasos** con ↑ ↓ ✕, y serialización al patrón que el core espera:
+
+
+
+
+
+Verifico sintaxis y relanzo para confirmar arranque limpio (sin GUI, solo log).
+
+Arranque limpio (06:32:01, sin errores). Sintaxis OK en todo.
+
+## Hecho este turno
+1. ✅ **Bug i18n del diálogo** corregido — `i18n.t()` devolvía la clave cruda (truthy) y saltaba el fallback. Nuevo helper `T(clave, fallback)` que detecta ese caso. Ya no verás `playlist_generator.ask_subfolders`, sino "¿Incluir subcarpetas?".
+2. ✅ **Patrón de texto → lista de pasos interactiva.** Cada paso es una fila con **↑ ↓** (reordenar) y **✕** (quitar), con número de orden. Clic en una categoría o "Añadir carpeta" agrega un paso. Las carpetas se ven como `📁 NOMBRE` (con borde azul), ya no como texto plano raro. Internamente se serializa al patrón que el core entiende.
+
+## Lo que falta de tu visión (la pieza grande)
+El **explorador de archivos embebido** (el mismo de la interfaz principal) dentro de la ventana, para **arrastrar carpetas** directamente a la lista de pasos — en vez del botón "Añadir carpeta". Eso reemplaza el panel izquierdo actual.
+
+Eso es un trabajo grande: hay que **reutilizar/extraer** el árbol del explorador de `render.js` (`loadDrives`/`renderTree`, expansión perezosa por IPC) a un módulo compartido para montarlo también aquí, más el drag&drop hacia los pasos. Vale la pena hacerlo bien (y cross-platform), pero consume bastante.
+
+Dado que andas justo de tokens: ¿**arranco con el explorador embebido + arrastrar** ahora, o prefieres **probar primero** la lista de pasos interactiva (clic en categorías, ↑↓✕, "Añadir carpeta", Generar) y seguimos después? Tú decides.
+
+
+
+
+
+
+|¡Se ve genial la lista de pasos! Las carpetas (Music, ELECTRO__GUARACHA_, MERENGUES) ya entran como pasos con ↑↓✕. Tienes razón: falta el **explorador embebido** (el árbol Escritorio/Música/Discos) para arrastrar carpetas en vez del botón.
+
+Voy a montar un explorador **arrastrable** en el panel izquierdo, reutilizando los **mismos IPC** que usa el explorador principal (drives + lectura de carpetas). Primero leo cómo arma el árbol y qué IPC usa.
+
+Tengo los IPC clave: `get-system-drives` y `get-default-paths` para raíces; el árbol usa `fs` directo. Leo la expansión de carpetas y el arrastre para replicarlo igual en la ventana del generador.
+
+Tengo todo el patrón del explorador (`get-system-drives`, `get-default-paths`, expansión con `fs.readdirSync`, carpetas `draggable`). Monto un explorador arrastrable propio en la ventana y hago que la lista de pasos sea zona de **drop**. Primero el HTML (panel izquierdo + estilos del árbol):
+
+Ahora el JS: requires de `fs/path/os`, el explorador arrastrable, y la zona de drop en los pasos.
+
+Conecto el drop en los pasos y cargo el explorador al iniciar:
+
+Verifico sintaxis y relanzo (solo log):
+
+`get-system-drives`/`get-default-paths` no están en main.js directamente — deben registrarse en un módulo `backend/ipc/*`. Como los `ipcMain.handle` son globales, la ventana del generador podrá invocarlos igual. Confirmo que existen.
+
+Confirmado: registrados en `backend/ipc/library.js` (globales vía `ipcMain`), así que la ventana del generador los usa igual. Relanzo y verifico arranque.
+
+Arranque limpio (07:11:36, sin errores). Sintaxis OK.
+
+## ✅ Explorador embebido + arrastrar (hecho)
+
+El panel izquierdo de la ventana del generador ahora tiene un **explorador de carpetas** real, no el botón:
+
+- **Mismo árbol que la interfaz principal**: Escritorio / Descargas / Música / Discos locales (usa los mismos IPC `get-system-drives` y `get-default-paths`, y es **cross-platform** — Windows muestra discos `C:`/`D:`, Linux muestra Inicio y `/media`).
+- **Expandir/colapsar** con el `+`/`-` o doble clic (lee subcarpetas en vivo).
+- **Arrastrar una carpeta** del árbol y soltarla en la lista de **Pasos** (derecha) → se agrega como paso `📁`. La casilla **"Incluir subcarpetas"** (arriba del árbol) decide si toma raíz+subcarpetas o solo la raíz.
+- Dejé el botón **"Añadir carpeta manualmente…"** como respaldo.
+
+Flujo completo ahora: arrastras `D:\Music\SALSA` → aparece como paso → reordenas con ↑↓ → Generar. Trae **todas** las salsas (sin depender de la caché de biblioteca).
+
+**Para que pruebes (1 clic):** abre 🧩, arrastra una carpeta del árbol a los pasos. Si el drag&drop no se siente bien o algo del árbol falla, dime y lo afino.
+
+¿Sigo con el **guardar `.lfplay`** y las **claves i18n en/pt** de la ventana, o prefieres probar el explorador primero?
+
+
+
+
+
+
+Entendido y anotado:
+- **Guardar `.lfplay` desde el generador: descartado** — igual hay que cargar en la playlist principal para ver, y desde ahí ya se puede guardar. Bien, menos código.
+- **Nuevo foco:** sistema interconectado **Explorador principal ↔ Gestor de Tipos de Archivo** para accesos directos de **Identificaciones, Comerciales, Pisadores**: cada tipo acepta una **carpeta raíz** que aparece como acceso directo en el explorador; doble clic sin configurar → pide la raíz; sincronización en ambos sentidos.
+
+Antes de diseñar, investigo el modelo de tipos de archivo y el gestor. Leo cómo se guardan los tipos y dónde encajaría la "carpeta raíz".
+
+El modelo de tipos: cada tipo es `{ id, name, color, identifier, ... }` en `file_types.json`. Los tipos a los que daremos acceso directo: **t_comercial, t_station_id, t_pisador** (Locuciones se queda visual). Puedo guardar la **carpeta raíz** en el propio objeto del tipo (persiste por `normalizeFileTypes`).
+
+Reviso cómo render.js carga/guarda los tipos y el handler de sincronización ya existente.
+
+Tengo todo: `fileTypesPath`, `loadFileTypes`, el handler de sync (7075), `saveConfig`/`askIncludeSubfolders` disponibles. Implemento el **Incremento 1**: accesos directos de los 3 tipos en el explorador principal, con doble-clic-para-configurar y sincronización. Inserto las funciones y ajusto `loadDrives`:
+
+Ahora añado el refresco del explorador cuando el Gestor cambia los datos (sincronización). Localizo el handler.
+
+Verifico sintaxis y relanzo (solo log):
+
+Arranque limpio (07:18:52, sin errores). Sintaxis OK.
+
+## ✅ Accesos directos por tipo en el explorador principal (Incremento 1)
+
+Arriba del árbol del explorador de la interfaz principal ahora aparecen 3 accesos directos: **Station ID (Identificaciones), Comerciales, Pisadores** (Locuciones queda fuera, como pediste).
+
+- **Sin configurar:** se ven atenuados como *"Comerciales (configurar)"*. **Doble clic** → elige la carpeta raíz + pregunta **¿incluir subcarpetas?** (el mismo diálogo que ya usamos) → se guarda en el tipo (`file_types.json`, campo `shortcutRoot`).
+- **Configurado:** aparece con el color del tipo y su carpeta, **navegable** (expandir con `+`) y **arrastrable** (a la playlist o al generador).
+- **Clic derecho** sobre uno configurado → cambiar carpeta o quitar el acceso.
+- **Sincronización en ambos sentidos:** al configurar desde el explorador se emite `file-types-data-changed`; y cuando algo cambia los tipos, el explorador se **refresca** automáticamente (escucha `file-types-data-updated`).
+
+**Prueba (1 doble clic):** en el explorador, doble clic en *"Comerciales (configurar)"* → elige tu carpeta → queda como acceso directo navegable.
+
+## Lo que falta de esta parte
+- **Gestor de Tipos de Archivo:** UI para ver/establecer/quitar la carpeta raíz desde ahí (la sincronización ya está; falta el control visual en el gestor — es "la otra dirección").
+- **Varias carpetas por tipo** (principal + adicionales) y el modal completo de "Modificar acceso directo" con mostrar/ocultar (ahora hice una versión simple con clic derecho).
+- Mostrar también estos accesos en el explorador del **Generador** (para arrastrarlos a los pasos).
+
+¿Sigo con la **UI del Gestor de Tipos** para configurar las raíces desde ahí, o prefieres probar primero los accesos directos en el explorador?
+
+(La notificación es del relanzamiento en segundo plano; sin acción pendiente. La app quedó verificada y corriendo.)
+
+Quedo a la espera de tu decisión: **¿sigo con la UI del Gestor de Tipos** para configurar las raíces desde ahí, o **pruebas primero** los accesos directos en el explorador?
+
+
+
+
+
+
+Excelentes correcciones, anotadas. Resumen de lo que arreglo:
+1. **No preguntar subcarpetas** para la raíz de un tipo → siempre recursivo (es obvio).
+2. **Bug de congelamiento + duplicación:** lo causaba el refresco doble (yo llamaba `loadDrives()` y además el IPC de sync lo volvía a llamar) y el `confirm()` síncrono. Lo dejo en un solo refresco vía el handler de sync.
+3. **Clic derecho configurado** → el **menú normal de carpeta** (Agregar aleatorio / Agregar todo…), **ocultando solo "Establecer tipo de archivo"** (mi menú de confirmar no tenía sentido).
+4. **Clic derecho sin configurar** → menú con **"Agregar carpeta raíz"**.
+
+Reviso la estructura del menú de carpeta del explorador para ocultar la opción correcta.
+
+Veo el menú. Necesito el contenedor de "Establecer tipo de archivo" para ocultarlo. Leo esa parte del menú.
+
+El item "Establecer tipo de archivo" (línea 464) no tiene id. Le agrego uno para poder ocultarlo:
+
+Ahora corrijo el bloque en render.js. Edits: quitar pregunta de subcarpetas, un solo refresco (anti-duplicación), menú normal de carpeta ocultando "Establecer tipo", y mini-menú "Agregar carpeta raíz" para los no configurados.
+
+Falta que el menú normal de carpeta **vuelva a mostrar** "Establecer tipo" (los accesos lo ocultan). Localizo el handler normal.
+
+Línea 6514 es el menú de carpeta normal. Le agrego que **vuelva a mostrar** "Establecer tipo":
+
+Quité `showTypeShortcutMenu` (ya no se referencia) y la pregunta de subcarpetas. Verifico sintaxis y relanzo:
+
+Arranque limpio (07:29:50, sin errores). Sintaxis OK, sin referencias colgantes.
+
+## ✅ Correcciones aplicadas (tu feedback)
+- **Raíz de tipo = siempre recursiva** — quitada la pregunta de subcarpetas (es obvio).
+- **Bug de congelamiento + duplicación arreglado** — lo causaba el doble refresco (yo llamaba `loadDrives()` y el IPC de sync lo volvía a llamar) y el `confirm()` síncrono. Ahora hay **un solo refresco** vía el handler de sincronización.
+- **Clic derecho en acceso configurado** → ahora el **menú normal de carpeta** (Agregar aleatorio / Agregar todo / etc.), **ocultando solo "Establecer tipo de archivo"** (esos accesos ya SON la raíz de un tipo). En carpetas normales esa opción sigue visible.
+- **Clic derecho en acceso sin configurar** → menú con **"Agregar carpeta raíz"**.
+- Quitado mi menú de "confirmar" que no tenía sentido.
+
+## Pendiente (lo primero que pediste)
+**Gestor de Tipos de Archivo:** UI para **ver/establecer/quitar la carpeta raíz** de cada tipo (Comerciales, Station ID, Pisadores) desde ahí — la sincronización con el explorador ya está lista (escucha `file-types-data-updated`), falta el control visual en el gestor.
+
+¿Sigo ahora con esa **UI del Gestor de Tipos**? (Implica leer y editar `file_types_manager.html/.js` — un chunk más.) O si prefieres **probar primero** las correcciones del explorador, lo dejamos aquí y seguimos cuando digas.
+
+(Notificación del relanzamiento en segundo plano — sin acción pendiente; la app quedó verificada y corriendo.)
+
+Sigo a la espera de tu decisión: ¿**procedo con la UI del Gestor de Tipos** para configurar las raíces desde ahí, o **pruebas primero** las correcciones del explorador?
+
+
+
+
+
+
+Excelente spec, lo tengo claro. Implemento por partes. Empiezo por lo del **explorador** (render.js + modelo):
+1. **Reposicionar** accesos: Escritorio/Descargas/Música → **accesos personalizados** → Discos.
+2. La visibilidad la decide un flag **`showShortcut`** por tipo (cualquier tipo, no lista fija), excluyendo Locuciones.
+
+Ajusto `loadDrives` (orden) y `renderTypeShortcuts` (por `showShortcut`):
+
+Déjame leer el `loadDrives` actual para editarlo con el texto exacto.
+
+Step 2: agrego `showShortcut: true` a los 3 tipos built-in (Comercial, Station ID, Pisadores). Locuciones queda sin él (bloqueado).
+
+Modelo listo. Ahora la **UI del Gestor de Tipos**. Investigo su estructura (sección Propiedades + cómo guarda y sincroniza).
+
+Clave: `saveFileTypes` solo persiste `name/identifier/color/aliases` — debo asegurar que también guarde `shortcutRoot`/`showShortcut`. Leo el guardado, `renderProperties` y la sección de propiedades del HTML.
+
+Entendido el guardado (debo añadir `shortcutRoot/showShortcut` a `saveFileTypes`, y el root/checkbox NO se bloquean por `readonly`). Leo la sección de propiedades del HTML para insertar los controles.
+
+Inserto los controles (carpeta raíz + checkbox "mostrar acceso directo") debajo del Color, dentro de Propiedades:
+
+Ahora el JS del gestor. Primero, que `saveFileTypes` persista los nuevos campos:
+
+`renderProperties` — bindeo la carpeta raíz y el checkbox (editable incluso en tipos por defecto; Locuciones bloqueado):
+
+Faltan los handlers (Seleccionar/Quitar raíz + toggle). Busco dónde el gestor cablea sus listeners.
+
+Agrego los handlers (Seleccionar/Quitar raíz + toggle) y los cableo:
+
+Para evitar el bug de la clave i18n en el título del diálogo (mismo caso que `ask_subfolders`), uso texto plano:
+
+Verifico sintaxis de todo y relanzo:
+
+Arranque limpio (07:43:57). Sintaxis OK en todo. Verifico una pieza de la sincronización: que el **Gestor**, si está abierto, también se entere cuando se cambia una raíz desde el explorador.
+
+El gestor SÍ escucha `file-types-data-updated` (419). Veo qué hace para confirmar que recarga y re-renderiza:
+
+El handler del gestor (419) **recarga y re-renderiza** al recibir `file-types-data-updated`, preservando la selección. Así que la **sincronización en ambos sentidos está completa**: ambas ventanas se actualizan en vivo.
+
+## ✅ Hecho este turno (Gestor de Tipos + explorador)
+
+**Explorador principal:**
+- **Orden corregido:** Escritorio / Descargas / Música → **accesos directos por tipo** → Discos/unidades.
+- La visibilidad la decide el flag **`showShortcut`** de **cualquier** tipo (incluidos los nuevos que crees), no una lista fija. Locuciones queda **excluido** siempre.
+
+**Gestor de Tipos de Archivo** (debajo del Color, en *Propiedades*, aislado de la sección de abajo):
+- **Carpeta raíz:** campo + **Seleccionar…** / **Quitar** (editable incluso en los tipos por defecto Comercial/Station ID/Pisadores).
+- **Acceso directo:** checkbox *"Mostrar en el explorador de la interfaz principal"*.
+- **Locuciones:** controles **bloqueados** + nota ("se configuran en Ajustes; sin acceso directo"), como pediste.
+- Guarda al instante y persiste (`file_types.json`: `shortcutRoot`, `showShortcut`).
+
+**Sincronización en vivo en ambos sentidos** ✓ — configures donde configures (explorador o gestor), la otra ventana se entera y se refresca.
+
+**Notas / pendientes menores:**
+- Locuciones: aún no muestro sus 3 raíces de Ajustes (hora/temp/humedad) — dejé la nota; mostrarlas requiere leer la config de Ajustes (follow-up).
+- "Varias carpetas por tipo" (principal + adicionales) y claves i18n en/pt de las nuevas etiquetas: pendientes (ahora funciona en español por los textos por defecto).
+
+¿Pruebas esto (configura una raíz desde el Gestor y mira el explorador, y viceversa) y me dices, o sigo con algún pendiente?
+
+
+
+
+
+Buen detalle: las **subcarpetas dentro de un acceso directo de tipo** también deben ocultar "Establecer tipo de archivo" (todo lo que cuelga de la raíz de un tipo pertenece a ese tipo). Las carpetas normales no cambian. Voy a propagar un flag `insideType` por el árbol. Localizo las llamadas a `renderTree`.
+
+Ahora hago condicional la opción "Establecer tipo" según `insideType` en el menú de carpeta:
+
+Verifico sintaxis y relanzo:
+
+Arranque limpio (07:52:33, sin errores). *(El "failed 255" es el npm anterior cerrado al relanzar — normal.)*
+
+## ✅ Corregido
+Ahora el flag **`insideType`** se propaga por todo el subárbol de un acceso directo de tipo:
+- **Cualquier subcarpeta** dentro de un acceso directo (Comercial, Pisadores, Station ID…) → su clic derecho **oculta "Establecer tipo de archivo"** (todo lo que cuelga de la raíz ya pertenece a ese tipo).
+- **Archivos de audio** dentro → siguen sin esa opción (correcto).
+- **Carpetas normales** (fuera de los accesos) → menú **igual que siempre**, con "Establecer tipo de archivo".
+
+Quedó tal como pediste. ¿Lo pruebas (expande un acceso directo y clic derecho en una subcarpeta) y seguimos con algún pendiente (Locuciones con sus 3 raíces de Ajustes, varias carpetas por tipo, o i18n en/pt)?
+
+(Notificación del relanzamiento en segundo plano — sin acción pendiente; la app quedó verificada y corriendo.)
+
+A la espera de tu decisión sobre el siguiente pendiente: **Locuciones con sus 3 raíces de Ajustes**, **varias carpetas por tipo** (principal + adicionales), o las **claves i18n en/pt**. Tú diriges.
+
+
+
+
+
+
+Entendido perfectamente — confirmo mi lectura para asegurar:
+
+> **Color editable** para Comercial, Station ID y Pisadores (hoy está bloqueado porque son `readonly`). **Locuciones excluida** (color bloqueado); Música no es un tipo, no aparece. Botón **"Restablecer"** al lado del color → vuelve al **color por defecto** de ese tipo. Al cambiar el color → las filas de ese tipo en la Playlist cambian a ese color de texto (ya hay recoloreo automático).
+
+Procedo. Verifico que `defaultFileTypes` esté importado en el gestor y veo el cableado de inputs.
+
+Todo confirmado (`defaultFileTypes` importado, loop de inputs en 488). Implemento. **HTML** — botón Restablecer junto al color:
+
+**JS** — color editable salvo Locuciones, en `renderProperties` y `commitPropertyEdits`:
+
+Agrego las funciones de aplicar/restablecer color y las cableo:
+
+Verifico sintaxis y relanzo:
+
+Arranque limpio (08:01:13). Color editable funcionando (salvo Locuciones), syntax OK.
+
+Ahora tu **tarea final: verificar compilado + cross-platform**. Audito mis cambios. Un punto crítico que quiero confirmar ya: el sistema **i18n/locales es nuevo** y `locales/` estaba sin trackear — necesito ver si se incluye en la build compilada (si no, en compilado el i18n fallaría). Reviso cómo carga i18n los idiomas y si `locales/` está en los `files` de electron-builder.
+
+**Hallazgo importante para compilado:** en modo empaquetado, i18n lee los idiomas de `process.resourcesPath/locales` (i18n.js:10), pero `locales/` **NO está** ni en `files` ni en `extraResources` de electron-builder. Resultado en compilado: **i18n roto** (solo español por los textos por defecto del HTML; en/pt y los `t()` de JS mostrarían claves). Es preexistente (el sistema i18n es nuevo) pero rompería el compilado. Lo arreglo:
+
+`locales` agregado a extraResources. Valido el JSON y confirmo que el i18n del proceso principal use la misma ruta (para que el fix lo cubra). También confirmo que mis archivos nuevos entren en los `files` de la build.
+
+## Auditoría compilado + cross-platform (tu tarea final)
+
+**Compilado — 1 problema real encontrado y arreglado:**
+- 🔴→✅ **`locales/` no se incluía en la build.** En empaquetado, tanto el renderer (`frontend/i18n.js:10`) como el proceso principal (`backend/i18n_main.js:8`) leen los idiomas de `resources/locales`, pero esa carpeta no estaba en `files` ni en `extraResources`. En compilado el i18n se rompía (quedaba solo español por los textos por defecto del HTML; en/pt y los `t()` de JS mostrarían claves). **Agregué `locales` a `extraResources`** → ahora se copia a `resources/locales` y el i18n funcionará compilado. (`package.json` válido.)
+- ✅ Archivos nuevos sí se empaquetan: `playlist_generator.html/.js` (frontend/**), `playlist_generator_core.js` (backend/**) — cubiertos por los globs existentes.
+- ✅ Rutas `loadFile` absolutas (`path.join(__dirname,…)`) en ventana principal y generador → robustas al autoarranque.
+
+**Cross-platform (Windows/Linux) — sin problemas en mis cambios:**
+- ✅ Explorador embebido y accesos directos: usan `process.platform`, `path.join`, `os.homedir()`, y manejan Linux (Inicio, `/media`).
+- ✅ Tokens de carpeta (`@folder:`) y `split(/[\\/]/)` aceptan ambos separadores.
+- ✅ `get-system-drives`/`get-default-paths` ya son cross-platform (los usa el explorador en ambos SO). Nada con APIs solo-Windows ni rutas con `\` fijas.
+
+**Honestidad — lo que NO puedo verificar desde aquí:**
+- No puedo **compilar** localmente. La prueba real es la **build de GitHub Actions**. Con el fix de `locales`, debería pasar.
+- Mis **claves i18n nuevas** (`playlist_generator.*` y las nuevas de `file_types_manager.*`) aún no están en `locales/` para en/pt → esas etiquetas saldrán en español hasta agregarlas (pendiente menor; ya con el fix, las claves EXISTENTES sí funcionan compiladas).
+
+**Recomendación:** dispara una **build en GitHub** (push a `main` o `workflow_dispatch`) para confirmar de verdad el compilado con el fix de `locales`. ¿Quieres que prepare eso (commit de lo trabajado + push) cuando digas, o seguimos con las claves i18n en/pt primero?
+
+
+
+
+
+Bien, varios cambios. Antes de tocar, confirmo lo que entendí y te pregunto lo ambiguo (como pediste). Pero primero verifico un detalle técnico para los cards de locución: que la inserción de filas de **temperatura/humedad** ya esté soportada (igual que hora).
+
+Confirmado: `createPlaylistRow` ya soporta filas de temperatura/humedad (líneas 6754-6755), y existen los labels. Así que los cards de locución son viables.
+
+Procedo con lo **claro** (cambio visual del generador) y al final te **pregunto lo ambiguo** (manager). Empiezo por el **core**: soporte de pasos de locución (hora/temp/humedad). Inyecto los labels:
+
+Inyecto los labels de temp/humedad en el ctx de render.js:
+
+Core listo. Ahora la UI del generador: oculto el selector de géneros (con nota) y agrego 3 cards de locución. **CSS:**
+
+**JS** del generador: helpers de locución, parseo de tokens, y cableado de los 3 cards:
+
+Verifico sintaxis y pruebo en Node que el core genere filas de locución:
+
+**LOCUTION STEPS OK** — el core genera filas time/temperature/humidity intercaladas. Sintaxis OK en todo. Relanzo:
+
+Arranque limpio (08:20:24, sin errores).
+
+## ✅ Hecho este turno — cambio visual del Generador
+- **Géneros musicales OCULTOS** con **nota en el código**: el bloque `#genre-section` está `display:none` y funcional; para reactivarlo se quita ese estilo. (La lógica de géneros sigue intacta en el core.)
+- **3 cards de locución** (⏰ hora, 🌡️ temperatura, 💧 humedad) en el mismo estilo de tarjeta → clic agrega un **paso de locución**. El core ya genera las filas `time/temperature/humidity` (probado: `time normal temperature normal humidity…`).
+
+Quedan 3 cosas de tu mensaje. Una es clara (la hago), dos tienen una decisión de diseño donde no quiero adivinar (me dijiste que pregunte):
+
+- **Clara (la haré):** que el explorador del **Generador** también muestre los accesos directos de tipo (Comerciales/Station ID/Pisadores), como el de la interfaz principal, para arrastrarlos a los pasos.
+
+Para las dos del **Gestor de Tipos**:
+
+Al establecer una carpeta raíz para un tipo, ¿qué debe pasar con esa carpeta y su contenido? (esto arregla que ahora se pinte como 'sin tipo')
+
+
+
+
+
+Decisiones claras:
+- **Raíz = asignarla como ese tipo** (se registra como carpeta asignada → su contenido toma el tipo, y aparece en la lista de abajo). Esto arregla el bug.
+- **Duplicados: avisar y preguntar** (mover a este tipo o cancelar).
+
+Investigo cómo el Gestor crea/guarda asignaciones para reutilizar esa lógica al fijar la raíz y para el aviso.
+
+Tengo la maquinaria de asignaciones (`explicitTypes[p]=typeId` + `fileTypeAssignments.setOptions`). Implemento:
+
+**1) Raíz = asignación del tipo** (al fijar/quitar raíz se asigna/desasigna la carpeta):
+
+**2) Aviso de duplicado/conflicto** (avisar y preguntar mover). Inserto los helpers:
+
+Verifico sintaxis del gestor y relanzo:
+
+Manager OK, y render.js **tiene** los helpers (`saveExplicitTypes`, `saveFileTypeOptions`, `fileTypeAssignments.setOptions/removeOptions`). Así que también puedo asignar la raíz cuando se configura desde el **explorador** (para que el bug quede arreglado en ambos lados). Lo añado:
+
+Verifico sintaxis y relanzo (prueba manager + explorador):
+
+Arranque limpio (08:25:53, sin errores). *(Los "255" son npm anteriores cerrados al relanzar — normal.)*
+
+## ✅ Hecho este turno
+
+**Generador:**
+- **Géneros ocultos** con nota en el código (`#genre-section` reactivable) + **3 cards de locución** (⏰🌡️💧) que agregan pasos. Core genera las filas (probado).
+
+**Gestor de Tipos (tus 2 respuestas):**
+- **Raíz = asignación del tipo** ✅ — al fijar una raíz, esa carpeta se **asigna** a ese tipo (su contenido toma color/separación del tipo **y aparece en "Carpetas y archivos asignados"**). Al quitarla, se desasigna. *Esto arregla el bug de que se pintaba "sin tipo".*
+- **Aviso de duplicado/conflicto** ✅ — al agregar abajo una carpeta/audio que ya pertenece a otro tipo (directo o dentro de una raíz ya configurada) → alerta diciendo a qué tipo pertenece y **pregunta si moverlo** (Cancelar = no agregar).
+
+**Explorador (interfaz principal):**
+- Cuando fijas/quitas la raíz **desde el explorador** (doble clic), también **asigna/desasigna** la carpeta → mismo comportamiento en ambos lados, y el Gestor se entera (sincronización ya activa).
+
+**Pendiente (lo claro que dije que haría):**
+- Mostrar los **accesos directos de tipo** también en el **explorador del Generador** (para arrastrarlos a los pasos). Lo dejo para el próximo turno.
+
+Todo pasa `node --check` + arranque limpio. **Para que pruebes:** fija una raíz a "Comercial", arrastra una de sus canciones a una playlist → debe pintarse del color de Comercial; y agrega abajo una carpeta que ya esté en otro tipo → debe avisarte. ¿Sigo con los accesos directos en el explorador del Generador?
+
+(Notificación del relanzamiento en segundo plano — sin acción pendiente; la app quedó verificada y corriendo.)
+
+A la espera de tu respuesta: ¿sigo con los **accesos directos de tipo en el explorador del Generador**, o pruebas primero lo de este turno (raíz = tipo, aviso de duplicado, cards de locución)?
+
+
+
+
+Necesito que me ayudes a armar un plan, quiero implementar para LF Automatizador dos nuevas ventanas
+Tomar una funcion que tenemos en los ajustes generales "Tipos de archivos" y trasladarlo a "Herramientas" bajo el nombre "Gestor de tipos de archivos" en el menú superior, donde en esta nueva ventana, a la izuiqerda vamos a tener lalista tipos de achivos "por defecot" y los que el usuario decida crear" este sistema ya está pero necesito que evolucione. como vez en la segunda imagen, ya está en el sistema,
+
+La evolucion es la siguiente, como vez en la primera imagen, tengo un gestor, que quiero incorporar al nuevo sistema de tipos de archivos, la gestion directa de carpetas o archivos especificos de esos tipos de archivos, con la finalidad de, organizar mejor la base de datos y sobre todo el las reglas de separacion musical, y que cundo agreguemos a la playlist la carpeta, archivo que pertenece a un tipo de archivo especifico, la playlist, ya lo ingrese con su color al que pertenece ese tipo de archivo. poder decidir si queremos que ese tipo de archivo respete o ignore las reglas de separacion musical. tener ya preparados estos archivos de manera mas organizada en la programacion, poder darle una configuracion a cada tipo de archivo
+Por defecto tenemos 
+Musica: por defecto se toma a todo aquel archivo o carpeta que no se le haya dado un tipo de archivo especifico, cuando agregamos a playlist un archivo de audio directamente, este se muestra con un texto blanco, cuando agregamos una carpeta aleatoria de musica esta se pinta de "naranja, creo" puede revisar su color en el codigo"
+Locuciones: por defecto se toma a las locuciones automaticas, hora, temperatura, humedad, y algun otro archivo de audio que funcionaria como cortina para esas locuciones, estaas ultimas el usuario se lo indica al sistema.
+Comerciales: el usuario le dice al sistema cuales son las carpetas o archivos que pertenecen a comerciales 
+Station ID: (Identificaciones de la emisora, jingle, swiper, o cualquier archivo de audio que identifique a la emisora, el usuario tiene que indicarle al sistema cual carpeta o archivo pertenece a este tipo de archivo.
+Pisadores: (Nuevo, y esta´ra por defecto en la lista, no se podra borrar" archivos o carpeta que sobreponen por encima de la musica, normalmente no tienen fondo musical, el color para este tipo de archivo lo encuentras (cuando hacemos click derecho encima que cualquier items, en las playlist principal) / Herramientas /  Pisadores automaticos... esta opcion tiene el color de letras que usaremos para este nuevo tipo de archivo. 
+¿Como los usuario le dicen al sistema que archivo o carpeta pertenece a cada tipo de archivo? Actualmente haciendo click derecho encima de una carpeta o archivo de audio en el explorador en la seccion "Establecer tipo de archivo" esta funcion se va a mantener por practicidad y costumbre del usuario, pero en la nueva ventana que vamos a crear trasladando lo que ya tenemos en las configuraciones generales, ahora tendremos un apartado donde a laa izquierda tendremos la lista de tipos de archivo, y la derecha MUCHO MAS GRANDE las opciones similares a la imagen 1, Añadir carpeta, Añadir archivo, al añadir se nos mostrará un modal donde se nos preguntará para las carpeta: ¿Incluir subcarpetas? ¿Ingorar las reglas de separación musica?, "Si, recomendado" No" , para los archivos de audio, solo se nos preguntará: ¿Ingorar las reglas de separación musica?, "Si, recomendado" No", dejando ¿Incluir subcarpetas? en un tono mas oscuro y no cliqueable, y al seleciconar en la lista las carpeta o archivos que hayamos añadidos, tendremos la opcion de Modificar, (abre el nodal de las preguntas para cambiar de desicion) Eliminar (elimina lo seleccionado) pero antes pide confirmacion, "Si" "No"
+Los archivos y carpetas que hayamos agregado a cada tipo de archivos, sus colores siempre se deben recordar para que a la hora de agregarlos a la playlist principal, entren ya con sus colores de texto respectivo. 
+Si decidimos agregar un tipo de archivo desde la interfaz principal, se debe abrir automaticamente la ventana del gestor de tipo de archivo con el modal haciendo directamente las preguntas que te indique anteriorment segun el caso, si es carpeta o archivo. 
+nota, no serán preguntas tipo asistente, no, siempemtne tendremos checkbox para cliquear la decision. con botones de aceptar y cancelar, con los colores que ya usamos para aceptar y cancelar en multiples modales,
+Aceptar crear, guardo o modifica segun el caso, cancelar, no crea, no modifica.
+Nota importante, tambien estoy en estos momento creando traduccion para que el software tenga disponibilidad en multiples idiomas, asi toma nota de lo siguiente:
+ Es crucial que desde el primer momento incorpores el sistema de traducción adaptativa del proyecto. Aquí están las reglas estrictas de arquitectura que debes seguir:
+
+Idioma Base: El idioma principal y estructural del software es el Español. Todo el código duro en el HTML y JavaScript (alert(), console.log) debe escribirse inicialmente en Español.
+Sistema de Locales: Contamos con 4 archivos gigantescos en la ruta /locales/: es.json (Español, actúa como fallback seguro), en.json, pt-BR.json y pt-PT.json.
+Frontend: Si vas a crear interfaces, inyecta data-i18n="ruta.de.la.clave" en todas las etiquetas HTML relevantes. Si usas textos dinámicos en JS, utiliza window.i18n.t('clave').
+Backend/Diálogos: Si creas modales nativos en procesos del sistema (dialog.showMessageBox), importa el traductor con const i18n = require('../i18n_main'); y usa i18n.t('clave').
+Carga Síncrona Segura: Si creas un nuevo script JS para tu ventana que invoque traducciones iniciales, ¡NUNCA uses ipcRenderer.sendSync para pedir las preferencias al main process! Eso congela la aplicación. En su lugar, obtén las preferencias síncronamente leyendo el disco directamente como lo hacemos en settings.js usando nuestra utilidad interna: const { getConfigDir } = require('../backend/utils/app_paths'); y fs.readFileSync.
+Inyección de Diccionarios: Cuando finalicemos el código de la ventana, deberás crear un script de NodeJS (patch_locales.js) que utilice fs.readFileSync y JSON.parse para inyectar todas nuestras nuevas claves de texto en los 4 archivos .json de la carpeta locales al mismo tiempo. ¡NO utilices comandos de consola, scripts bash, sed ni búsquedas regex de terminal para alterar los JSON, ya que se corromperán irremediablemente!"
+
+Si tienes preguntas, es ideal que me preguntes todo lo necesario antes de crear o modificar algo.
+Y como nota final, eitemos que render siga creciendo, para ello puedes crear archivos nueos para estas nuevas funciones, utiliza colores que ya tenemos en el programa para que todo tenga concistencia
+
+
+
+
+
+
+Voy a explorar el código primero para entender bien los sistemas actuales (tipos de archivos, pisadores, separación musical, colores de playlist, menú Herramientas, i18n) antes de armar el plan y hacerte preguntas concretas.
+
+Ahora veo dos sistemas distintos: `genres.js` (géneros musicales) y `explicit_types.json` (tipos de archivo). Déjame rastrear el sistema de "Tipos de Archivo" real.
+
+Ahora entiendo el modelo de colores y tipos. Déjame examinar las reglas de separación musical, el menú Herramientas, la creación de ventanas y el sistema i18n.
+
+`Herramientas` aquí es un submenú del menú contextual. Pero el usuario habla del "menú superior". Déjame ver cómo se crean ventanas en main.js, el menú de la app, el sistema i18n y la ventana "Lista de Pisadores".
+
+Ahora veo el patrón completo de ventanas y el menú superior. Déjame revisar el sistema i18n (archivos nuevos) y cómo se aplican las reglas de separación en la selección aleatoria.
+
+He mapeado los sistemas clave. Déjame confirmar la ventana "Lista de Pisadores" (imagen 2) para referenciar su estilo de barra de herramientas.
+
+Confirmado: "Lista de Pisadores" no está en este repo (es referencia visual de tu build). Veo que ya existe un "Gestor de Comerciales" — déjame revisarlo porque podría ser el modelo a generalizar.
+
+He completado el reconocimiento. Tengo claro cómo funcionan hoy los sistemas. Te resumo lo esencial que encontré y luego te hago 4 preguntas de arquitectura que definen el plan.
+
+## Lo que ya existe (y cómo encaja)
+
+- **Tipos de archivo** viven en `file_types.json`, definidos en [settings.js:46](frontend/settings.js:46). Por defecto (no borrables): `t_comercial` (rojo `#ff0000`), `t_time`/Locuciones (verde `#2ecc71`, con `voice:true`), `t_station_id` (azul `#3498db`). El usuario puede crear tipos propios. Se editan en la pestaña "Tipos de Archivos" de Ajustes (imagen 1).
+- **Asignación carpeta/archivo → tipo** ya existe en `explicit_types.json` (mapa plano `{ruta: typeId}`), seteado por el clic derecho "Establecer tipo de archivo" en [render.js:6419](frontend/render.js:6419) y [render.js:6924](frontend/render.js:6924). **Pero no guarda opciones** (subcarpetas / ignorar separación).
+- **Colores en playlist** los resuelve `getPlaylistRowColor` en [render.js:7277](frontend/render.js:7277): aleatoria → naranja `#f39c12`, tipo → su color, música por defecto → `#e0e0e0`.
+- **Color de Pisadores automáticos** = `#b56ad9` (morado), en [index.html:491](frontend/index.html:491). Ese es el que usaríamos para el nuevo tipo "Pisadores".
+- **Reglas de separación** (`music_separation_rules.js`) solo se aplican hoy al elegir de **carpetas aleatorias** en [render.js:4256](frontend/render.js:4256). No existe aún un flag "ignorar separación".
+- **Menú superior → Herramientas** es el menú de aplicación de Electron en [main.js:2386](main.js:2386); ahí van las ventanas (`openXxxWindow()`). El patrón de ventana está en [main.js:510](main.js:510).
+- **i18n** ya está montado: `frontend/i18n.js` (DOM con `data-i18n`) y `backend/i18n_main.js` (`i18n.t()` en diálogos nativos), idioma en `general_settings.json`.
+- El "Gestor de Comerciales" existente es otra cosa (tráfico/pauta), **no** lo voy a mezclar con esto.
+
+Antes de redactar el plan necesito que decidas 4 puntos de arquitectura:
+
+La gestión de 'Tipos de Archivos' hoy vive en la pestaña de Ajustes Generales (nombre, identificador, color, amp, voz) junto con la pestaña 'Excepciones Mezclar' (fades/mezcla por tipo). ¿Qué hacemos con esas pestañas al crear el nuevo 'Gestor de tipos de archivos'?
+
+
+a gestión de 'Tipos de Archivos' hoy vive en la pestaña de Ajustes Generales (nombre, identificador, color, amp, voz) junto con la pestaña 'Excepciones Mezclar' (fades/mezcla por tipo). ¿Qué hacemos con esas pestañas al crear el nuevo 'Gestor de tipos de archivos'?
+
+Tipos de archivos se crea su nueva vebtaba y se muda todo, mezclas se queda en ajustes
+
+Hoy, clic derecho en el explorador/playlist > 'Establecer tipo de archivo' > eliges un tipo, y se asigna al instante. Con el nuevo sistema (que necesita preguntar ¿subcarpetas? e ¿ignorar separación?), ¿qué debe pasar al elegir un tipo desde la interfaz principal?
+
+Mini moda en la ventana principal, conectadi o sincronizado con la ventana para que se envie lo que se guarda
+
+El nuevo tipo 'Pisadores' (color morado #b56ad9, fijo y no borrable). Además del color y la organización, ¿qué comportamiento debe tener por defecto frente a la música de fondo y la separación?
+
+Solo clasificación/color
+
+El flag 'Ignorar reglas de separación musical' que guardaremos por carpeta/archivo. ¿Hasta dónde debe llegar su efecto en esta primera implementación?
+
+
+Aleatorias + no contar en historial
+
+
+
+Respuestas registradas. Antes de redactar el plan final, necesito confirmar dos detalles técnicos para que el plan sea preciso: de dónde lee `render.js` los tipos, y dónde se registra el historial de reproducción (para lo de "no contar en historial").
+
+Tengo el panorama completo, incluida la integración con historial ([render.js:9797](frontend/render.js:9797) ya separa por `category`). Un último chequeo: quiero ver qué procesos del backend leen `explicit_types.json`, porque eso decide si conviene evolucionar ese archivo o añadir uno paralelo.
+
+Confirmado un punto clave de compatibilidad: `main.js` (clockwheel, [main.js:1272](main.js:1272)) y `backend/library_worker.js` ([library_worker.js:64](backend/library_worker.js:64)) leen `explicit_types.json` esperando un **string** (`typeId`). Cambiar ese formato rompería esos consumidores. Por eso el plan mantiene ese archivo intacto y guarda las opciones nuevas en un archivo paralelo.
+
+Aquí está el plan completo:
+
+---
+
+# Plan: "Gestor de Tipos de Archivos" (ventana nueva) + opciones por carpeta/archivo
+
+## 1. Decisiones acordadas (de tus respuestas)
+1. **Mudanza parcial:** la gestión de tipos (lista + nombre/identificador/color/amp/voz + alta/baja) **se muda** a la ventana nueva. La pestaña **"Excepciones Mezclar"** (fades) **se queda en Ajustes** (seguirá leyendo la lista de tipos).
+2. **Clic derecho → mini-modal en la ventana principal**, no abre el Gestor. Guarda y queda **sincronizado por IPC** con el Gestor si está abierto (y viceversa).
+3. **Tipo "Pisadores":** solo **clasificación + color** `#b56ad9`, fijo y no borrable. Sin tocar ducking ni flag de voz.
+4. **Ignorar separación:** afecta **carpetas aleatorias** (salta el filtro de no‑repetición) **y** evita contar esos archivos como música en el historial.
+
+## 2. Modelo de datos (compatibilidad total)
+- `config/explicit_types.json` → **se mantiene igual** (`{ ruta: "t_xxx" }`, string). Lo siguen leyendo `render.js`, `main.js` y `library_worker.js` sin cambios.
+- **Nuevo** `config/file_type_options.json` → guarda solo las opciones nuevas:
+  ```json
+  {
+    "C:\\Radio\\Comerciales": { "kind": "folder", "includeSubfolders": true, "ignoreSeparation": true },
+    "C:\\Radio\\id.mp3":       { "kind": "file",   "ignoreSeparation": true }
+  }
+  ```
+  Una "asignación" = entrada en `explicit_types.json` (qué tipo) **+** entrada opcional en `file_type_options.json` (cómo se comporta). Si una ruta no tiene opciones, se asumen los valores recomendados.
+
+## 3. Archivos nuevos (para no engordar `render.js`)
+| Archivo | Rol |
+|---|---|
+| `frontend/file_types_data.js` | **Fuente única** de `defaultFileTypes` (+ nuevo `t_pisador`) y `normalizeFileTypes`/load/save. Hoy está **duplicado** en `settings.js:46` y `render.js:473`; lo unifico. |
+| `frontend/file_type_assignments.js` | Lógica sin DOM (estilo `music_separation_rules.js`): leer/migrar/guardar `file_type_options.json`, `resolveAssignment(filePath)` que **sube por carpetas padre** respetando `includeSubfolders`, y `shouldIgnoreSeparation(path)`. La usan `render.js` y el Gestor. |
+| `frontend/file_types_manager.html` | Ventana nueva: izquierda = lista de tipos; derecha (grande) = Propiedades del Tipo (imagen 1) + barra "Añadir carpeta / Añadir archivo" + tabla de rutas asignadas + Modificar/Eliminar. |
+| `frontend/file_types_manager.js` | Lógica de la ventana. Carga prefs **leyendo disco directo** (`getConfigDir` + `fs.readFileSync`), nunca `sendSync`. |
+| `patch_locales.js` | Script Node que inyecta todas las claves nuevas en los **4** `locales/*.json` con `fs.readFileSync`+`JSON.parse` (sin sed/regex). |
+
+## 4. Archivos a modificar
+- **`main.js`**: `openFileTypesManagerWindow()` (patrón de `main.js:510`); ítem **"🗂️ Gestor de tipos de archivos"** en el menú Herramientas (`main.js:2386`); IPC para abrir y para **retransmitir** cambios entre ventanas (`file-types-updated`, `file-type-assignment-updated`); handlers de diálogo "elegir carpeta/archivo".
+- **`frontend/settings.js` + `settings.html`**: **quitar** la pestaña/pane "Tipos de Archivos" (alta/baja/nombre/color/amp/voz). **Conservar** "Excepciones Mezclar", que pasa a leer la lista de tipos desde `file_types_data.js`. Al guardar fades, hace *read‑modify‑write* para no pisar los campos que ahora administra el Gestor.
+- **`frontend/render.js`**:
+  - Usar los módulos compartidos (quitar el `defaultFileTypes`/`normalizeFileTypes` duplicado).
+  - `getTrackTypeData()` → resolver por **ancestros** cuando la carpeta tenga `includeSubfolders`.
+  - `getPlaylistRowColor()` → para filas `random`: si la carpeta tiene tipo asignado, usar **su color**; si no, naranja `#f39c12` (música) como hoy.
+  - `takeRandomFolderFileAvoidingRecentMusic()` → si la carpeta `shouldIgnoreSeparation`, saltar el filtro de canción/artista (selección aleatoria pura).
+  - `getTrackHistoryDescriptor()` → si la asignación ignora separación, no contarlo como `music` (ya hay separación por `category`; lo extiendo).
+  - **Mini‑modal** nuevo en `index.html`/`render.js` para el clic derecho "Establecer tipo": carpeta → ¿Incluir subcarpetas? + ¿Ignorar separación? (Sí recomendado/No); archivo → solo ¿Ignorar separación? con "subcarpetas" en gris no clicable. Botones **Aceptar** `#27ae60` / **Cancelar** `#444` (los que ya usa el modal de auto‑pisador). Al aceptar: escribe `explicit_types.json` + `file_type_options.json`, recolorea filas y avisa por IPC al Gestor.
+  - Escuchar `file-types-updated`/`assignment-updated` para recargar y recolorear.
+
+## 5. i18n (desde el primer momento)
+- Todo el texto duro en **español** y con `data-i18n="..."` en el HTML nuevo; textos dinámicos con `window.i18n.t('clave')`.
+- Diálogos nativos (confirmación de Eliminar, etc.) en `main.js` con `i18n_main`.
+- Carga síncrona segura leyendo disco (como `settings.js`), **sin `sendSync`**.
+- Al final, `patch_locales.js` inyecta las claves nuevas (`file_types_manager.*`, `modals.assign_type.*`, `menu.file_types_manager`, etc.) en los 4 JSON.
+
+## 6. Orden de implementación (fases verificables)
+1. **Base de datos compartida:** `file_types_data.js` + `t_pisador`; refactor de `settings.js` y `render.js` para consumirlo (sin cambios visibles aún).
+2. **Asignaciones:** `file_type_assignments.js` + `file_type_options.json`; cablear color por ancestros y color de aleatorias tipadas.
+3. **Ventana Gestor:** HTML/JS + menú + apertura (sin separación/historial todavía).
+4. **Mini‑modal** en ventana principal + sincronización IPC bidireccional.
+5. **Separación + historial:** saltar filtro en aleatorias y no contar como música.
+6. **Quitar** pestaña "Tipos de Archivos" de Ajustes (dejando "Excepciones Mezclar").
+7. **i18n:** `patch_locales.js` y revisión en los 4 idiomas.
+
+## 7. Riesgo controlado
+- `explicit_types.json` **no cambia de formato** → cero impacto en clockwheel/library/rust.
+- Dos ventanas tocan `file_types.json` (Gestor: metadatos; Ajustes: fades) → *read‑modify‑write* por campos + recarga por IPC para evitar pisarse.
+
+---
+
+Una sola duda menor antes de empezar a programar: en la ventana del Gestor, ¿quieres el **pie de página estilo Ajustes** (Cancelar / Aplicar / Aceptar y Cerrar) para las Propiedades del Tipo, o prefieres que **se guarde automáticamente** al editar (y la tabla de rutas se guarda sola al Aceptar cada modal)? 
+
+Si te encaja el plan y me confirmas eso, arranco por la **Fase 1**.{
+
+
+
+
+Entendido — y es un buen ajuste. "Guardar en el historial" pasa a ser una **tercera pregunta independiente** de "ignorar separación", porque un comercial puede (y debe) quedar en el historial/memoria aunque ignore las reglas de separación musical. Encaja perfecto con el sistema actual: el historial ya guarda por `category` (los comerciales se registran como `commercial`, así que quedan en memoria **sin** estorbar la separación de la música real).
+
+Actualizo el plan con este cambio:
+
+## Cambios al plan
+
+**Modal de preguntas (checkbox, todos marcados por defecto):**
+- **Carpeta:** ☑ ¿Incluir subcarpetas? · ☑ ¿Ignorar reglas de separación musical? · ☑ ¿Guardar en el historial de reproducción?
+- **Archivo:** *(¿Incluir subcarpetas? en gris, no clicable)* · ☑ ¿Ignorar reglas de separación musical? · ☑ ¿Guardar en el historial de reproducción?
+- El usuario ve las 3 ya en "Sí" y cambia lo que quiera. Botones **Aceptar** `#27ae60` / **Cancelar** `#444`.
+
+**Modelo de datos** — `config/file_type_options.json` ahora guarda 3 flags:
+```json
+{
+  "C:\\Radio\\Comerciales": { "kind": "folder", "includeSubfolders": true, "ignoreSeparation": true, "saveToHistory": true },
+  "C:\\Radio\\id.mp3":       { "kind": "file",   "ignoreSeparation": true, "saveToHistory": false }
+}
+```
+
+**Cableado en `render.js`** (Fase 5):
+- `ignoreSeparation` → salta el filtro de no‑repetición al elegir de carpetas aleatorias.
+- `saveToHistory` → en `getTrackHistoryDescriptor()`/`registerTrackPlaybackOnce()` ([render.js:9797](frontend/render.js:9797)), la asignación **manda sobre** el `history` del tipo: si es `true`, se llama a `record()` (queda en historial/memoria, en su `category` propia — p. ej. `commercial`); si es `false`, no se registra. Así los comerciales quedan en memoria aunque ignoren separación, y la música real nunca se ve bloqueada por ellos.
+
+El resto del plan (archivos nuevos, mudanza parcial desde Ajustes, mini‑modal sincronizado, tipo `t_pisador` solo color, compatibilidad de `explicit_types.json`) queda igual.
+
+---
+
+Solo me falta tu decisión sobre el **pie de la ventana del Gestor** para arrancar la Fase 1. Mi recomendación:
+
+- **Propiedades del Tipo** (nombre/color/amp/voz) → pie estilo Ajustes: **Cancelar / Aplicar / Aceptar y Cerrar** (igual que la imagen 1, para mantener la costumbre).
+- **Tabla de rutas** → cada modal de Añadir/Modificar **guarda al instante** al pulsar Aceptar (no depende del pie).
+
+¿Te sirve así, o prefieres que **toda** la ventana se guarde automáticamente sin botón "Aplicar"? En cuanto me confirmes, empiezo por la **Fase 1** (módulo compartido `file_types_data.js` + tipo `t_pisador`).
+
+
+
+
+Perfecto, procedo. Pero antes de tocar el modelo de datos, verifico de forma independiente si `amp` y `voice` están realmente desconectados (tu memoria me recuerda tratar diagnósticos como hipótesis y verificar). Ya vi que `voice` se usa en [render.js:9806](frontend/render.js:9806) para marcar locuciones — déjame confirmar el alcance real de ambos.
+
+Encontré algo importante que contradice la hipótesis. Déjame confirmar el contexto exacto de `amp` en reproducción.
+
+Verificado — y aquí debo frenarte en un punto, porque la hipótesis no se sostiene:
+
+**`amp` y `voice` SÍ están conectados:**
+- **`amp`** → en [render.js:9351](frontend/render.js:9351) se lee como `ampDb` dentro de `getCrossfadeConfig`: aplica una ganancia en dB al reproducir archivos de ese tipo. No es decorativo.
+- **`voice`** → en [render.js:9806](frontend/render.js:9806) decide `category='locution'`, lo que hace que `record()` salte ese archivo y que se trate como locución. El tipo "Locuciones" depende de `voice:true`.
+
+Tu condición fue "si no está conectado a nada, se elimina" — como **sí** están conectados, la lectura fiel es: **no los borro del modelo de datos** (rompería la detección de locuciones y la ganancia por tipo), pero **sí los quito de la interfaz** del nuevo Gestor, que es lo que quieres. En la práctica:
+
+- El panel "Propiedades del Tipo" del Gestor mostrará solo **Nombre, Identificador, Color** (sin Amp, sin Voz).
+- Los campos `amp`/`voice` siguen en `file_types.json` con sus defaults (`amp:0`; `voice:true` solo para Locuciones). Los tipos nuevos que cree el usuario nacen con `amp:0, voice:false`. Nada en reproducción se rompe.
+
+Procedo así. Empiezo la **Fase 1**: módulo compartido + tipo `t_pisador`.
+
+Voy a confirmar todos los usos de `defaultFadeProfile`, `defaultFileTypes` y `normalizeFileTypes` en `render.js` y `settings.js` antes de extraerlos, para que el refactor sea idéntico en comportamiento.
+
+Todos los usos están claros y `normalizeFileTypes` es idéntico en ambos archivos. Creo el módulo compartido con el nuevo tipo `t_pisador`.
+
+Ahora reemplazo el bloque duplicado en `render.js` por el `require` del módulo compartido.
+
+Mismo refactor en `settings.js`.
+
+Verifico que los tres archivos parsean correctamente (solo sintaxis, sin ejecutar).
+
+**Fase 1 lista y verificada.** El tipo `t_pisador` (morado `#b56ad9`, readonly) ahora existe en una única fuente y aparecerá automáticamente en los menús de tipos, colores y la pestaña de mezclas. Sin duplicación.
+
+Paso a **Fase 2**: módulo de asignaciones + opciones por ruta, color por subcarpetas y color de aleatorias tipadas. Primero el módulo compartido de opciones.
+
+Ahora wireo el módulo en `render.js`. Releo las funciones de resolución de tipo y color (las líneas se desplazaron tras el refactor).
+
+Necesito un caché en memoria de las opciones (no leer disco en cada coloreo). Reviso dónde se carga `explicitTypesDB` para cargar las opciones al lado.
+
+Hago los cuatro cambios en `render.js`: require, caché de opciones, resolución por ancestros y color de aleatorias tipadas.
+
+Refactor el resolver para que también devuelva la ruta que coincidió (la necesito para leer las opciones de separación/historial de esa asignación).
+
+Ahora cableo separación e historial. Localizo la función de selección aleatoria y el descriptor de historial.
+
+Añado el helper `resolveIgnoreSeparation` y la salida temprana en la selección aleatoria.
+
+Ahora el descriptor de historial: la opción `saveToHistory` de la asignación debe mandar sobre el `history` del tipo.
+
+Verifico sintaxis de `render.js` tras los cambios de Fase 2/5.
+
+**Fases 2 y 5 (lado render) listas y verificadas:** resolución por subcarpetas, color de aleatorias tipadas, salto de separación e historial por `saveToHistory`.
+
+Sigo con la **Fase 4** (mini-modal en la ventana principal). Localizo el flujo actual de asignación por clic derecho.
+
+Veo los dos puntos de entrada (explorador-carpeta y filas de playlist). Reviso la estructura/estilo del modal de auto-pisador para que el mini-modal sea consistente.
+
+Inserto el mini-modal en `index.html`, justo después del modal de auto-pisador, con los mismos estilos.
+
+Ahora implemento la lógica del mini-modal en `render.js`. Primero reescribo el punto de entrada del explorador (carpeta).
+
+Necesito que `render.js` recargue datos cuando el Gestor avise por IPC. Reviso si ya existe un mecanismo de recarga de `fileTypesData` tras cambios.
+
+Existe `settings-updated` que recarga tipos (pesado, toca audio). Para el Gestor uso un canal dedicado y ligero. Lo añado junto al mini-modal.
+
+**Lado render completo** (mini-modal, sincronización, separación, historial, colores). Ahora la **Fase 3**: la ventana del Gestor. Reviso el estilo de una ventana existente para mantener consistencia (CSS, clases, tema oscuro).
+
+Excelente plantilla autocontenida. Veo cómo `separacion_musical.js` carga i18n/prefs de forma síncrona y notifica cambios.
+
+Hay un IPC `dialog:selectFolder` reutilizable. Verifico si existe uno para archivos y leo el patrón de init i18n.
+
+Tengo todo el patrón (CSS autocontenido, i18n síncrono, `dialog:pickFolder`, `dialog:confirm`). Creo la ventana del Gestor.
+
+Ahora la lógica de la ventana. Creo `file_types_manager.js`.
+
+**Gestor JS verificado.** Ahora el cableado en `main.js`: variable de ventana, función de apertura, ítem de menú, IPC de sincronización y selector de archivos. Localizo las declaraciones de ventanas.
+
+Hago el cableado en `main.js`. Variable de ventana primero.
+
+Ítem en el menú Herramientas, junto a "Reglas de Separación Musical".
+
+Handlers IPC de sincronización y selector de archivos de audio.
+
+**main.js verificado.** Ahora la **Fase 6**: quitar la pestaña "Tipos de Archivos" de Ajustes (la de mezclas se queda). Reviso la estructura de pestañas en `settings.html`.
+
+Quito el botón de pestaña y el panel `#tab-types` de `settings.html`.
+
+Ahora actualizo `settings.js` para no referenciar los elementos eliminados, conservando la lógica de la pestaña de mezclas. Releo la región afectada.
+
+Refactorizo `settings.js` con ediciones acotadas. Primero `renderLists` (solo el dropdown).
+
+Quito `defaultFadeProfile` del import de `settings.js` (ya no se usa ahí).
+
+Verifico que no queden referencias a elementos eliminados en `settings.js`.
+
+Las pestañas y la lógica de Ajustes quedaron limpias. Ahora la **Fase 7**: el script `patch_locales.js` que inyecta todas las claves nuevas en los 4 idiomas con `JSON.parse`/`stringify` (sin sed/regex).
+
+Antes de ejecutar, verifico la indentación actual de los locales para no reformatear todo el archivo (diff gigante).
+
+Los locales usan **4 espacios** y sin newline final. Ajusto el script para preservar el formato exacto (diff mínimo).
+
+Verifico que el diff sea solo adiciones (sin reformateo) y que el JSON siga válido con las claves nuevas accesibles.
+
+El diff es limpio (la carpeta `locales/` es nueva/untracked) y las 42 claves × 4 idiomas resuelven correctamente. Hago una verificación final de sintaxis de todo y confirmo que `render.js` inicializa i18n.
+
+Todo parsea y `render.js` inicializa i18n. Hago una prueba funcional de los módulos puros (sin Electron) para validar lógica: defaults del tipo Pisadores y round-trip de opciones.
+
+Lógica validada al 100%. Limpio un import sin usar en `render.js` (`defaultFadeProfile` ya no se usa ahí).
+
+Implementación completa y verificada en las 7 fases. Guardo una memoria del proyecto con las decisiones de arquitectura no obvias (sobre todo que `amp`/`voice` están vivos pese a la creencia inicial), para no romperlas en sesiones futuras.
+
+Listo — implementación completa y verificada en las 7 fases. Todo parsea, la lógica de los módulos está probada y las 168 claves i18n resuelven en los 4 idiomas.
+
+## Qué quedó construido
+
+**Archivos nuevos**
+- [frontend/file_types_data.js](frontend/file_types_data.js) — fuente única de tipos (antes duplicada en settings/render) + nuevo tipo **Pisadores** (`t_pisador`, morado `#b56ad9`, fijo).
+- [frontend/file_type_assignments.js](frontend/file_type_assignments.js) — opciones por ruta (`file_type_options.json`).
+- [frontend/file_types_manager.html](frontend/file_types_manager.html) + [.js](frontend/file_types_manager.js) — la ventana del Gestor.
+- [patch_locales.js](patch_locales.js) — inyector de claves (ejecutado; 42 claves × 4 idiomas).
+
+**Archivos modificados**
+- [main.js](main.js) — `openFileTypesManagerWindow()`, ítem 🗂️ en Herramientas, IPC de sincronización, selector de archivos.
+- [frontend/render.js](frontend/render.js) — resolución por subcarpetas, color de aleatorias tipadas, salto de separación, override de historial, mini-modal + sincronización IPC.
+- [frontend/settings.html](frontend/settings.html) + [.js](frontend/settings.js) — quitada la pestaña "Tipos de Archivos" (Excepciones Mezclar se queda).
+- [frontend/index.html](frontend/index.html) — mini-modal de asignación.
+
+**Cómo funciona de punta a punta**
+1. **Herramientas → 🗂️ Gestor de tipos de archivos**: izquierda lista de tipos; derecha propiedades (Nombre/Identificador/Color — **sin** Amp/Voz) + tabla de carpetas/archivos con Añadir/Modificar/Eliminar y las 3 preguntas (subcarpetas / ignorar separación / historial, todas en Sí por defecto).
+2. **Clic derecho → Establecer tipo** en la interfaz principal: abre el **mini-modal** ahí mismo, guarda y se sincroniza en vivo con el Gestor si está abierto.
+3. Los colores entran solos a la playlist (incluidas carpetas aleatorias tipadas, que ya no son naranjas si tienen tipo). Ignorar separación salta el filtro de no-repetición; "Guardar en historial" decide si queda en memoria (los comerciales pueden quedar sin estorbar a la música).
+
+## Dos detalles que decidí y conviene que confirmes
+- **`t_pisador` usa identificador `'pisador'`**: además de asignación manual, auto-colorea archivos cuyo nombre contenga "pisador". Si prefieres que sea **solo manual** (sin auto-detección), lo dejo con identificador vacío — dímelo.
+- **Color de aleatorias**: una carpeta aleatoria hereda el color de su carpeta padre si esta tiene tipo (consistente con cómo ya funcionaban los archivos). Si quieres que la herencia de aleatorias requiera "incluir subcarpetas", lo ajusto.
+
+Sobre `amp`/`voice`: como te confirmé, **están cableados** (ganancia dB y categoría de locución), así que los quité de la UI del Gestor pero los conservé en los datos para no romper reproducción.
+
+¿Quieres que lance la app para una prueba en caliente del Gestor y el mini-modal, o prefieres probarlo tú primero?
+
+
+
+
+
+Entiendo perfectamente, y es un punto importante: **migración de lo que ya existe**. Déjame primero aclararte qué ya está cubierto y qué falta, para no hacer trabajo de más:
+
+**Ya funciona hoy con tus asignaciones viejas** (las de `explicit_types.json`, hechas con clic derecho → Establecer tipo):
+- **Sí aparecen** en el Gestor: la ventana lee ese mismo archivo y las lista bajo su tipo.
+- **Sí conservan su color** en la playlist: eso no cambió, es el comportamiento de siempre.
+
+**Lo que les falta** (y es lo que hay que migrar): esas asignaciones viejas **no tienen** las opciones nuevas (incluir subcarpetas / ignorar separación / guardar historial), porque esas opciones se guardan en el archivo nuevo `file_type_options.json`. Sin eso, la tabla del Gestor mostraría valores que no coinciden con el comportamiento real, y los archivos dentro de subcarpetas no heredarían el tipo.
+
+Entonces voy a crear un **sistema de migración con aviso "requiere configuración"** (Sí/No). Antes de codificarlo necesito 2 decisiones para no equivocarme con datos de usuarios que ya tienen configuraciones:
+
+El aviso de "requiere configuración" (para migrar las asignaciones viejas al nuevo formato con opciones). ¿Dónde y cuándo debe aparecer?
+
+
+
+
+Claro: **aviso al abrir el Gestor**, y **"Sí" = revisar una por una** (no se aplica nada automático; las viejas quedan marcadas como "pendientes" y el usuario las configura una a una con el modal). "No" las deja tal cual.
+
+Esto es además la forma más segura para usuarios con configuraciones existentes: no se toca nada al aire sin su decisión explícita. Implemento el aviso + marca de "pendiente" + la corrección del display para que la tabla muestre el estado real de las viejas. Primero el banner y estilos en el HTML del Gestor.
+
+Ahora la lógica en el Gestor JS. Releo las funciones a tocar para anclar las ediciones con precisión.
+
+Añado la lógica del aviso de migración y los puntos de actualización. Primero los `updateMigrateNotice()` en los flujos que cambian asignaciones.
+
+Ahora cableo los botones del banner y la llamada en init.
+
+Añado las 4 claves nuevas del aviso a `patch_locales.js` (una por idioma) y lo re-ejecuto.
+
+El patch quedó idempotente (solo 4 claves nuevas). Detecté un detalle importante en tu `explicit_types.json` real: además de rutas, tiene claves virtuales (`temperature_locution`, `humidity_locution`) mapeadas a Locuciones. Esas no son archivos y no deben mostrarse ni marcarse como "pendientes" en el Gestor. Las filtro.
+
+Verificación final: sintaxis del Gestor, claves i18n nuevas, y simulo la detección de "pendientes" contra tu `explicit_types.json` real (filtrando claves virtuales).
+
+Confirmado contra tus datos reales: 22 rutas reales pendientes, las 2 claves virtuales de clima excluidas correctamente. Actualizo la memoria con el diseño de migración.
+
+Listo. Migración implementada y verificada contra tus datos reales.
+
+## Qué se agregó (migración de lo existente)
+
+**Aviso al abrir el Gestor** — si detecta asignaciones viejas sin configurar, muestra un banner ⚠️:
+> *"Hay N carpeta(s)/archivo(s) con tipo asignado de antes que aún no tienen configuración. ¿Revisarlos ahora?"* — **Revisar** / **Ahora no**
+
+- **Revisar** → oculta el aviso y salta al primer tipo con pendientes.
+- **Ahora no** → las deja tal cual (sin tocar nada al aire).
+
+**Marca de "pendiente"** — cada asignación vieja aparece en la tabla con un ⚠ y su **estado real** (subcarpetas: No, ignora sep.: No, historial: según el tipo), para no prometer comportamientos que aún no aplican. Al pulsar **Modificar**, el modal ya viene con los **recomendados** (las 3 en Sí): un clic en Aceptar y queda migrada → se le quita el ⚠.
+
+**Lo que ya funcionaba (confirmado):**
+- Tus asignaciones viejas **ya aparecen** en el Gestor (lee el mismo `explicit_types.json`).
+- **Ya conservan su color** en la playlist — eso nunca cambió.
+- Carpetas aleatorias con "incluir subcarpetas": los audios dentro **ya heredan** el tipo (color + categoría de separación/historial), vía resolución por carpetas ancestro.
+
+**Robustez con tus datos reales** — validé contra tu `config/explicit_types.json`: 22 rutas reales se detectan como pendientes y las 2 claves internas de clima (`temperature_locution`, `humidity_locution`) se **excluyen** automáticamente (no son archivos, no se muestran ni se migran).
+
+## Estado general
+- Todo parsea (`node --check` en los 6 archivos) y la lógica de los módulos está probada.
+- i18n: 46 claves × 4 idiomas inyectadas con `patch_locales.js` (idempotente, sin corromper formato).
+- **No he lanzado la app** (como pediste). Cuando la abras, ábrela y prueba: Herramientas → 🗂️ Gestor de tipos de archivos → debería salir el aviso de 22 pendientes.
+
+Cuando quieras, lanzas y me dices qué tal se ve; si algo no encaja (texto del aviso, defaults, el identificador `'pisador'`), lo ajustamos.
