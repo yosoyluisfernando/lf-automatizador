@@ -568,6 +568,18 @@
         return allowLoop ? getFirstOperationalIndex(list) : -1;
     }
 
+    function getFirstOperationalIndexExcept(list, excludedIndex) {
+        return getOperationalIndices(list).find(index => index !== excludedIndex) ?? -1;
+    }
+
+    function getNextAfterTerminalCommandIndex(list, commandIndex, mode) {
+        if (mode === 'random') return getRandomOperationalIndex(list);
+        const next = getNextOperationalIndex(list, commandIndex, mode === 'infinite');
+        if (next >= 0) return next;
+        if (mode === 'normal') return getFirstOperationalIndexExcept(list, commandIndex);
+        return -1;
+    }
+
     function setAuxPlaybackMode(listIndex, mode) {
         const safeMode = ['normal', 'random', 'manual', 'infinite'].includes(mode) ? mode : 'normal';
         const list = state.lists[listIndex];
@@ -670,6 +682,23 @@
         return stopList(listIndex, true);
     }
 
+    async function finishTerminalCommand(listIndex, commandIndex) {
+        clearAutoTimer(listIndex);
+        const list = state.lists[listIndex];
+        const mode = getPlaybackMode(listIndex);
+        await rust({ cmd: 'stop', player: playerId(listIndex, 'a') });
+        await rust({ cmd: 'stop', player: playerId(listIndex, 'b') });
+        list.status = 'stopped';
+        list.currentIndex = -1;
+        list.selectedIndex = -1;
+        list.nextIndex = getNextAfterTerminalCommandIndex(list, commandIndex, mode);
+        list.manualDeferredIndex = -1;
+        list.startedAt = 0;
+        list.currentPath = '';
+        saveState();
+        renderAll();
+    }
+
     async function enforceSimultaneousPolicy(listIndex) {
         const otherIndex = listIndex === 0 ? 1 : 0;
         if (state.settings.allowSimultaneous === true) return true;
@@ -707,7 +736,7 @@
         }
         if (row.type === 'main_resume') {
             requestMainResume();
-            return continueAfterCommand(listIndex, idx);
+            return finishTerminalCommand(listIndex, idx);
         }
         if (row.type === 'main_jump') {
             requestMainJump(Number(row.target) || 0);
