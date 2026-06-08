@@ -211,6 +211,7 @@ const rustAudioEngine = new RustAudioEngineProbe({
     // futuros eventos de fin de pista, etc.). El renderer escucha
     // 'audio-engine-rust-event' y reacciona sin tener que mantener relojes.
     onEngineEvent: (message) => {
+        if (isAppQuitting) return;
         try {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('audio-engine-rust-event', message);
@@ -234,6 +235,22 @@ const rustAudioEngine = new RustAudioEngineProbe({
     }
 });
 let appSuspensionBlockerId = null;
+let appShutdownCleanupStarted = false;
+
+function runAppShutdownCleanup(reason = 'app-shutdown') {
+    if (appShutdownCleanupStarted) return;
+    appShutdownCleanupStarted = true;
+    isAppQuitting = true;
+    forceQuit = true;
+    try {
+        if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) {
+            powerSaveBlocker.stop(appSuspensionBlockerId);
+        }
+    } catch (err) {}
+    try { rustAudioEngine.stop(); } catch (err) {}
+    try { db.walCheckpoint(); } catch (err) {}
+    try { writeLog(`[CIERRE] Limpieza principal completada: ${reason}`); } catch (err) {}
+}
 
 function broadcastAudioPowerEvent(payload = {}) {
     const message = { at: Date.now(), ...payload };
@@ -2611,7 +2628,23 @@ app.whenReady().then(() => {
         );
         ps.unref();
     }
-}); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) powerSaveBlocker.stop(appSuspensionBlockerId); } catch (e) {} try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
+});
+app.on('before-quit', () => {
+    runAppShutdownCleanup('before-quit');
+});
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
+app.on('will-quit', () => {
+    runAppShutdownCleanup('will-quit');
+});
+app.on('quit', () => {
+    runAppShutdownCleanup('quit');
+});
+process.once('exit', () => {
+    runAppShutdownCleanup('process-exit');
+});
+ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
 ipcMain.on('playlist-names-changed', (e, list) => {
     if (Array.isArray(list) && list.length) {
         playlistMenuList = list
@@ -2686,7 +2719,7 @@ ipcMain.on('auxiliary-main-jump', (_event, targetIndex) => {
 ipcMain.on('auxiliary-execute-event', (_event, payload = {}) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-execute-event', payload);
 });
-ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
+ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { runAppShutdownCleanup('confirm-app-quit'); app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.on('preview-ui-layout', (e, data) => { if (mainWindow) mainWindow.webContents.send('preview-ui-layout', data); });
 ipcMain.on('revert-ui-layout', () => { if (mainWindow) mainWindow.webContents.send('revert-ui-layout'); });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {

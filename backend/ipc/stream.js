@@ -209,14 +209,18 @@ module.exports = function registerStreamIpc(context) {
     // ─────────────────────────────────────────────────────────────────────────
     // Limpieza cuando la app cierra
     // ─────────────────────────────────────────────────────────────────────────
+    const cleanupActiveStreams = () => {
+        if (!activeStreams.size && !activeStreamByPlayer.size) return;
+        for (const proxy of activeStreams.values()) {
+            try { proxy.stop(); } catch (_) {}
+        }
+        activeStreams.clear();
+        activeStreamByPlayer.clear();
+    };
+
     const { app } = context;
     if (app) {
-        app.on('will-quit', () => {
-            for (const proxy of activeStreams.values()) {
-                try { proxy.stop(); } catch (_) {}
-            }
-            activeStreams.clear();
-            activeStreamByPlayer.clear();
-        });
+        app.on('before-quit', cleanupActiveStreams);
+        app.on('will-quit', cleanupActiveStreams);
     }
 };
