@@ -130,6 +130,11 @@ function createLibraryIndexService(options = {}) {
           AND status <> 'missing'
           AND last_seen_at <> ?
     `);
+    const selectIndexRowsByRoot = db.prepare(`
+        SELECT file_path, title, artist, album, year, genre, duration, file_size, file_mtime_ms, status
+        FROM library_index_tracks
+        WHERE root_path = ?
+    `);
 
     function getFileTypes() {
         return normalizeFileTypes(readJsonConfig(fsApi, fileTypesPath, defaultFileTypes));
@@ -252,17 +257,53 @@ function createLibraryIndexService(options = {}) {
         return result;
     }
 
-    function buildIndexPayload(filePath, root, now) {
+    // Contexto compartido de UNA pasada de sincronización. Dos reglas de oro:
+    //  1. Las configuraciones (file_types, explicit_types, options) se leen UNA
+    //     vez por raíz, no por archivo: explicit_types.json crece con la
+    //     biblioteca y releerlo+parsearlo miles de veces costaba minutos.
+    //  2. Las filas ya indexadas se cargan UNA vez a memoria para poder reusar
+    //     sus metadatos sin tocar el disco.
+    function buildSyncContext(root) {
+        const indexByPath = new Map(
+            selectIndexRowsByRoot.all(root.root_path).map(row => [row.file_path, row])
+        );
+        return {
+            fileTypes: getFileTypes(),
+            explicitTypes: getExplicitTypes(),
+            fileTypeOptions: getFileTypeOptions(),
+            indexByPath
+        };
+    }
+
+    function buildIndexPayload(filePath, root, now, ctx) {
         const stat = fsApi.statSync(filePath);
         const track = selectTrack.get(filePath);
-        const tags = track ? {} : readTagsFn(filePath);
-        const meta = parseTitleAndArtistFromFile(filePath, tags);
-        const fileTypes = getFileTypes();
-        const explicitTypes = getExplicitTypes();
-        const fileTypeOptions = getFileTypeOptions();
+        const indexRow = ctx.indexByPath.get(filePath);
+        const fileUnchanged = !!indexRow
+            && Number(indexRow.file_size) === (Number(stat.size) || 0)
+            && Math.round(Number(indexRow.file_mtime_ms)) === Math.round(Number(stat.mtimeMs) || 0);
+
+        // Tags ID3 SOLO para archivos nuevos o modificados. Antes se comparaba
+        // únicamente contra `tracks` (pistas tratadas): toda pista indexada pero
+        // sin tratar pagaba la lectura completa de tags en CADA actualización,
+        // y por eso refrescar tardaba lo mismo que la primera indexación.
+        let meta;
+        if (!track && fileUnchanged) {
+            meta = {
+                title: String(indexRow.title || '').trim() || path.basename(filePath, path.extname(filePath)),
+                artist: String(indexRow.artist || '').trim(),
+                album: String(indexRow.album || '').trim(),
+                year: String(indexRow.year || '').trim(),
+                genre: String(indexRow.genre || '').trim()
+            };
+        } else {
+            const tags = track ? {} : readTagsFn(filePath);
+            meta = parseTitleAndArtistFromFile(filePath, tags);
+        }
+
         const resolvedType = root.type_id
-            ? fileTypeResolver.getTypeById(fileTypes, root.type_id)
-            : fileTypeResolver.resolveFileType(filePath, track, fileTypes, explicitTypes, fileTypeOptions);
+            ? fileTypeResolver.getTypeById(ctx.fileTypes, root.type_id)
+            : fileTypeResolver.resolveFileType(filePath, track, ctx.fileTypes, ctx.explicitTypes, ctx.fileTypeOptions);
         const treated = isTreatedTrack(track);
         const changed = track && hasCueValue(track.file_size) && hasCueValue(track.file_mtime_ms)
             && (Number(track.file_size) !== Number(stat.size) || Math.round(Number(track.file_mtime_ms)) !== Math.round(Number(stat.mtimeMs)));
@@ -291,6 +332,7 @@ function createLibraryIndexService(options = {}) {
 
         const now = new Date().toISOString();
         const files = collectAudioFiles(root.root_path, root.recursive === 1);
+        const ctx = buildSyncContext(root);
         let indexed = 0;
         let failed = 0;
         const total = files.length;
@@ -324,7 +366,7 @@ function createLibraryIndexService(options = {}) {
             const payloads = [];
             for (let j = 0; j < chunk.length; j++) {
                 try {
-                    payloads.push(buildIndexPayload(chunk[j], root, now));
+                    payloads.push(buildIndexPayload(chunk[j], root, now, ctx));
                 } catch (err) {
                     failed++;
                 }
