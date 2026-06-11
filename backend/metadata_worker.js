@@ -2,6 +2,7 @@ const { parentPort } = require('worker_threads');
 const fs = require('fs');
 const nodeID3 = require('node-id3');
 const db = require('../database');
+const { readId3TagsSync } = require('./services/id3_reader');
 
 let queue = [];
 let active = 0;
@@ -9,7 +10,11 @@ let cancelled = false;
 let mode = 'read';
 const MAX_CONCURRENT = 5;
 
-const readTagsAsync = (file) => new Promise(resolve => nodeID3.read(file, (err, tags) => resolve(tags || {})));
+// Lectura acotada (solo la cabecera ID3, no el archivo completo) compartida
+// con el índice musical: el "Análisis de metadatos" del Centro de
+// Procesamiento corre a la misma velocidad que el indexado del buscador.
+const readTagsAsync = (file) => Promise.resolve(readId3TagsSync(file));
+// La escritura sí necesita el archivo completo (node-id3 lo reconstruye).
 const writeTagsAsync = (tags, file) => new Promise(resolve => nodeID3.update(tags, file, (err) => resolve(!err)));
 function assertReadableFile(filePath) {
     let fd = null;

@@ -21,6 +21,7 @@ const {
   storeTrackFileSignature,
   mapTrackRowToClient
 } = require('./backend/services/track_mapper.js');
+const { readId3TagsAsync } = require('./backend/services/id3_reader.js');
 const {
   _injectDeps: artists_injectDeps,
   PROTECTED_ARTIST_GROUP_NAMES,
@@ -845,7 +846,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const configDir = getConfigDir(path.join(__dirname, 'config'), __dirname);
 
 const uiPrefsPath = path.join(configDir, 'ui_prefs.json');
-let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', auxiliaryPanel: false, auxiliaryPanelLastMode: 'floating', auxiliaryPanelLayout: 'stacked', rightPanelView: 'cartwall' };
+let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', auxiliaryPanel: false, auxiliaryPanelLastMode: 'floating', auxiliaryPanelLayout: 'stacked', rightPanelOrder: 'cartwall-first', rightPanelView: 'cartwall' };
 try { if (fs.existsSync(uiPrefsPath)) uiPrefs = { ...uiPrefs, ...JSON.parse(fs.readFileSync(uiPrefsPath, 'utf-8')) }; } catch(e) {}
 function saveUiPrefs() { try { fs.writeFileSync(uiPrefsPath, JSON.stringify(uiPrefs, null, 2)); } catch(e) {} }
 if (uiPrefs.cartwall) uiPrefs.cartwallLastMode = 'docked';
@@ -1120,7 +1121,10 @@ function writeLog(msg) {
 // para que la carga masiva de pistas corra fuera del proceso principal.
 
 
-const readTagsAsync = (file) => new Promise(resolve => nodeID3.read(file, (err, tags) => resolve(tags || {})));
+// Lectura acotada de tags (solo la cabecera ID3, no el archivo completo):
+// misma implementación compartida que usan el índice musical y el worker de
+// metadatos. La escritura (writeTagsAsync) sigue con node-id3 completo.
+const readTagsAsync = (file) => readId3TagsAsync(file);
 const writeTagsAsync = (tags, file) => new Promise(resolve => nodeID3.update(tags, file, (err) => resolve(!err)));
 function canReadFileBytes(filePath) {
     let fd = null;
@@ -2332,6 +2336,14 @@ function createApplicationMenu() {
                 { label: i18n.t('menu.toggle_extensions'), type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
                 { id: 'view-toggle-cartwall', label: i18n.t('menu.toggle_cartwall'), type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
                 { id: 'view-toggle-auxiliary', label: 'Playlists auxiliares', type: 'checkbox', checked: !!auxiliaryWindow || uiPrefs.auxiliaryPanel, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-auxiliary', item.checked); } },
+                { type: 'separator' },
+                {
+                    label: i18n.t('menu.panel_order'),
+                    submenu: [
+                        { label: i18n.t('menu.order_cartwall_aux'), type: 'radio', checked: uiPrefs.rightPanelOrder === 'cartwall-first', click: () => { uiPrefs.rightPanelOrder = 'cartwall-first'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-right-panel-order', 'cartwall-first'); } },
+                        { label: i18n.t('menu.order_aux_cartwall'), type: 'radio', checked: uiPrefs.rightPanelOrder === 'aux-first', click: () => { uiPrefs.rightPanelOrder = 'aux-first'; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('set-right-panel-order', 'aux-first'); } }
+                    ]
+                },
                 { type: 'separator' },
                 { label: i18n.t('menu.toggle_syslog'), type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
                 { type: 'separator' },
