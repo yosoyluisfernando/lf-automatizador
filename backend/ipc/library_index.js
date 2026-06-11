@@ -5,7 +5,7 @@ const { createLibraryIndexService, normalizeDiskPath } = require('../services/li
 
 module.exports = function registerLibraryIndexIpc(context) {
     const { ipcMain, db, fs, configDir, writeLog, runLibraryWorkerTask } = context;
-    const service = createLibraryIndexService({ db, fs, configDir });
+    const service = createLibraryIndexService({ db, fs, configDir, ingestTags: true });
 
     // El trabajo pesado (escaneo, tags, búsqueda difusa) corre en
     // library_worker: si corriera aquí bloquearía el event loop del proceso

@@ -727,7 +727,9 @@ function getArtistCardDetailsForTrackPath(filePath) {
 // retransmite a las ventanas sin resolver la tarea pendiente.
 let libraryIndexService = null;
 function getLibraryIndexService() {
-    if (!libraryIndexService) libraryIndexService = createLibraryIndexService({ db, configDir });
+    // ingestTags: el indexado guarda en `tracks` los metadatos completos
+    // (misma ingesta que el Centro de Procesamiento de la Biblioteca).
+    if (!libraryIndexService) libraryIndexService = createLibraryIndexService({ db, configDir, ingestTags: true });
     return libraryIndexService;
 }
 

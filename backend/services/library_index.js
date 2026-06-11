@@ -84,6 +84,23 @@ function createLibraryIndexService(options = {}) {
 
     if (!db) throw new Error('library_index requiere una instancia SQLite.');
 
+    // Ingesta de metadatos completos a `tracks` durante el indexado (misma
+    // lógica que el Centro de Procesamiento). Opt-in explícito y carga perezosa:
+    // local_meta_ingest requiere la BD real (módulo nativo) y los tests del
+    // servicio corren con bases falsas bajo Node de sistema.
+    const ingestTags = options.ingestTags === true;
+    let metaIngestModule = null;
+    function getMetaIngest() {
+        if (!metaIngestModule) metaIngestModule = require('./local_meta_ingest.js');
+        return metaIngestModule;
+    }
+    function ingestFileTags(filePath, tags, opts) {
+        return getMetaIngest().ingestFileTags(filePath, tags, opts);
+    }
+    function hasUsefulTagData(tags) {
+        return getMetaIngest().hasUsefulTagData(tags);
+    }
+
     const selectTrack = db.prepare('SELECT * FROM tracks WHERE file_path = ?');
     const selectRoot = db.prepare('SELECT * FROM library_index_roots WHERE root_path = ?');
     const listRootsStmt = db.prepare('SELECT * FROM library_index_roots ORDER BY locked DESC, root_path COLLATE NOCASE');
@@ -277,7 +294,7 @@ function createLibraryIndexService(options = {}) {
 
     function buildIndexPayload(filePath, root, now, ctx) {
         const stat = fsApi.statSync(filePath);
-        const track = selectTrack.get(filePath);
+        let track = selectTrack.get(filePath);
         const indexRow = ctx.indexByPath.get(filePath);
         const fileUnchanged = !!indexRow
             && Number(indexRow.file_size) === (Number(stat.size) || 0)
@@ -298,6 +315,18 @@ function createLibraryIndexService(options = {}) {
             };
         } else {
             const tags = track ? {} : readTagsFn(filePath);
+            // Ingesta completa: indexar guarda en `tracks` los MISMOS metadatos
+            // que "Centro de Procesamiento > Metadatos" (título/artista/feats/
+            // remix/álbum/año/género + enlaces de artista, semántica "fill").
+            // Tras indexar, al archivo solo le falta el análisis de audio
+            // (inicio/mezcla/fin) para pasar de "pendiente" a "tratado".
+            if (!track && ingestTags && hasUsefulTagData(tags)) {
+                const ingested = ingestFileTags(filePath, tags, {
+                    fileSize: stat.size,
+                    fileMtimeMs: stat.mtimeMs
+                });
+                if (ingested) track = ingested;
+            }
             meta = parseTitleAndArtistFromFile(filePath, tags);
         }
 
