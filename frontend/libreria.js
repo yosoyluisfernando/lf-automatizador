@@ -1,7 +1,8 @@
 const { ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const Fuse = require('fuse.js');
+const { Worker: NodeWorker } = require('worker_threads');
+const librarySearchShared = require('./library_search_shared');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const i18n = require('./i18n');
 
@@ -80,7 +81,17 @@ let selectedTreeNodes = new Set();
 let lastSelectedTreeNode = null;
 let activeTreeNodeElements = new Set();
 
-let fuseEngine = null;
+// Búsqueda en hilo aparte: la búsqueda difusa sobre miles de pistas nunca debe
+// correr en el hilo de la interfaz (congela el repintado). El índice vive en
+// library_search_worker.js; si el worker no está disponible se usa una sesión
+// en línea como red de seguridad (mismo comportamiento que antes).
+let searchWorker = null;
+let searchWorkerBroken = false;
+let searchSeq = 0;
+const pendingSearchResolvers = new Map();
+let fallbackSearchSession = null;
+let searchIndexByPath = new Map();
+let activeSearchToken = 0;
 let searchTimeout = null;
 let manualCuesDB = {}; 
 let trackedLibraryRoots = [];
@@ -318,15 +329,77 @@ function buildQueueTrack(filePath, dbData = {}, existingTrack = null) {
     return nextTrack;
 }
 
-function applyCurrentSearchAndRender() {
+function toSearchRecord(track) {
+    return {
+        fullPath: track.fullPath,
+        title: track.title,
+        artist: track.artist,
+        genre: track.genre,
+        artistCountry: track.artistCountry
+    };
+}
+
+function getSearchWorker() {
+    if (searchWorkerBroken) return null;
+    if (searchWorker) return searchWorker;
+    try {
+        searchWorker = new NodeWorker(path.join(__dirname, 'library_search_worker.js'));
+        const handleWorkerLoss = () => {
+            // Si el hilo de búsqueda muere, pasamos al motor en línea para que
+            // el buscador nunca quede sin responder.
+            if (searchWorkerBroken) return;
+            searchWorkerBroken = true;
+            searchWorker = null;
+            pendingSearchResolvers.forEach(resolve => resolve(null));
+            pendingSearchResolvers.clear();
+            rebuildSearchIndex();
+        };
+        searchWorker.on('message', (message = {}) => {
+            if (message.type !== 'results') return;
+            const resolve = pendingSearchResolvers.get(message.seq);
+            if (!resolve) return;
+            pendingSearchResolvers.delete(message.seq);
+            resolve(message.paths || []);
+        });
+        searchWorker.on('error', handleWorkerLoss);
+        searchWorker.on('exit', handleWorkerLoss);
+    } catch (err) {
+        searchWorkerBroken = true;
+        searchWorker = null;
+    }
+    return searchWorker;
+}
+
+function searchLibraryTracks(query) {
+    const worker = getSearchWorker();
+    if (!worker) {
+        if (!fallbackSearchSession) rebuildSearchIndex();
+        const items = fallbackSearchSession ? fallbackSearchSession.search(query) : [];
+        return Promise.resolve(items.map(item => item.fullPath).filter(Boolean));
+    }
+    return new Promise(resolve => {
+        const seq = ++searchSeq;
+        pendingSearchResolvers.set(seq, resolve);
+        worker.postMessage({ type: 'search', query, seq });
+    });
+}
+
+async function applyCurrentSearchAndRender() {
     const query = document.getElementById('lib-search-input')?.value?.trim() || '';
+    const token = ++activeSearchToken;
     if (!query) {
         filteredTracks = [...workQueueTracks];
-    } else if (fuseEngine) {
-        filteredTracks = fuseEngine.search(query).map(result => result.item);
-    } else {
-        filteredTracks = [...workQueueTracks];
+        applySortingAndRender();
+        return;
     }
+    const paths = await searchLibraryTracks(query);
+    if (token !== activeSearchToken) return; // hay una búsqueda más reciente en curso
+    if (paths === null) {
+        // El worker murió con esta consulta pendiente: reintento con el fallback.
+        applyCurrentSearchAndRender();
+        return;
+    }
+    filteredTracks = paths.map(trackPath => searchIndexByPath.get(trackPath)).filter(Boolean);
     applySortingAndRender();
 }
 
@@ -478,9 +551,9 @@ window.loadPersistentRootNow = async function() {
 async function refreshWorkQueueFromDatabase() {
     const paths = workQueueTracks.map(track => track.fullPath).filter(Boolean);
     const scopedDb = await ipcRenderer.invoke('lib-get-db-tracks', paths);
-    manualCuesDB = { ...manualCuesDB, ...(scopedDb || {}) };
+    Object.assign(manualCuesDB, scopedDb || {});
     workQueueTracks = workQueueTracks.map(track => buildQueueTrack(track.fullPath, manualCuesDB[track.fullPath] || {}, track));
-    initFuseEngine();
+    rebuildSearchIndex();
     applyCurrentSearchAndRender();
 }
 
@@ -732,7 +805,7 @@ window.applyTrackGenreModal = async function() {
 async function syncWorkQueueWithDisk() {
     const currentPaths = workQueueTracks.map(track => track.fullPath).filter(Boolean);
     const scopedDb = await ipcRenderer.invoke('lib-get-db-tracks', currentPaths);
-    manualCuesDB = { ...manualCuesDB, ...(scopedDb || {}) };
+    Object.assign(manualCuesDB, scopedDb || {});
     const previousSelection = new Set(selectedPaths);
     workQueueTracks = workQueueTracks
         .filter(track => fs.existsSync(track.fullPath))
@@ -741,9 +814,30 @@ async function syncWorkQueueWithDisk() {
     if (lastSelectedPath && !selectedPaths.has(lastSelectedPath) && !workQueueTracks.some(track => track.fullPath === lastSelectedPath)) {
         lastSelectedPath = null;
     }
-    initFuseEngine();
+    rebuildSearchIndex();
     applyCurrentSearchAndRender();
     saveLibSession();
+}
+
+// Verificación de existencia sin congelar la interfaz: con bibliotecas de
+// decenas de miles de pistas, hacer fs.existsSync en serie bloqueaba la ventana
+// durante el arranque (un stat por archivo contra el disco). La versión async
+// cede el hilo y limita la concurrencia para no saturar discos mecánicos.
+async function filterExistingPathsAsync(paths, concurrency = 8) {
+    const list = Array.isArray(paths) ? paths : [];
+    const out = new Array(list.length).fill(null);
+    let cursor = 0;
+    async function consume() {
+        while (cursor < list.length) {
+            const index = cursor++;
+            try {
+                await fs.promises.access(list[index]);
+                out[index] = list[index];
+            } catch (err) {}
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) || 1 }, consume));
+    return out.filter(Boolean);
 }
 
 async function initializeExplorer() {
@@ -785,7 +879,7 @@ async function initializeExplorer() {
             trackedLibraryRoots = mergeTrackedRoots(trackedLibraryRoots, [persistentRoot]);
         }
 
-        const existingSavedPaths = savedPaths.filter(p => fs.existsSync(p));
+        const existingSavedPaths = await filterExistingPathsAsync(savedPaths);
         manualCuesDB = await ipcRenderer.invoke('lib-get-db-tracks', existingSavedPaths);
 
         const dbTracks = [];
@@ -794,7 +888,7 @@ async function initializeExplorer() {
         }
         
         workQueueTracks = dbTracks;
-        initFuseEngine();
+        rebuildSearchIndex();
         applyCurrentSearchAndRender();
 
     } catch(e) {}
@@ -1029,7 +1123,7 @@ async function processPathsMassively(pathsArray) {
     document.getElementById('import-status-text').innerText = i18n.t('library.dynamic.import_reading') || "Leyendo datos guardados de estas pistas...";
     const scannedPaths = allExtractedFiles.map(file => file.path);
     const scopedDb = await ipcRenderer.invoke('lib-get-db-tracks', scannedPaths);
-    manualCuesDB = { ...manualCuesDB, ...(scopedDb || {}) };
+    Object.assign(manualCuesDB, scopedDb || {});
 
     let processed = 0;
     const trackIndexByPath = new Map(workQueueTracks.map((track, index) => [track.fullPath, index]));
@@ -1071,7 +1165,7 @@ async function processPathsMassively(pathsArray) {
                 }
             }
             document.getElementById('import-modal').style.display = 'none';
-            initFuseEngine();
+            rebuildSearchIndex();
             applyCurrentSearchAndRender();
             saveLibSession();
         }
@@ -1094,9 +1188,16 @@ window.selectRootFolder = async function() {
     } catch(err) {}
 }
 
-function initFuseEngine() {
-    const options = { keys: [ { name: 'title', weight: 0.38 }, { name: 'artist', weight: 0.24 }, { name: 'genre', weight: 0.16 }, { name: 'artistCountry', weight: 0.10 }, { name: 'fullPath', weight: 0.12 } ], threshold: 0.3, ignoreLocation: true, useExtendedSearch: true };
-    fuseEngine = new Fuse(workQueueTracks, options);
+function rebuildSearchIndex() {
+    searchIndexByPath = new Map(workQueueTracks.map(track => [track.fullPath, track]));
+    const records = workQueueTracks.map(toSearchRecord);
+    const worker = getSearchWorker();
+    if (worker) {
+        worker.postMessage({ type: 'index', tracks: records });
+        fallbackSearchSession = null;
+    } else {
+        fallbackSearchSession = librarySearchShared.createSearchSession(records);
+    }
 }
 
 function handleSortClick(colId) {
@@ -1283,7 +1384,7 @@ window.addEventListener('keydown', (e) => {
             selectedPaths.clear();
             lastSelectedPath = null;
             filteredTracks = [...workQueueTracks];
-            initFuseEngine();
+            rebuildSearchIndex();
             applySortingAndRender();
             saveLibSession();
         }
@@ -1658,13 +1759,9 @@ function finishAnalysisUI(wasCancelled) {
     renderVirtualQueue();
 }
 
-document.getElementById('lib-search-input').addEventListener('input', (e) => {
+document.getElementById('lib-search-input').addEventListener('input', () => {
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-        const query = e.target.value.trim();
-        if (!query) { filteredTracks = [...workQueueTracks]; applySortingAndRender(); return; }
-        if (fuseEngine) { const results = fuseEngine.search(query); filteredTracks = results.map(r => r.item); applySortingAndRender(); }
-    }, 300);
+    searchTimeout = setTimeout(() => { applyCurrentSearchAndRender(); }, 300);
 });
 
 window.saveLibraryList = async function() {
@@ -1688,9 +1785,9 @@ window.clearWorkQueue = async function() {
 ipcRenderer.on('refresh-manual-cues', async () => {
     const paths = workQueueTracks.map(track => track.fullPath).filter(Boolean);
     const scopedDb = await ipcRenderer.invoke('lib-get-db-tracks', paths);
-    manualCuesDB = { ...manualCuesDB, ...(scopedDb || {}) };
+    Object.assign(manualCuesDB, scopedDb || {});
     workQueueTracks = workQueueTracks.map(track => buildQueueTrack(track.fullPath, manualCuesDB[track.fullPath] || {}, track));
-    initFuseEngine();
+    rebuildSearchIndex();
     applyCurrentSearchAndRender();
 });
 

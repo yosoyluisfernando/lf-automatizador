@@ -15,6 +15,11 @@ const { redactSensitiveText, rotateLogIfNeeded, scrubLogFile } = require('./back
 const { resolveFfmpegRuntime } = require('./backend/utils/ffmpeg_resolver');
 const { verifyMicrosoftAuthenticode } = require('./backend/utils/windows_authenticode');
 const {
+  getTrackFileSignature,
+  storeTrackFileSignature,
+  mapTrackRowToClient
+} = require('./backend/services/track_mapper.js');
+const {
   _injectDeps: artists_injectDeps,
   PROTECTED_ARTIST_GROUP_NAMES,
   normalizeArtistGroupKey,
@@ -327,10 +332,23 @@ function runLibraryWorkerTask(action, payload) {
     });
 }
 
+// Envío seguro a una BrowserWindow desde callbacks asíncronos (workers,
+// timers, promesas). Los workers pueden emitir DESPUÉS de que el usuario cerró
+// la ventana destino: enviar a una ventana destruida lanza "Object has been
+// destroyed" como excepción no capturada y tumba el proceso principal con el
+// diálogo de error de Electron. Toda emisión asíncrona debe pasar por aquí.
+function sendToWindowSafe(win, channel, payload) {
+    try {
+        if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+            win.webContents.send(channel, payload);
+        }
+    } catch (err) {}
+}
+
 function broadcastAnalyzerResult(result) {
-    if (libraryWindow) libraryWindow.webContents.send('analyzer-done', result);
-    if (audioEditorWindow) audioEditorWindow.webContents.send('analyzer-done', result);
-    if (mainWindow) mainWindow.webContents.send('analyzer-done', result);
+    sendToWindowSafe(libraryWindow, 'analyzer-done', result);
+    sendToWindowSafe(audioEditorWindow, 'analyzer-done', result);
+    sendToWindowSafe(mainWindow, 'analyzer-done', result);
 }
 
 function stopAudioAnalysisWorker() {
@@ -382,7 +400,7 @@ function startMetadataWorker(mode, tasks) {
     metadataWorker.on('message', (message) => {
         if (message?.type === 'result') {
             const channel = message.mode === 'write' ? 'meta-local-write-done' : 'meta-local-read-done';
-            if (libraryWindow) libraryWindow.webContents.send(channel, message.payload);
+            sendToWindowSafe(libraryWindow, channel, message.payload);
         } else if (message?.type === 'finished') {
             stopMetadataWorker();
         }
@@ -411,7 +429,7 @@ function startMetaNetWorker(tasks) {
     metaNetWorker = new Worker(path.join(__dirname, 'backend', 'meta_net_worker.js'));
     metaNetWorker.on('message', (message) => {
         if (message?.type === 'result') {
-            if (libraryWindow) libraryWindow.webContents.send('meta-net-done', message.payload);
+            sendToWindowSafe(libraryWindow, 'meta-net-done', message.payload);
         } else if (message?.type === 'finished') {
             stopMetaNetWorker();
         }
@@ -702,7 +720,7 @@ async function initializeCurationFromConfiguredRoot() {
             }
         }
 
-        if (mainWindow) mainWindow.webContents.send('refresh-manual-cues');
+        sendToWindowSafe(mainWindow, 'refresh-manual-cues');
         
         return {
             success: true,
@@ -1055,158 +1073,10 @@ function writeLog(msg) {
     }
 }
 
-const updateTrackFileSignatureStmt = db.prepare(`
-    UPDATE tracks
-    SET file_size = ?, file_mtime_ms = ?
-    WHERE file_path = ?
-`);
+// getTrackFileSignature, storeTrackFileSignature y mapTrackRowToClient ahora
+// viven en backend/services/track_mapper.js, compartidos con library_worker.js
+// para que la carga masiva de pistas corra fuera del proceso principal.
 
-function getTrackFileSignature(filePath) {
-    try {
-        const stats = fs.statSync(filePath);
-        if (!stats.isFile()) return null;
-        return {
-            fileSize: Number(stats.size) || 0,
-            fileMtimeMs: Math.round(Number(stats.mtimeMs) || 0)
-        };
-    } catch (err) {
-        return null;
-    }
-}
-
-function storeTrackFileSignature(filePath, signature = null) {
-    const safeSignature = signature || getTrackFileSignature(filePath);
-    if (!safeSignature) return null;
-    try {
-        updateTrackFileSignatureStmt.run(safeSignature.fileSize, safeSignature.fileMtimeMs, filePath);
-    } catch (err) {}
-    return safeSignature;
-}
-
-function sanitizeChangedTrackData(trackData) {
-    if (!trackData || trackData.fileChanged !== true) return trackData;
-    return {
-        ...trackData,
-        inicio: null,
-        intro: null,
-        mix: null,
-        outro: null,
-        fin: null,
-        p1_active: false,
-        p1_time: null,
-        p2_active: false,
-        p2_time: null,
-        p3_active: false,
-        p3_time: null,
-        p4_active: false,
-        p4_time: null,
-        phora_active: false,
-        phora_time: null,
-        db: null,
-        peak_db: null,
-        bpm: null,
-        duration: null
-    };
-}
-
-function mapTrackRowToClient(row, artistCountryLookup = null, options = {}) {
-    if (!row) return null;
-    // deferSignature: si es true, NO llama fs.statSync() y usa los valores almacenados en la BD.
-    // Esto evita ~1,912 llamadas sync al disco al cargar la librería completa.
-    const deferSignature = options.deferSignature === true;
-    const includeSignature = !deferSignature && options.includeSignature !== false;
-    const signature = includeSignature ? getTrackFileSignature(row.file_path) : null;
-    const storedFileSize = Number.isFinite(Number(row.file_size)) ? Number(row.file_size) : null;
-    const storedFileMtimeMs = Number.isFinite(Number(row.file_mtime_ms)) ? Math.round(Number(row.file_mtime_ms)) : null;
-    let effectiveSignature = signature;
-    let fileChanged = false;
-
-    if (includeSignature && signature && (storedFileSize === null || storedFileMtimeMs === null)) {
-        storeTrackFileSignature(row.file_path, signature);
-    } else if (includeSignature && signature && storedFileSize !== null && storedFileMtimeMs !== null) {
-        fileChanged = storedFileSize !== signature.fileSize || storedFileMtimeMs !== signature.fileMtimeMs;
-    }
-
-    if (!effectiveSignature) {
-        effectiveSignature = {
-            fileSize: storedFileSize,
-            fileMtimeMs: storedFileMtimeMs
-        };
-    }
-
-    let artistCountry = '';
-    let artistCountryCode = '';
-    try {
-        const artistCountryRow = artistCountryLookup instanceof Map
-            ? artistCountryLookup.get(row.file_path)
-            : selectMainArtistCountryStmt.get(row.file_path);
-        artistCountry = artistCountryRow?.country || '';
-        artistCountryCode = artistCountryRow?.countryCode || '';
-    } catch (err) {}
-
-    const normalizedArtists = normalizeTrackArtistFields(row.custom_artist, row.custom_title, row.feat);
-    const inferredArtists = inferArtistDataFromRow(row);
-    const finalArtist = inferredArtists.artist || normalizedArtists.artist || row.custom_artist;
-    const finalFeats = filterInternalGroupFeats(finalArtist, [...new Set([
-        ...(normalizedArtists.feats || []),
-        ...(inferredArtists.feats || [])
-    ].map(toDisplayArtist).filter(Boolean))]);
-    const hadStoredFeats = parseFeatList(row.feat).length > 0;
-
-    return sanitizeChangedTrackData({
-        customTitle: row.custom_title,
-        customArtist: finalArtist,
-        feat: finalFeats.length > 0 ? JSON.stringify(finalFeats) : (hadStoredFeats ? null : row.feat),
-        is_remix: row.is_remix,
-        album: row.album,
-        year: row.year,
-        genre: row.genre,
-        inicio: row.inicio,
-        intro: row.intro,
-        mix: row.mix,
-        outro: row.outro,
-        fin: row.fin,
-        p1_active: row.p1_active === 1,
-        p1_mode: row.p1_mode,
-        p1_time: row.p1_time,
-        p1_file: row.p1_file,
-        p1_options: row.p1_options,
-        p2_active: row.p2_active === 1,
-        p2_mode: row.p2_mode,
-        p2_time: row.p2_time,
-        p2_file: row.p2_file,
-        p2_options: row.p2_options,
-        p3_active: row.p3_active === 1,
-        p3_mode: row.p3_mode,
-        p3_time: row.p3_time,
-        p3_file: row.p3_file,
-        p3_options: row.p3_options,
-        p4_active: row.p4_active === 1,
-        p4_mode: row.p4_mode,
-        p4_time: row.p4_time,
-        p4_file: row.p4_file,
-        p4_options: row.p4_options,
-        phora_active: row.phora_active === 1,
-        phora_mode: row.phora_mode,
-        phora_time: row.phora_time,
-        db: row.db,
-        peak_db: row.peak_db,
-        bpm: row.bpm,
-        duration: row.duration,
-        primaryGenre: row.primary_genre,
-        subgenre: row.subgenre,
-        artistCountry,
-        artistCountryCode,
-        genresJson: row.genres_json,
-        genreSource: row.genre_source,
-        genreConfidence: row.genre_confidence,
-        folderGenrePath: row.folder_genre_path,
-        isUnusualGenre: row.is_unusual_genre === 1,
-        fileSize: effectiveSignature?.fileSize ?? null,
-        fileMtimeMs: effectiveSignature?.fileMtimeMs ?? null,
-        fileChanged
-    });
-}
 
 const readTagsAsync = (file) => new Promise(resolve => nodeID3.read(file, (err, tags) => resolve(tags || {})));
 const writeTagsAsync = (tags, file) => new Promise(resolve => nodeID3.update(tags, file, (err) => resolve(!err)));
@@ -1233,14 +1103,6 @@ function canReadFileBytes(filePath) {
 
 
 const selectTrackByPathStmt = db.prepare("SELECT * FROM tracks WHERE file_path = ?");
-const selectMainArtistCountryStmt = db.prepare(`
-    SELECT ap.country, ap.country_code AS countryCode
-    FROM track_artist_links tal
-    JOIN artist_profiles ap ON ap.artist_key = tal.artist_key
-    WHERE tal.file_path = ? AND tal.role = 'main'
-    ORDER BY tal.position
-    LIMIT 1
-`);
 const upsertTrackAnalysisForceStmt = db.prepare(`INSERT INTO tracks (file_path, db, peak_db, mix, fin, inicio, duration, file_size, file_mtime_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_path) DO UPDATE SET db=excluded.db, peak_db=excluded.peak_db, mix=excluded.mix, fin=excluded.fin, inicio=excluded.inicio, duration=excluded.duration, file_size=excluded.file_size, file_mtime_ms=excluded.file_mtime_ms`);
 const upsertTrackAnalysisFillStmt = db.prepare(`INSERT INTO tracks (file_path, db, peak_db, mix, fin, inicio, duration, file_size, file_mtime_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_path) DO UPDATE SET db=COALESCE(NULLIF(tracks.db, ''), excluded.db), peak_db=COALESCE(NULLIF(tracks.peak_db, ''), excluded.peak_db), mix=COALESCE(NULLIF(tracks.mix, ''), excluded.mix), fin=COALESCE(NULLIF(tracks.fin, ''), excluded.fin), inicio=COALESCE(NULLIF(tracks.inicio, ''), excluded.inicio), duration=excluded.duration, file_size=excluded.file_size, file_mtime_ms=excluded.file_mtime_ms`);
 const upsertLocalMetaForceStmt = db.prepare(`INSERT INTO tracks (file_path, custom_title, custom_artist, feat, is_remix, album, year, genre, file_size, file_mtime_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_path) DO UPDATE SET custom_title = excluded.custom_title, custom_artist = excluded.custom_artist, feat = excluded.feat, is_remix = excluded.is_remix, album = excluded.album, year = excluded.year, genre = excluded.genre, file_size = excluded.file_size, file_mtime_ms = excluded.file_mtime_ms`);
@@ -1994,8 +1856,8 @@ async function autofillArtistProfilesFromCatalog(payload = {}) {
         }
     }
 
-    if (mainWindow) mainWindow.webContents.send('refresh-manual-cues');
-    if (libraryWindow) libraryWindow.webContents.send('refresh-manual-cues');
+    sendToWindowSafe(mainWindow, 'refresh-manual-cues');
+    sendToWindowSafe(libraryWindow, 'refresh-manual-cues');
     if (artistCatalogWindow && !artistCatalogWindow.isDestroyed()) artistCatalogWindow.webContents.send('artist-catalog-updated');
     return { success: true, total, updated, failed, withPhoto, details };
 }
@@ -2097,15 +1959,11 @@ async function processNextInQueue() {
         const updatedRow = selectTrackByPathStmt.get(filePath);
         const mappedTrack = mapTrackRowToClient(updatedRow) || {};
         const result = { success: true, filePath, data: { db: mappedTrack.db, peak_db: mappedTrack.peak_db, mix: mappedTrack.mix, fin: mappedTrack.fin, inicio: mappedTrack.inicio, fileChanged: mappedTrack.fileChanged } };
-        if (libraryWindow) libraryWindow.webContents.send('analyzer-done', result);
-        if (audioEditorWindow) audioEditorWindow.webContents.send('analyzer-done', result);
-        if (mainWindow) mainWindow.webContents.send('analyzer-done', result);
-    } catch (ex) { 
-        writeLog(`Error FFmpeg async ${path.basename(filePath)}: ${ex.message}`); 
+        broadcastAnalyzerResult(result);
+    } catch (ex) {
+        writeLog(`Error FFmpeg async ${path.basename(filePath)}: ${ex.message}`);
         const errPayload = { success: false, filePath, data: null, error: ex.message };
-        if (libraryWindow) libraryWindow.webContents.send('analyzer-done', errPayload);
-        if (audioEditorWindow) audioEditorWindow.webContents.send('analyzer-done', errPayload);
-        if (mainWindow) mainWindow.webContents.send('analyzer-done', errPayload);
+        broadcastAnalyzerResult(errPayload);
     } finally { activeWorkers--; processNextInQueue(); }
 }
 function timeToSeconds(timeStr) { const parts = timeStr.split(':'); return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]); }
@@ -2148,9 +2006,9 @@ async function processNextMetaLocal() {
         const updatedRow = selectTrackByPathStmt.get(task.filePath);
         syncTrackArtistLinksFromRow(updatedRow);
         const updated = mapTrackRowToClient(updatedRow);
-        if (libraryWindow) libraryWindow.webContents.send('meta-local-read-done', { success: true, filePath: task.filePath, data: updated });
+        sendToWindowSafe(libraryWindow, 'meta-local-read-done', { success: true, filePath: task.filePath, data: updated });
     } catch (err) {
-        if (libraryWindow) libraryWindow.webContents.send('meta-local-read-done', { success: false, filePath: task.filePath });
+        sendToWindowSafe(libraryWindow, 'meta-local-read-done', { success: false, filePath: task.filePath });
     }
     activeMetaLocalWorkers--;
     processNextMetaLocal();
@@ -2171,7 +2029,7 @@ async function processNextMetaWrite() {
     const filePath = metaWriteQueue.shift();
     try {
         if (!canReadFileBytes(filePath)) {
-            if (libraryWindow) libraryWindow.webContents.send('meta-local-write-done', { success: false, filePath: filePath });
+            sendToWindowSafe(libraryWindow, 'meta-local-write-done', { success: false, filePath: filePath });
             activeMetaWriteWorkers--;
             processNextMetaWrite();
             return;
@@ -2196,9 +2054,9 @@ async function processNextMetaWrite() {
             if (Object.keys(tags).length > 0) await writeTagsAsync(tags, filePath);
             storeTrackFileSignature(filePath);
         }
-        if (libraryWindow) libraryWindow.webContents.send('meta-local-write-done', { success: true, filePath: filePath });
+        sendToWindowSafe(libraryWindow, 'meta-local-write-done', { success: true, filePath: filePath });
     } catch (err) {
-        if (libraryWindow) libraryWindow.webContents.send('meta-local-write-done', { success: false, filePath: filePath });
+        sendToWindowSafe(libraryWindow, 'meta-local-write-done', { success: false, filePath: filePath });
     }
     activeMetaWriteWorkers--;
     processNextMetaWrite();
@@ -2701,7 +2559,14 @@ ipcMain.handle('wizard:installVcRedist', async () => {
 
     return new Promise((resolve) => {
         try {
-            const child = cp.spawn(exePath, ['/install', '/quiet', '/norestart'], {
+            // vc_redist instala DLLs de sistema y SIEMPRE requiere elevación.
+            // Lanzarlo con spawn() directo + /quiet nunca muestra el aviso de
+            // UAC: en una sesión sin administrador falla en silencio y el único
+            // remedio del usuario era ejecutar TODA la app como administrador.
+            // Start-Process -Verb RunAs eleva únicamente al instalador del
+            // redistributable (UAC puntual), que es lo que la UI promete.
+            const psCommand = `try { $p = Start-Process -FilePath '${exePath}' -ArgumentList '/install','/quiet','/norestart' -Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit 1223 }`;
+            const child = cp.spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psCommand], {
                 detached: false,
                 stdio: 'ignore',
                 windowsHide: true
@@ -2709,12 +2574,17 @@ ipcMain.handle('wizard:installVcRedist', async () => {
             child.on('exit', (code) => {
                 cleanupStaging();
                 // 0 = ok, 1638 = ya hay version mas reciente, 3010 = ok pero requiere reinicio
+                // 1223 = el usuario rechazo el aviso de UAC (ERROR_CANCELLED)
                 const success = code === 0 || code === 1638 || code === 3010;
                 resolve({
                     ok: success,
                     exitCode: code,
                     rebootRequired: code === 3010,
-                    error: success ? null : `vc_redist.x64.exe devolvio codigo ${code}`
+                    error: success
+                        ? null
+                        : (code === 1223
+                            ? 'El usuario cancelo el aviso de permisos de administrador (UAC).'
+                            : `vc_redist.x64.exe devolvio codigo ${code}`)
                 });
             });
             child.on('error', (err) => {

@@ -1,4 +1,5 @@
 const { renameFilePreservingExtension } = require('../file_operations');
+const { getDbTracksMap } = require('../services/track_mapper.js');
 
 module.exports = function(context) {
     const {
@@ -98,32 +99,22 @@ ipcMain.handle('lib-get-full-db', (e, options = {}) => {
     } catch(err) { writeLog("Error get-full-db: " + err); return {}; }
 });
 
-ipcMain.handle('lib-get-db-tracks', (e, paths, options = {}) => {
+ipcMain.handle('lib-get-db-tracks', async (e, paths, options = {}) => {
     if (!db) return {};
     try {
         const safePaths = Array.isArray(paths) ? [...new Set(paths.filter(Boolean))] : [];
         if (safePaths.length === 0) return {};
-        // Carga por lotes: diferir verificación de firma al disco
-        const deferSignature = options?.deferSignatures !== false;
-        const cuesDB = {};
-
-        for (let i = 0; i < safePaths.length; i += 500) {
-            const chunk = safePaths.slice(i, i + 500);
-            const placeholders = chunk.map(() => '?').join(',');
-            const rows = db.prepare(`SELECT * FROM tracks WHERE file_path IN (${placeholders})`).all(...chunk);
-            const countryRows = db.prepare(`
-                SELECT tal.file_path AS filePath, ap.country, ap.country_code AS countryCode
-                FROM track_artist_links tal
-                JOIN artist_profiles ap ON ap.artist_key = tal.artist_key
-                WHERE tal.role = 'main' AND tal.file_path IN (${placeholders})
-            `).all(...chunk);
-            const artistCountryLookup = new Map(countryRows.map(row => [row.filePath, row]));
-            rows.forEach(row => {
-                cuesDB[row.file_path] = mapTrackRowToClient(row, artistCountryLookup, { deferSignature });
-            });
-        }
-
-        return cuesDB;
+        // La consulta y el mapeo corren en library_worker (hilo aparte con su
+        // propia conexión SQLite): con miles de rutas tarda segundos y, si
+        // corriera aquí, bloquearía el event loop del proceso principal — todas
+        // las ventanas se congelan y el puente con RustAudio deja de leer las
+        // respuestas del motor (falsos "Timeout esperando respuesta RustAudio").
+        const result = await runLibraryWorkerTask('lib-get-db-tracks', { paths: safePaths, options });
+        if (result?.success) return result.cuesDB || {};
+        // Red de seguridad: si el worker falló, resolvemos en el proceso
+        // principal con la misma lógica compartida.
+        writeLog("lib-get-db-tracks: worker fallo (" + (result?.error || 'sin detalle') + "); usando proceso principal.");
+        return getDbTracksMap(safePaths, options);
     } catch (err) {
         writeLog("Error get-db-tracks: " + err);
         return {};

@@ -2793,9 +2793,22 @@ function resetPlaybackGuard() {
 function triggerPlaybackGuardRecovery(reason) {
     const now = Date.now();
     if (now < playbackGuard.cooldownUntil) return;
-    playbackGuard.cooldownUntil = now + PLAYBACK_GUARD_COOLDOWN_MS;
+    playbackGuard.staleRecoveries = (playbackGuard.staleRecoveries || 0) + 1;
+    const attempt = playbackGuard.staleRecoveries;
+    // Backoff exponencial (6s, 12s, 24s... tope 60s): si el disco está saturado,
+    // relanzar la pista cada 6s fijos le exige nuevas lecturas al disco que ya
+    // no da abasto y produce el "disco rayado" (repite el mismo segundo).
+    playbackGuard.cooldownUntil = now + Math.min(PLAYBACK_GUARD_COOLDOWN_MS * Math.pow(2, attempt - 1), 60000);
     setIncidentStatus('air', i18n.t('incidents.air_recovering'), 'warn');
-    recordIncident(`[GUARDIA AIRE] ${reason}. Intentando recuperar...`, { category: 'guard', level: 'warn', autoAction: true });
+    recordIncident(`[GUARDIA AIRE] ${reason}. Intentando recuperar (intento ${attempt})...`, { category: 'guard', level: 'warn', autoAction: true });
+    // Escalada: tras 3 recuperaciones sin que el reloj avance, relanzar la misma
+    // pista ya demostró no funcionar (archivo ilegible o sector lento). Saltar a
+    // la siguiente pista da una fuente de datos distinta en vez de quedar en bucle.
+    if (attempt >= 3 && currentPlayingRow && document.body.contains(currentPlayingRow)) {
+        recordIncident('[GUARDIA AIRE] La pista al aire no avanzó tras varios intentos de recuperación. Saltando a la siguiente pista.', { category: 'guard', level: 'error', autoAction: true });
+        setTimeout(() => { try { playNext(false); } catch (err) {} }, 250);
+        return;
+    }
     if (currentPlayingRow && document.body.contains(currentPlayingRow) && generalPrefs.modeRepeatTrack) {
         const meta = getPlayerPlaybackMeta(activePlayer) || {};
         const finActivo = parseFiniteCueValue(meta.playbackEndAbsolute);
@@ -3275,6 +3288,7 @@ function runPlaybackGuard() {
     if (!isPlayerClockPaused(activePlayer) && currentTime > playbackGuard.lastTimeValue + 0.05) {
         playbackGuard.lastTimeValue = currentTime;
         playbackGuard.lastAdvanceAt = now;
+        playbackGuard.staleRecoveries = 0; // hubo avance real: la escalera de recuperación vuelve a cero
         return;
     }
 
@@ -3320,7 +3334,9 @@ async function ensureDbTracksLoaded(paths) {
     if (safePaths.length === 0) return;
     try {
         const scoped = await ipcRenderer.invoke('lib-get-db-tracks', safePaths, { includeSignatures: false });
-        manualCuesDB = { ...manualCuesDB, ...(scoped || {}) };
+        // Mezcla en sitio: clonar manualCuesDB (decenas de miles de claves) en
+        // el hilo de la UI cada vez producía pausas justo antes de salir al aire.
+        Object.assign(manualCuesDB, scoped || {});
     } catch (err) { }
 }
 
@@ -3755,7 +3771,7 @@ ipcRenderer.on('refresh-manual-cues', async () => {
         .filter(Boolean);
     if (playlistPaths.length > 0) {
         const scoped = await ipcRenderer.invoke('lib-get-db-tracks', playlistPaths, { includeSignatures: false });
-        manualCuesDB = { ...manualCuesDB, ...(scoped || {}) };
+        Object.assign(manualCuesDB, scoped || {});
     }
     document.querySelectorAll('.playlist-table tr').forEach(tr => {
         const ruta = tr.dataset.ruta;
@@ -3999,7 +4015,11 @@ let lastProgramPeakPercent = 0;
 let lastTimeUiRenderAt = 0;
 let lastVuIpcSentAt = 0;
 let lastVuDiagnosticsIpcSentAt = 0;
-let playbackGuard = { lastAdvanceAt: 0, lastTimeValue: 0, cooldownUntil: 0, activeToken: '' };
+// staleRecoveries cuenta recuperaciones consecutivas SIN avance real del reloj.
+// Solo se reinicia cuando la reproducción progresa de verdad (runPlaybackGuard)
+// — no al relanzar la pista — para poder escalar: reintentar, luego saltar de
+// pista, siempre con espera creciente para no castigar un disco ya saturado.
+let playbackGuard = { lastAdvanceAt: 0, lastTimeValue: 0, cooldownUntil: 0, activeToken: '', staleRecoveries: 0 };
 let randomBagsCache = {};
 let ignoredEventTriggers = [];
 const EVENT_PREFLIGHT_WINDOW_SECONDS = 15 * 60;
@@ -12295,7 +12315,7 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         if (!manualCuesDB[rutaFisica] || manualCuesDB[rutaFisica].is_remix === undefined) {
             try {
                 const scoped = await ipcRenderer.invoke('lib-get-db-tracks', [rutaFisica], { includeSignatures: false });
-                manualCuesDB = { ...manualCuesDB, ...(scoped || {}) };
+                Object.assign(manualCuesDB, scoped || {});
             } catch (err) { }
             if (currentSessionId !== playRowSessionId) return;
         }

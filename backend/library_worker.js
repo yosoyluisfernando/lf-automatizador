@@ -1,6 +1,7 @@
 const { parentPort } = require('worker_threads');
 const path = require('path');
 const db = require('../database');
+const { getDbTracksMap } = require('./services/track_mapper.js');
 const { getConfigDir } = require('./utils/app_paths');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
@@ -741,6 +742,12 @@ function getArtistCardDetailsForTrackPath(filePath) {
 
 async function runTask(action, payload) {
     if (action === 'clockwheel-build-plan') return { success: true, plan: buildClockwheelPlan(payload || {}) };
+    if (action === 'lib-get-db-tracks') {
+        // Carga masiva fuera del proceso principal: con miles de rutas, estas
+        // consultas (más el mapeo por fila) tardan segundos y, si corrieran en
+        // main, congelarían todas las ventanas y el puente con RustAudio.
+        return { success: true, cuesDB: getDbTracksMap(payload?.paths, payload?.options || {}) };
+    }
     if (action === 'lib-rebuild-artist-profiles') {
         const safePaths = Array.isArray(payload) ? payload.filter(Boolean) : null;
         return { success: true, ...rebuildArtistProfilesForPaths(safePaths) };
