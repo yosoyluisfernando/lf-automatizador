@@ -54,11 +54,77 @@ function writeJsonConfig(fsApi, filePath, payload) {
     }
 }
 
+// Lectura acotada de tags. node-id3 con una ruta hace fs.readFileSync del
+// ARCHIVO COMPLETO solo para parsear la cabecera ID3v2, que declara su propio
+// tamaño en los primeros 10 bytes. Medido en biblioteca real: ~580 MB leídos
+// por cada 50 canciones (~12 MB por archivo); la indexación era, literalmente,
+// leer toda la música byte a byte. Aquí se localiza la cabecera con la misma
+// validación que usa node-id3 (marca "ID3", versión 2/3/4, revisión 0, tamaño
+// syncsafe) y se lee únicamente el tag declarado.
+//  - Camino rápido: cabecera en el byte 0 (la posición estándar; ~99% de los mp3).
+//  - Respaldo: escaneo del primer MB para archivos con basura antes del tag.
+//  - Diferencia aceptada vs. node-id3: tags incrustados más allá del primer MB
+//    (p. ej. chunks ID3 al FINAL de un wav) ya no se detectan; ese caso era
+//    justamente el que obligaba a leer archivos gigantes completos.
+const TAG_SCAN_WINDOW_BYTES = 1024 * 1024;
+const TAG_MAX_BYTES = 64 * 1024 * 1024;
+
+function decodeSyncsafeSize(buffer, offset) {
+    return ((buffer[offset] & 0x7f) << 21)
+        | ((buffer[offset + 1] & 0x7f) << 14)
+        | ((buffer[offset + 2] & 0x7f) << 7)
+        | (buffer[offset + 3] & 0x7f);
+}
+
+function findId3v2Header(buffer) {
+    let position = -1;
+    while (true) {
+        position = buffer.indexOf('ID3', position + 1);
+        if (position === -1 || position + 10 > buffer.length) return null;
+        const major = buffer[position + 3];
+        const revision = buffer[position + 4];
+        const sizeBits = buffer[position + 6] | buffer[position + 7] | buffer[position + 8] | buffer[position + 9];
+        if ((major === 2 || major === 3 || major === 4) && revision === 0x00 && (sizeBits & 0x80) === 0) {
+            return { position, tagSize: decodeSyncsafeSize(buffer, position + 6) };
+        }
+    }
+}
+
 function readTags(filePath) {
+    let fd = null;
     try {
-        return nodeID3.read(filePath) || {};
+        fd = fs.openSync(filePath, 'r');
+        const fileSize = Number(fs.fstatSync(fd).size) || 0;
+        if (fileSize < 10) return {};
+
+        // Camino rápido: cabecera exactamente al inicio del archivo.
+        const head = Buffer.alloc(10);
+        fs.readSync(fd, head, 0, 10, 0);
+        let header = findId3v2Header(head);
+        let scanned = null;
+
+        if (!header) {
+            // Respaldo: buscar la cabecera dentro de la ventana inicial.
+            const windowSize = Math.min(fileSize, TAG_SCAN_WINDOW_BYTES);
+            scanned = Buffer.alloc(windowSize);
+            fs.readSync(fd, scanned, 0, windowSize, 0);
+            header = findId3v2Header(scanned);
+            if (!header) return {};
+        }
+
+        const needed = Math.min(header.position + 10 + header.tagSize, fileSize, TAG_MAX_BYTES);
+        let tagBuffer = scanned && scanned.length >= needed ? scanned : null;
+        if (!tagBuffer) {
+            tagBuffer = Buffer.alloc(needed);
+            fs.readSync(fd, tagBuffer, 0, needed, 0);
+        }
+        return nodeID3.read(tagBuffer) || {};
     } catch (err) {
         return {};
+    } finally {
+        if (fd !== null) {
+            try { fs.closeSync(fd); } catch (err) {}
+        }
     }
 }
 

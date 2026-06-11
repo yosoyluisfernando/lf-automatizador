@@ -91,7 +91,31 @@ Por decisión del operador, la rama `codex/respaldo-auditoria-eventos` (v0.9.15)
 
 Verificado bajo Electron con la base real de esta máquina: estado (1938 pistas, 3 raíces), búsqueda con query, y sync completo con 9 eventos de progreso. Suite completa: 245 tests, 0 fallos (los 3 que fallaban antes del merge eran de módulos de esta rama y ya pasan).
 
-## 6. Pendiente / recomendaciones
+## 6. Telemetría real y lectura acotada de tags (2026-06-11, tarde)
+
+Tras el reporte del operador ("la segunda carpeta avanza más lento de 50 en 50"), se corrió una telemetría instrumentada sobre el código real con las dos carpetas reales (`D:\Music`, 1,911 pistas; `D:\Mis musicas`, 15,252 pistas), midiendo por lote de 50: tiempo total, tiempo de `stat`, tiempo y **bytes** de lectura de tags.
+
+### Hallazgo (medido, no estimado)
+
+`node-id3.read(ruta)` hace `fs.readFileSync` del **archivo completo** solo para parsear la cabecera ID3v2, que declara su propio tamaño en los primeros 10 bytes. Telemetría "antes": **~470–630 MB leídos por cada lote de 50 canciones** (~10–12 MB por archivo), con `tagMs` ≈ 98% del tiempo del lote. Indexar era, literalmente, leer toda la biblioteca byte a byte (~22 GB para 1,911 pistas).
+
+Esto también explica la diferencia entre carpetas que percibió el operador: la velocidad por lote es proporcional al tamaño de los archivos y a si Windows ya los tenía en caché (D:\Music se había leído en pruebas anteriores; D:\Mis musicas estaba fría). En el banco limpio, ambas carpetas iban igual de lento.
+
+### Corrección de raíz
+
+`readTags` en `backend/services/library_index.js` ahora localiza la cabecera ID3v2 con la misma validación que node-id3 (marca, versión, tamaño syncsafe) y lee **únicamente el tag declarado**: camino rápido de 10 bytes si la cabecera está al inicio (el caso estándar), escaneo del primer MB como respaldo. Diferencia aceptada: tags incrustados más allá del primer MB (p. ej. al final de un wav) ya no se detectan — ese caso era el que obligaba a leer archivos gigantes completos.
+
+### Resultados (mismas carpetas, configuración limpia, mismo disco)
+
+| Métrica | Antes | Después |
+|---|---|---|
+| D:\Music (1,911) primera indexación | 292 s | **3.1 s** |
+| D:\Mis musicas (15,252) primera indexación | no terminó en 5.5 min (~300) | **224 s completa** |
+| Biblioteca completa (17,163) | ~35–40 min estimados | **3 min 47 s** |
+| I/O por lote de 50 | ~470–630 MB | ~0.2–30 MB |
+| Refrescar (sin cambios) | igual que primera vez | 0 lecturas de tags (corrección previa: reutiliza metadatos del índice si tamaño+fecha no cambiaron) |
+
+## 7. Pendiente / recomendaciones
 
 - ~~Rama 0.9.15~~: integrada y corregida (ver sección 5).
 - **Contención HDD (amplificador real)**: si tras estas correcciones persisten incidencias en discos mecánicos, el siguiente paso de raíz es priorizar I/O: pausar precargas de auxiliares/pre-escucha mientras el deck al aire llena su búfer inicial. No se implementó aquí porque el mecanismo dominante verificado era el bloqueo del main.
