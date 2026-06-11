@@ -115,7 +115,29 @@ Esto también explica la diferencia entre carpetas que percibió el operador: la
 | I/O por lote de 50 | ~470–630 MB | ~0.2–30 MB |
 | Refrescar (sin cambios) | igual que primera vez | 0 lecturas de tags (corrección previa: reutiliza metadatos del índice si tamaño+fecha no cambiaron) |
 
-## 7. Pendiente / recomendaciones
+## 7. INVESTIGACIÓN (sin implementar): bucle de audio de 1–3 s con disco saturado
+
+### Problema
+Cuando el disco se satura (antivirus, Windows Update, cualquier I/O pesado), el audio al aire se "congela" repitiendo un bucle de 1–3 segundos (efecto metralleta/disco rayado corto); a veces se recupera solo, a veces no.
+
+### Causa raíz (verificada en código, audio-engine-rust/src/main.rs)
+`load_audio_player` (línea ~2845) usa rodio con decodificación perezosa: `Decoder::try_from(File)` + `player.append`. El decoder lee del disco A MEDIDA que el mezclador le pide muestras, y el grafo del mezclador corre **dentro del callback de render de WASAPI** (confirmado por el propio código, línea ~580: el TapSource del bus FX "corre en el thread de audio"). Consecuencia: cuando el disco se bloquea, `File::read` bloquea el callback de WASAPI; el motor de audio de Windows se queda sin datos nuevos y repite el último buffer → el bucle audible. El manejo de underrun existente (línea ~2156: "buffer vacío → silencio") no aplica: cubre el caso "fuente vacía que responde", no el caso "hilo bloqueado en disco".
+
+Regla violada (la misma de toda esta investigación): el hilo de audio en tiempo real es como el hilo de UI — **jamás debe tocar el disco**.
+
+### Solución de raíz propuesta (plan de trabajo)
+1. **Precarga a RAM en `load`** (cambio principal, acotado): leer el archivo completo a memoria (~10 MB típico) y decodificar desde `Cursor<Vec<u8>>`. Tras el load, el disco puede morir y la pista al aire no se entera. La app ya precarga la siguiente pista con anticipación, así que el costo de lectura ocurre fuera del aire.
+2. **Tope de tamaño + camino streaming** para archivos gigantes (programas grabados de cientos de MB): hilo decodificador dedicado que llena un ring buffer rtrb (misma técnica que ya usa el encoder tap) con 5–10 s de PCM; el callback solo hace pop. Underrun → silencio (mecanismo existente) en vez de bucle.
+3. **Prioridades Windows** (10/11 Home/Pro/LTSC, sin diferencias por edición): subir la clase de prioridad del proceso del motor (ABOVE_NORMAL) y registrar el hilo de audio en MMCSS ("Pro Audio") para que el scheduler lo proteja cuando el sistema está cargado. No requiere admin.
+4. **Verificación**: telemetría como la de la sección 6 — reproducir con saturación de disco artificial (lecturas masivas concurrentes) y confirmar cero bucles; medir latencia de load antes/después.
+
+Orden sugerido: 1 → 4 → 3 → 2 (el 1 elimina el síntoma para el 99% de los casos; el 2 es el cierre completo).
+
+### Estado de compilación (¿listo para compilar en GitHub?)
+**Lo bueno:** el workflow CI está sólido y probado (builds verdes en los 3 pushes anteriores y el actual en progreso): tests, cargo test/check, rebuild nativo de better-sqlite3, checksums con atestación, instalador por-usuario sin admin, sin configuraciones personales, versión semver correcta.
+**Lo malo / pendiente:** (a) hay trabajo a medias sin commitear en el árbol local (paneles "DockManager": render.js, style.css, index.html, locales) cuya mitad de main.js sí viajó en un commit anterior — en el build publicado esos dos ítems de menú de orden de paneles no hacen nada y sus etiquetas pueden verse sin traducir; conviene terminar/commitear ese trabajo antes de taggear v0.9.16; (b) la firma de código solo se aplica en tags (correcto, pero el .exe de pushes normales queda sin firmar); (c) los tests no viajan al repo (tests/ git-ignorado) — CI los ejecuta como no-op, decisión consciente pero significa que el CI no corre la suite de regresión real.
+
+## 8. Pendiente / recomendaciones
 
 - ~~Rama 0.9.15~~: integrada y corregida (ver sección 5).
 - **Contención HDD (amplificador real)**: si tras estas correcciones persisten incidencias en discos mecánicos, el siguiente paso de raíz es priorizar I/O: pausar precargas de auxiliares/pre-escucha mientras el deck al aire llena su búfer inicial. No se implementó aquí porque el mecanismo dominante verificado era el bloqueo del main.
