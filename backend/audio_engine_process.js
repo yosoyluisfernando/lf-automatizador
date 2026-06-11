@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { getConfigDir } = require('./utils/app_paths');
 
 function resolveRustAudioEnginePath(rootDir) {
     const baseDir = path.resolve(rootDir);
@@ -75,7 +76,11 @@ class RustAudioEngineProbe {
         // Es el momento correcto para aplicar rutas de audio guardadas.
         this.onEngineReady = typeof onEngineReady === 'function' ? onEngineReady : null;
         this.exePath = resolveRustAudioEnginePath(this.rootDir);
-        this.reportPath = path.join(this.rootDir, 'config', 'audio_engine_report.jsonl');
+        // El reporte debe vivir en el directorio de configuración real: en la
+        // app empacada `rootDir` apunta dentro de app.asar (solo lectura), y
+        // escribir ahí falla en silencio — en producción se perdía todo el
+        // historial de diagnóstico del motor.
+        this.reportPath = path.join(getConfigDir(path.join(this.rootDir, 'config'), __dirname), 'audio_engine_report.jsonl');
         this.process = null;
         this.readline = null;
         this.pending = [];

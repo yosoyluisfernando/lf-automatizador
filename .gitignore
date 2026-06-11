@@ -44,6 +44,9 @@ build/vcredist/*.exe
 copiar.sh
 plan_reparacion_encoder.md
 
+# Respaldo temporal de la configuración personal del operador (pruebas en limpio)
+respaldo_config_personal/
+
 # Local editor and OS noise
 .DS_Store
 Thumbs.db
@@ -71,7 +74,10 @@ PLAN_GENERADOR_PLAYLIST.md
 tests/
 manual/
 docs/
-Documentación/
+# Documentación interna fuera del repo, EXCEPTO la guía de primer uso que el
+# menú de la app abre en instalaciones (debe viajar en el build de CI).
+Documentación/*
+!Documentación/guia_primer_uso.jpg
 error_log.txt
 ACTUALIZAR-MOTOR-STREAM.bat
 Radio.html

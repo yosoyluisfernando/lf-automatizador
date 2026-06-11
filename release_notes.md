@@ -1,3 +1,20 @@
+## 🚀 Novedades y Mejoras en la versión 0.9.16
+
+### ⚡ Rendimiento (discos mecánicos y bibliotecas grandes)
+* **Buscador sin congelamientos:** la búsqueda (interfaz principal y Biblioteca) ya no se ejecuta en el hilo de la interfaz: corre en un hilo de trabajo dedicado con índice precalculado. La ventana permanece fluida sin importar el tamaño de la biblioteca.
+* **Carga masiva fuera del proceso principal:** las consultas de pistas en lote se movieron a un worker; se acabaron los congelamientos globales al abrir la Biblioteca y los falsos "Timeout esperando respuesta RustAudio" que reiniciaban el motor de audio.
+* **Fin del "disco rayado":** el guardián de reproducción ahora espera cada vez más entre reintentos y, si la pista no avanza tras 3 intentos, salta a la siguiente en lugar de repetir el mismo segundo en bucle.
+
+### 🔄 Actualización del índice musical
+* El botón ↻ refresca primero el explorador de archivos y luego sincroniza el índice, mostrando el **porcentaje de avance** en el cuadro de estado.
+* Al abrir el software, el cuadro de estado informa la situación del índice (pistas, pendientes, última sincronización) **sin ejecutar ningún análisis automático**.
+
+### 🛠️ Estabilidad e instalación
+* Corregido el error "A JavaScript error occurred in the main process (Object has been destroyed)" al cerrar ventanas mientras el analizador trabajaba.
+* **Ya no se necesita ejecutar el programa como administrador:** el asistente de primer inicio pide permisos (UAC) únicamente para instalar el Visual C++ Redistributable, como debe ser.
+* La guía de primer uso ahora sí se incluye en los instaladores generados por GitHub, y el paquete ya no arrastra documentación interna del desarrollador.
+* El reporte de diagnóstico del motor de audio ahora se guarda correctamente en la versión instalada (antes se perdía en silencio).
+
 ## 🚀 Novedades y Mejoras en la versión 0.9.15
 
 ### ✨ Nuevas Funciones Principales

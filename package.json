@@ -1,7 +1,7 @@
 {
   "name": "lf-automatizador",
   "productName": "LF Automatizador",
-  "version": "0.9.15",
+  "version": "0.9.16",
   "description": "Software de Automatizacion de Radio",
   "main": "main.js",
   "scripts": {
@@ -46,7 +46,7 @@
       "backend/**/*",
       "frontend/**/*",
       "assets/**/*",
-      "Documentación/**/*",
+      "Documentación/guia_primer_uso.jpg",
       "bin/**/*",
       "LICENSE",
       "icon.ico",
