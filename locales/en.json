@@ -717,6 +717,14 @@
         "encoder_error": "Error",
         "encoder_disconnected": "Disconnected"
     },
+    "event_runtime": {
+        "stream_tolerance_cancelled_status": "Stream on air; tolerance cancelled",
+        "event_tolerance_cancelled_status": "Event on air; tolerance cancelled",
+        "tolerance_cancelled": "tolerance cancelled because it is already on air",
+        "omitted_no_audio": "skipped because no audio was on air",
+        "omitted_requires_audio": "skipped because it requires audio on air",
+        "append_end_no_play": "added to the end without playing"
+    },
     "library": {
         "title": "Music Library",
         "search_placeholder": "🔍 Search database... (Fuzzy Search)",
@@ -970,7 +978,7 @@
         "action_after": "sec. Then:",
         "force": "Force event",
         "skip": "Skip this event",
-        "no_exec_stop": "Do not execute if the player is stopped.",
+        "exec_even_stopped": "Execute even if the player is stopped.",
         "priority": "Priority Level:",
         "p_low": "Low",
         "p_normal": "Normal",
@@ -997,6 +1005,10 @@
         "err_source": "You must select a valid path in Audio Source.",
         "err_week": "You must select at least one week of the month.",
         "err_wait": "You must specify a valid Max Wait Time (minimum 1 second).",
+        "exec_disabled_append": "Not compatible: Add to end only loads the event into the playlist.",
+        "exec_disabled_ducking": "Not compatible: overlay/ducking plays over the program and does not use playlist execution rules.",
+        "exec_stopped_disabled_omit": "Not compatible: when skipping, the event must not run while the player is stopped.",
+        "err_save": "Could not save the event.",
         "title_stream_lock": "Not available for radio streams (risk of silence)",
         "title_loc_lock": "Not available for voiceovers (main playlist should not be cleared)",
         "preview_secs": "({0} sec.)",

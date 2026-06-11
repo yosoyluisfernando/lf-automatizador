@@ -717,6 +717,14 @@
         "encoder_error": "Error",
         "encoder_disconnected": "Desconectado"
     },
+    "event_runtime": {
+        "stream_tolerance_cancelled_status": "Stream en emisión; tolerancia cancelada",
+        "event_tolerance_cancelled_status": "Evento en emisión; tolerancia cancelada",
+        "tolerance_cancelled": "tolerancia cancelada porque ya entró al aire",
+        "omitted_no_audio": "omitido porque no había audio al aire",
+        "omitted_requires_audio": "omitido porque requiere audio al aire",
+        "append_end_no_play": "agregado al final sin reproducir"
+    },
     "library": {
         "title": "Biblioteca de Música - LF Automatizador",
         "search_placeholder": "🔍 Buscar en la base de datos... (Fuzzy Search)",
@@ -969,7 +977,7 @@
         "action_after": "seg. Acción:",
         "force": "Forzar evento",
         "skip": "Omitir este evento",
-        "no_exec_stop": "No ejecutar si el reproductor está detenido.",
+        "exec_even_stopped": "Ejecutar aunque el reproductor esté detenido.",
         "priority": "Nivel de Prioridad:",
         "p_low": "Baja",
         "p_normal": "Normal",
@@ -996,6 +1004,10 @@
         "err_source": "Debes seleccionar una ruta válida en Origen del Audio.",
         "err_week": "Debes seleccionar al menos una semana del mes.",
         "err_wait": "Debes indicar un Tiempo Máx de Espera válido (mínimo 1 segundo).",
+        "exec_disabled_append": "No compatible: Agregar al final solo carga el evento en la lista.",
+        "exec_disabled_ducking": "No compatible: el pisador suena superpuesto y no usa reglas de playlist.",
+        "exec_stopped_disabled_omit": "No compatible: al omitir, el evento no debe ejecutarse con el reproductor detenido.",
+        "err_save": "No se pudo guardar el evento.",
         "title_stream_lock": "No disponible para emisoras de radio (riesgo de silencio)",
         "title_loc_lock": "No disponible para locuciones (la playlist principal no debe borrarse)",
         "preview_secs": "({0} seg.)",

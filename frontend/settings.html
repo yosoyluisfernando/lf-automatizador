@@ -186,6 +186,35 @@
                         </div>
                         <p class="audio-hint" data-i18n="settings_window.fields.cartwall_hint">Los sonidos temporales del cartwall se liberan al terminar, evitando acumulacion de reproductores en memoria.</p>
                     </fieldset>
+
+                    <fieldset class="fieldset-dark audio-card">
+                        <legend>Playlists auxiliares</legend>
+                        <div class="setting-row setting-row-compact">
+                            <label style="width: 220px;">Auxiliar 1:</label>
+                            <select id="sel-aux-mode-1" class="dark-select" style="flex: 1;">
+                                <option value="master">Master (aire)</option>
+                                <option value="cue">CUE / Preescucha</option>
+                                <option value="device">Tarjeta dedicada</option>
+                            </select>
+                        </div>
+                        <div class="setting-row setting-row-compact" id="aux1-device-row">
+                            <label style="width: 220px;">Tarjeta Aux 1:</label>
+                            <select id="sel-aux-out-1" class="dark-select" style="flex: 1;"></select>
+                        </div>
+                        <div class="setting-row setting-row-compact">
+                            <label style="width: 220px;">Auxiliar 2:</label>
+                            <select id="sel-aux-mode-2" class="dark-select" style="flex: 1;">
+                                <option value="master">Master (aire)</option>
+                                <option value="cue">CUE / Preescucha</option>
+                                <option value="device">Tarjeta dedicada</option>
+                            </select>
+                        </div>
+                        <div class="setting-row setting-row-compact" id="aux2-device-row">
+                            <label style="width: 220px;">Tarjeta Aux 2:</label>
+                            <select id="sel-aux-out-2" class="dark-select" style="flex: 1;"></select>
+                        </div>
+                        <p class="audio-hint">En Master, los auxiliares pasan por la consola virtual, FX, encoder y monitor. En tarjeta dedicada salen directos como la botonera.</p>
+                    </fieldset>
                 </div>
             </div>
 

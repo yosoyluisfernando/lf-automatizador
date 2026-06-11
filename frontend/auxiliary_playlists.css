@@ -1,0 +1,385 @@
+.aux-panel {
+    width: 360px;
+    min-width: 300px;
+    max-width: 560px;
+    background: #18181b;
+    border-left: 1px solid #333;
+    color: #ddd;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.aux-panel.is-floating {
+    width: 100%;
+    max-width: none;
+    height: 100vh;
+    border-left: 0;
+    resize: none;
+}
+
+.aux-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 9px;
+    background: #222225;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.aux-title {
+    flex: 1;
+    min-width: 0;
+    color: #00a8ff;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+.aux-icon-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #3a3a3d;
+    background: #26262a;
+    color: #eee;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.aux-icon-btn:hover,
+.aux-icon-btn.is-active {
+    border-color: #00a8ff;
+    color: #00a8ff;
+}
+
+.aux-icon-btn.aux-dock-btn {
+    width: auto;
+    min-width: 28px;
+    height: 24px;
+    padding: 3px 7px;
+    background: transparent;
+    border-color: transparent;
+    color: #aaa;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.aux-icon-btn.aux-dock-btn:hover {
+    color: #00a8ff;
+    background: #333;
+    border-color: #444;
+}
+
+.aux-icon-btn.aux-close-btn {
+    background: #8e1f18;
+    border-color: #c0392b;
+    color: #fff;
+    font-weight: bold;
+}
+
+.aux-icon-btn.aux-close-btn:hover {
+    background: #c0392b;
+    border-color: #ff6b5f;
+    color: #fff;
+    box-shadow: 0 0 8px rgba(231, 76, 60, 0.45);
+}
+
+.aux-toggle {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #3a3a3d;
+    background: #1b1b1f;
+    color: #aaa;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.aux-toggle.is-active {
+    border-color: #00a8ff;
+    background: #073a59;
+    color: #fff;
+}
+
+.aux-content {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 1px;
+}
+
+.aux-content.layout-stacked {
+    flex-direction: column;
+}
+
+.aux-content.layout-side {
+    flex-direction: row;
+}
+
+.aux-list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    background: #151518;
+    border-top: 1px solid #252529;
+}
+
+.aux-list.is-hidden {
+    display: none;
+}
+
+.aux-list-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px;
+    background: #1f1f23;
+    border-bottom: 1px solid #303036;
+}
+
+.aux-name {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #f0f0f0;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 4px 5px;
+}
+
+.aux-name:focus {
+    outline: none;
+    border-color: #00a8ff;
+    background: #111;
+}
+
+.aux-table-wrap {
+    flex: 1;
+    min-height: 80px;
+    overflow: auto;
+}
+
+.aux-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.aux-table th:first-child,
+.aux-table td:first-child {
+    width: auto;
+    padding-right: 4px;
+}
+
+.aux-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #222225;
+    color: #aaa;
+    text-align: left;
+    padding: 5px 7px;
+    border-bottom: 1px solid #333;
+}
+
+.aux-table td {
+    padding: 5px 4px 5px 7px;
+    border-bottom: 1px solid #242428;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.aux-table tr {
+    color: #e5e5e5;
+    cursor: pointer;
+}
+
+.aux-table tr:hover {
+    background: #29292d;
+}
+
+.aux-table tr.aux-dragging {
+    opacity: 0.55;
+}
+
+.aux-table tr.aux-drop-before {
+    box-shadow: inset 0 2px 0 #00a8ff;
+}
+
+.aux-table tr.aux-drop-after {
+    box-shadow: inset 0 -2px 0 #00a8ff;
+}
+
+.aux-table tr.selected {
+    background: #087eca;
+    color: #fff;
+}
+
+.aux-table tr.row-active {
+    background: #27ae60 !important;
+    color: #fff !important;
+    font-weight: bold;
+}
+
+.aux-table tr.row-next {
+    background: #d35400 !important;
+    color: #fff !important;
+    font-weight: bold;
+}
+
+.aux-table tr.row-manual-next {
+    background: #3b3f46 !important;
+    color: #f0f0f0 !important;
+    font-weight: bold;
+}
+
+.aux-duration-col {
+    width: 56px;
+    min-width: 56px;
+    max-width: 56px;
+    text-align: right;
+    padding-left: 3px !important;
+    padding-right: 4px !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+
+.aux-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border-top: 1px solid #333;
+    background: #1b1b1f;
+    flex-shrink: 0;
+}
+
+.aux-transport {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.aux-total {
+    flex: 1;
+    min-width: 0;
+    color: #00a8ff;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.aux-menu {
+    position: fixed;
+    z-index: 10000;
+    width: 290px;
+    max-width: calc(100vw - 16px);
+    background: #222225;
+    border: 1px solid #444;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    border-radius: 4px;
+    padding: 5px 0;
+    display: none;
+}
+
+.aux-menu-item {
+    color: #ccc;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 8px 15px;
+    position: relative;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: 0.2s;
+}
+
+.aux-menu-item:hover {
+    background: #333;
+    color: #fff;
+}
+
+.aux-menu-item.danger {
+    color: #ff5c5c;
+}
+
+.aux-menu-item.accent-blue {
+    color: #00a8ff;
+}
+
+.aux-menu-item.accent-green {
+    color: #2ecc71;
+}
+
+.aux-menu-item.accent-orange {
+    color: #f39c12;
+}
+
+.aux-menu-item.accent-purple {
+    color: #b56ad9;
+}
+
+.aux-menu-item.disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+.aux-menu-item.disabled:hover {
+    background: transparent;
+}
+
+.aux-menu-separator {
+    height: 1px;
+    background: #444;
+    margin: 5px 0;
+}
+
+.aux-has-submenu {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    overflow: visible;
+}
+
+.aux-submenu-arrow {
+    color: #aaa;
+    padding-left: 18px;
+}
+
+.aux-submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: 0;
+    min-width: 150px;
+    background: #222225;
+    border: 1px solid #444;
+    border-radius: 4px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    padding: 5px 0;
+    z-index: 10001;
+}
+
+.aux-has-submenu:hover > .aux-submenu,
+.aux-has-submenu.pinned > .aux-submenu {
+    display: block;
+}
+
+.aux-drop {
+    outline: 2px solid #00a8ff;
+    outline-offset: -2px;
+}

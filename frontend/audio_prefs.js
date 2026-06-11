@@ -13,7 +13,10 @@ const AUDIO_PREFS_DEFAULTS = {
     playlistSharedDevice: 'default',
     playlistOutputs: ['default', 'default', 'default', 'default'],
     cartwallOutputMode: 'master',
+    auxiliaryOutputModes: ['master', 'master'],
+    auxiliaryOutputs: ['default', 'default'],
     keyboardShortcutScope: 'contextual',
+    playbackMode: 'normal',
     repeatForgetProtectionEnabled: false,
     repeatForgetProtectionMax: 10,
     repeatDisableOnManualNext: true,
@@ -46,6 +49,18 @@ const AUDIO_PREFS_DEFAULTS = {
 function normalizePlaylistOutputs(rawOutputs, fallbackDevice) {
     const outputs = Array.isArray(rawOutputs) ? rawOutputs : [];
     return Array.from({ length: 4 }, (_, idx) => outputs[idx] || fallbackDevice || 'default');
+}
+
+function normalizeAuxiliaryOutputModes(rawModes) {
+    const modes = Array.isArray(rawModes) ? rawModes : [];
+    return Array.from({ length: 2 }, (_, idx) => (
+        ['master', 'cue', 'device'].includes(modes[idx]) ? modes[idx] : AUDIO_PREFS_DEFAULTS.auxiliaryOutputModes[idx]
+    ));
+}
+
+function normalizeAuxiliaryOutputs(rawOutputs, fallbackDevice) {
+    const outputs = Array.isArray(rawOutputs) ? rawOutputs : [];
+    return Array.from({ length: 2 }, (_, idx) => outputs[idx] || fallbackDevice || 'default');
 }
 
 function normalizeAudioPrefs(prefs = {}) {
@@ -88,7 +103,12 @@ function normalizeAudioPrefs(prefs = {}) {
         playlistSharedDevice: sharedPlaylistDevice,
         playlistOutputs: normalizePlaylistOutputs(prefs.playlistOutputs, sharedPlaylistDevice || mainDevice),
         cartwallOutputMode: cartwallMode,
+        auxiliaryOutputModes: normalizeAuxiliaryOutputModes(prefs.auxiliaryOutputModes),
+        auxiliaryOutputs: normalizeAuxiliaryOutputs(prefs.auxiliaryOutputs, mainDevice),
         keyboardShortcutScope,
+        playbackMode: ['normal', 'infinite', 'manual', 'random'].includes(prefs.playbackMode)
+            ? prefs.playbackMode
+            : (prefs.modeLoopPlaylist === true ? 'infinite' : AUDIO_PREFS_DEFAULTS.playbackMode),
         repeatForgetProtectionEnabled: prefs.repeatForgetProtectionEnabled === true,
         repeatForgetProtectionMax: Math.max(1, Math.min(999, parseInt(prefs.repeatForgetProtectionMax, 10) || AUDIO_PREFS_DEFAULTS.repeatForgetProtectionMax)),
         repeatDisableOnManualNext: prefs.repeatDisableOnManualNext !== false,

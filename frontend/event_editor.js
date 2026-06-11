@@ -5,6 +5,7 @@ const { getConfigDir } = require('../backend/utils/app_paths');
 const i18n = require('./i18n');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
+const eventRules = window.EventExecutionRules;
 
 function loadLanguage() {
     let lang = 'es';
@@ -91,29 +92,16 @@ function syncSourceTypeUi() {
     syncDuckingAvailability();
 }
 
-/** Bloquea el radio "Borrar lista" cuando la fuente es stream_url o locution. */
+/** Mantiene disponible "Borrar lista"; las acciones potentes no se corrigen en silencio. */
 function syncStreamActionLock() {
-    const sourceType = document.querySelector('input[name="ev-source-type"]:checked')?.value || 'file';
     const clearRadio = document.getElementById('ev-action-clear');
     const clearLabel = document.getElementById('ev-action-clear-label');
     if (!clearRadio || !clearLabel) return;
 
-    const isStream   = sourceType === 'stream_url';
-    const isLocution = sourceType === 'locution';
-    const shouldLock = isStream || isLocution;
-
-    clearRadio.disabled = shouldLock;
-    clearLabel.style.opacity = shouldLock ? '0.4' : '';
-    clearLabel.style.cursor  = shouldLock ? 'not-allowed' : '';
-    clearLabel.title = isStream   ? (i18n.t('event_editor.title_stream_lock') || 'No disponible para emisoras de radio (riesgo de silencio)') :
-                       isLocution ? (i18n.t('event_editor.title_loc_lock') || 'No disponible para locuciones (la playlist principal no debe borrarse)') : '';
-
-    // Si estaba seleccionado y ahora lo bloqueamos, cambiar a 'append-end'
-    if (shouldLock && clearRadio.checked) {
-        const appendRadio = document.querySelector('input[name="ev-action"][value="append-end"]');
-        if (appendRadio) appendRadio.checked = true;
-        syncActionExecutionCompatibility();
-    }
+    clearRadio.disabled = false;
+    clearLabel.style.opacity = '';
+    clearLabel.style.cursor  = '';
+    clearLabel.title = '';
 }
 
 /** Habilita o deshabilita el radio "ducking" según el tipo de fuente. */
@@ -349,10 +337,20 @@ const actionRadios = document.querySelectorAll('input[name="ev-action"]');
 const execInterrupt = document.querySelector('input[name="ev-exec"][value="interrupt"]');
 const execWait = document.querySelector('input[name="ev-exec"][value="wait"]');
 const execMaxDelay = document.querySelector('input[name="ev-exec"][value="max-delay"]');
+const chkExecuteEvenStopped = document.getElementById('chk-execute-even-stopped');
+const executeEvenStoppedLabel = chkExecuteEvenStopped?.closest('label');
+const executionCompatibilityHint = document.createElement('div');
+executionCompatibilityHint.id = 'ev-execution-compatibility-hint';
+executionCompatibilityHint.style.cssText = 'display:none; margin-top:8px; color:#f0a050; font-size:11px;';
+document.getElementById('ev-exec-group')?.insertAdjacentElement('afterend', executionCompatibilityHint);
+const stoppedCompatibilityHint = document.createElement('div');
+stoppedCompatibilityHint.id = 'ev-stopped-compatibility-hint';
+stoppedCompatibilityHint.style.cssText = 'display:none; margin-top:4px; color:#f0a050; font-size:11px;';
+executeEvenStoppedLabel?.insertAdjacentElement('afterend', stoppedCompatibilityHint);
 
 function syncActionExecutionCompatibility() {
     const selectedAction = document.querySelector('input[name="ev-action"]:checked').value;
-    const disableExecutionRules = selectedAction === 'append-end';
+    const disableExecutionRules = selectedAction === 'append-end' || selectedAction === 'ducking';
     execInterrupt.disabled = false;
     execWait.disabled = false;
     execMaxDelay.disabled = false;
@@ -363,12 +361,28 @@ function syncActionExecutionCompatibility() {
         execWait.disabled = true;
         execMaxDelay.disabled = true;
     }
+    const disabledMessage = selectedAction === 'append-end'
+        ? (i18n.t('event_editor.exec_disabled_append') || 'No compatible: Agregar al final solo carga el evento en la lista.')
+        : selectedAction === 'ducking'
+            ? (i18n.t('event_editor.exec_disabled_ducking') || 'No compatible: el pisador suena superpuesto y no usa reglas de playlist.')
+            : '';
+    [execInterrupt, execWait, execMaxDelay].forEach(radio => {
+        const label = radio?.closest('label');
+        if (label) {
+            label.style.opacity = radio.disabled ? '0.4' : '';
+            label.style.pointerEvents = radio.disabled ? 'none' : '';
+            label.title = radio.disabled ? disabledMessage : '';
+        }
+    });
+    executionCompatibilityHint.style.display = disabledMessage ? '' : 'none';
+    executionCompatibilityHint.textContent = disabledMessage;
     syncExecutionModeUI();
+    syncStoppedExecutionCompatibility();
 }
 
 function syncExecutionModeUI() {
     const selectedAction = document.querySelector('input[name="ev-action"]:checked').value;
-    if (selectedAction === 'append-end') {
+    if (selectedAction === 'append-end' || selectedAction === 'ducking') {
         inputMaxDelayMinutes.disabled = true;
         inputMaxDelaySeconds.disabled = true;
         inputMaxDelayAction.disabled = true;
@@ -379,6 +393,33 @@ function syncExecutionModeUI() {
     inputMaxDelayMinutes.disabled = !useMaxDelay;
     inputMaxDelaySeconds.disabled = !useMaxDelay;
     inputMaxDelayAction.disabled = !useMaxDelay;
+    syncStoppedExecutionCompatibility();
+}
+
+function syncStoppedExecutionCompatibility() {
+    const selectedAction = document.querySelector('input[name="ev-action"]:checked')?.value || 'add';
+    const selectedExec = selectedAction === 'append-end'
+        ? 'wait'
+        : (document.querySelector('input[name="ev-exec"]:checked')?.value || 'interrupt');
+    const delayAction = inputMaxDelayAction?.value || 'omit';
+    const disabled = selectedExec === 'max-delay' && delayAction === 'omit';
+    if (chkExecuteEvenStopped) {
+        chkExecuteEvenStopped.disabled = disabled;
+        if (disabled) chkExecuteEvenStopped.checked = false;
+    }
+    if (executeEvenStoppedLabel) {
+        executeEvenStoppedLabel.style.opacity = disabled ? '0.4' : '';
+        executeEvenStoppedLabel.style.pointerEvents = disabled ? 'none' : '';
+        executeEvenStoppedLabel.title = disabled
+            ? (i18n.t('event_editor.exec_stopped_disabled_omit') || 'No compatible: al omitir, el evento no debe ejecutarse con el reproductor detenido.')
+            : '';
+    }
+    if (stoppedCompatibilityHint) {
+        stoppedCompatibilityHint.style.display = disabled ? '' : 'none';
+        stoppedCompatibilityHint.textContent = disabled
+            ? (i18n.t('event_editor.exec_stopped_disabled_omit') || 'No compatible: al omitir, el evento no debe ejecutarse con el reproductor detenido.')
+            : '';
+    }
 }
 
 function getMaxDelayTotalSeconds() {
@@ -398,6 +439,7 @@ execRadios.forEach(radio => {
 actionRadios.forEach(radio => {
     radio.addEventListener('change', syncActionExecutionCompatibility);
 });
+inputMaxDelayAction?.addEventListener('change', syncStoppedExecutionCompatibility);
 
 // Listeners de campos stream_url
 document.getElementById('ev-stream-hours')?.addEventListener('input', syncStreamDurationPreview);
@@ -516,8 +558,10 @@ document.getElementById('ev-commercial-block').addEventListener('change', (e) =>
     if (block && !document.getElementById('ev-name').value.trim()) document.getElementById('ev-name').value = `${i18n.t('event_editor.prefix_com') || '[Comerciales]'} ${block.name}`;
 });
 
-document.getElementById('btn-save').addEventListener('click', (e) => {
+document.getElementById('btn-save').addEventListener('click', async (e) => {
     e.preventDefault();
+    const saveButton = document.getElementById('btn-save');
+    if (saveButton?.disabled) return;
     const sourceType = document.querySelector('input[name="ev-source-type"]:checked').value;
 
     // ── Validación y preparación según tipo de fuente ──────────────────────
@@ -613,7 +657,7 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
     const groupId = document.getElementById('ev-group').value || 'g_general';
 
     const selectedAction = document.querySelector('input[name="ev-action"]:checked').value;
-    const selectedExecution = selectedAction === 'append-end'
+    const selectedExecution = (selectedAction === 'append-end' || selectedAction === 'ducking')
         ? 'wait'
         : document.querySelector('input[name="ev-exec"]:checked').value;
     const maxDelayActive = selectedExecution === 'max-delay';
@@ -624,7 +668,7 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
             return;
     }
 
-    const newEvent = {
+    const rawEvent = {
         id: currentEventId || 'ev_' + Date.now(),
         name: name,
         group: groupId,
@@ -644,7 +688,8 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
         colorBg: document.getElementById('ev-color-bg').value,
         lastFired: null,
         
-        requirePlaying: document.getElementById('chk-require-playing').checked,
+        // NOTA: 'chk-execute-even-stopped' es la lógica visual invertida de requirePlaying.
+        requirePlaying: !chkExecuteEvenStopped.checked,
         maxDelayActive: maxDelayActive,
         maxDelayMinutes: maxDelayActive ? Math.floor(maxDelayTotalSeconds / 60) : 0,
         maxDelaySeconds: maxDelayActive ? (maxDelayTotalSeconds % 60) : 0,
@@ -667,9 +712,20 @@ document.getElementById('btn-save').addEventListener('click', (e) => {
         eventDuckingVolume:   eventDuckingVolume,
         eventDuckingFade:     eventDuckingFade
     };
+    const newEvent = eventRules.normalizeEventConfig(rawEvent);
 
     // Enviamos a guardar a SQLite vía main.js
-    ipcRenderer.send('save-event', newEvent);
+    if (saveButton) saveButton.disabled = true;
+    try {
+        const result = await ipcRenderer.invoke('save-event', newEvent);
+        if (!result?.success) {
+            if (saveButton) saveButton.disabled = false;
+            alert(result?.error || i18n.t('event_editor.err_save') || 'No se pudo guardar el evento.');
+        }
+    } catch (err) {
+        if (saveButton) saveButton.disabled = false;
+        alert(err?.message || i18n.t('event_editor.err_save') || 'No se pudo guardar el evento.');
+    }
 });
 
 document.getElementById('btn-cancel').addEventListener('click', (e) => {
@@ -684,6 +740,7 @@ ipcRenderer.on('load-event-data', (e, data) => {
         syncSourceTypeUi();
         return;
     }
+    data = eventRules.normalizeEventConfig(data);
     currentEventId = data.id;
     
     let sourceType = data.sourceType || 'file';
@@ -756,7 +813,8 @@ ipcRenderer.on('load-event-data', (e, data) => {
     const execRadio = document.querySelector(`input[name="ev-exec"][value="${execValue}"]`);
     if(execRadio) execRadio.checked = true;
 
-    document.getElementById('chk-require-playing').checked = data.requirePlaying || false;
+    // Inicializa el checkbox invertido visualmente
+    document.getElementById('chk-execute-even-stopped').checked = !(data.requirePlaying || false);
 
     if (data.maxDelayActive) {
         const savedMinutes = parseInt(data.maxDelayMinutes, 10);

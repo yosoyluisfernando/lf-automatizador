@@ -269,6 +269,8 @@ module.exports = function(context) {
             playlistMode === 'independent' ? null : byBus.get('pl2'),
             playlistMode === 'independent' ? null : byBus.get('pl3'),
             playlistMode === 'independent' ? null : byBus.get('pl4'),
+            byBus.get('aux1'),
+            byBus.get('aux2'),
             byBus.get('jingle'),
             byBus.get('cartwall')
         ]);

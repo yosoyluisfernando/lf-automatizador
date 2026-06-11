@@ -3,10 +3,13 @@ const path = require('path');
 const db = require('../database');
 const { getDbTracksMap } = require('./services/track_mapper.js');
 const { getConfigDir } = require('./utils/app_paths');
+const fileTypeResolver = require('./services/file_type_resolver');
+const { defaultFileTypes, normalizeFileTypes } = require('../frontend/file_types_data');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 const fileTypesPath = path.join(configDir, 'file_types.json');
 const explicitTypesPath = path.join(configDir, 'explicit_types.json');
+const fileTypeOptionsPath = path.join(configDir, 'file_type_options.json');
 const fs = require('fs');
 
 const AUDIO_FILE_RE = /\.(mp3|wav|flac|ogg|m4a|aac|aiff|aif|mp2)$/i;
@@ -50,45 +53,19 @@ function shuffleArray(array) {
 }
 
 function getFileTypes() {
-    return loadJsonConfig(fileTypesPath, []);
+    return normalizeFileTypes(loadJsonConfig(fileTypesPath, defaultFileTypes));
 }
 
 function getExplicitTypes() {
     return loadJsonConfig(explicitTypesPath, {});
 }
 
-function getTypeData(filePath, row = null, fileTypes = [], explicitTypes = {}) {
-    if (row?.type_id) {
-        const found = fileTypes.find(type => type.id === row.type_id);
-        if (found) return found;
-    }
-    if (explicitTypes[filePath]) {
-        const found = fileTypes.find(type => type.id === explicitTypes[filePath]);
-        if (found) return found;
-    }
-    const dirPath = path.dirname(filePath);
-    if (explicitTypes[dirPath]) {
-        const found = fileTypes.find(type => type.id === explicitTypes[dirPath]);
-        if (found) return found;
-    }
+function getFileTypeOptions() {
+    return loadJsonConfig(fileTypeOptionsPath, {});
+}
 
-    const nameStr = path.basename(filePath).toLowerCase();
-    for (const type of fileTypes) {
-        const identifier = type._identifier !== undefined ? type._identifier : String(type.identifier || '').toLowerCase().trim();
-        if (!identifier) continue;
-        if (type._regex) {
-            if (type._regex.test(nameStr)) return type;
-        } else if (type._identifier !== undefined) {
-            if (nameStr.includes(identifier)) return type;
-        } else {
-            if (/^[a-z0-9]+$/.test(identifier)) {
-                if (new RegExp(`\\b${identifier}\\b`, 'i').test(nameStr)) return type;
-            } else if (nameStr.includes(identifier)) {
-                return type;
-            }
-        }
-    }
-    return null;
+function getTypeData(filePath, row = null, fileTypes = [], explicitTypes = {}, optionsMap = {}) {
+    return fileTypeResolver.resolveFileType(filePath, row, fileTypes, explicitTypes, optionsMap);
 }
 
 function getGenreCategoryDefs() {
@@ -287,7 +264,7 @@ function isTimeLocutionTrack(track) {
     return track?.rowType === 'time' || track?.filePath === 'time_locution';
 }
 
-function getCandidates(categoryDefs = [], fileTypes = [], explicitTypes = {}) {
+function getCandidates(categoryDefs = [], fileTypes = [], explicitTypes = {}, fileTypeOptions = {}) {
     const byCategory = new Map();
     categoryDefs.forEach(category => byCategory.set(category.id, []));
     const timeCategory = fileTypes.find(type => /locuci|hora|time|saytime/i.test(`${type.name} ${type.identifier}`));
@@ -326,7 +303,7 @@ function getCandidates(categoryDefs = [], fileTypes = [], explicitTypes = {}) {
     for (const row of stmt.iterate()) {
         const filePath = row.file_path || '';
         if (!filePath || !AUDIO_FILE_RE.test(filePath)) continue;
-        const typeData = getTypeData(filePath, row, compiledFileTypes, explicitTypes);
+        const typeData = getTypeData(filePath, row, compiledFileTypes, explicitTypes, fileTypeOptions);
         const catId = typeData ? typeData.id : 'default';
         const track = {
             filePath,
@@ -386,6 +363,7 @@ function pickTrack(pool, recent, prefs) {
 function buildClockwheelPlan(payload = {}) {
     const fileTypes = getFileTypes();
     const explicitTypes = getExplicitTypes();
+    const fileTypeOptions = getFileTypeOptions();
     
     // Optimizamos obteniendo solo el count para los stats finales
     const trackCount = db.prepare("SELECT COUNT(*) AS count FROM tracks").get().count;
@@ -393,7 +371,7 @@ function buildClockwheelPlan(payload = {}) {
     const prefs = normalizePrefs(payload, fileTypes);
     const categoryDefs = getCategoryDefs(fileTypes);
     const pattern = getPatternCategories(prefs.pattern, categoryDefs, fileTypes);
-    const byCategory = getCandidates(categoryDefs, fileTypes, explicitTypes);
+    const byCategory = getCandidates(categoryDefs, fileTypes, explicitTypes, fileTypeOptions);
     
     const emptyCategories = pattern.filter(p => !byCategory.has(p.category.id) || byCategory.get(p.category.id).length === 0);
     if (emptyCategories.length > 0) {

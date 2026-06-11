@@ -501,6 +501,46 @@ function ensureCommercialSchema() {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_commercial_logs_asset ON commercial_logs(asset_path, at)').run();
 }
 
+function ensureLibraryIndexSchema() {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS library_index_roots (
+            root_path TEXT PRIMARY KEY,
+            source TEXT DEFAULT 'extra',
+            type_id TEXT,
+            recursive INTEGER DEFAULT 1,
+            locked INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            last_scan_at TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS library_index_tracks (
+            file_path TEXT PRIMARY KEY,
+            root_path TEXT,
+            title TEXT,
+            artist TEXT,
+            album TEXT,
+            year TEXT,
+            genre TEXT,
+            duration REAL,
+            file_size INTEGER,
+            file_mtime_ms INTEGER,
+            type_id TEXT,
+            status TEXT DEFAULT 'pending',
+            last_seen_at TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_library_index_tracks_root ON library_index_tracks(root_path);
+        CREATE INDEX IF NOT EXISTS idx_library_index_tracks_status ON library_index_tracks(status);
+        CREATE INDEX IF NOT EXISTS idx_library_index_tracks_type ON library_index_tracks(type_id);
+        CREATE INDEX IF NOT EXISTS idx_library_index_tracks_search
+        ON library_index_tracks(title, artist, album, genre);
+    `);
+}
+
 function seedCommercialCategories() {
     const now = new Date().toISOString();
     const categories = [
@@ -686,6 +726,7 @@ ensureProfileSchema();
 ensureGenreCurationSchema();
 ensureEventSchema();
 ensureCommercialSchema();
+ensureLibraryIndexSchema();
 seedCommercialCategories();
 seedDefaultCountries();
 migrateDataFromJSON();

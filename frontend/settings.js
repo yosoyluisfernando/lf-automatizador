@@ -37,7 +37,7 @@ let generalPrefs = normalizeAudioPrefs(loadConfig(generalPrefsPath, {
     timeFolder: '', weatherFolder: '', weatherTemperatureFolder: '', weatherHumidityFolder: '', duckingFade: 0.3, duckingVolume: 80,
     outMain: 'default', outMonitor: 'default', outEditor: 'default', outCue: 'default', outCartwall: 'default',
     monitorVolume: 100, monitorEnabled: false, monitorSourceMode: 'postFx', monitorVolumeUiEnabled: true, monitorVolumeUiMode: 'inline', playlistOutputMode: 'disabled', playlistSharedDevice: 'default',
-    playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true,
+    playlistOutputs: ['default', 'default', 'default', 'default'], cartwallOutputMode: 'master', auxiliaryOutputModes: ['master', 'master'], auxiliaryOutputs: ['default', 'default'], audioEngineMode: 'rustAudio', rustPlaylistOwnerEnabled: true,
     repeatForgetProtectionEnabled: false, repeatForgetProtectionMax: 10, repeatDisableOnManualNext: true,
     removePlayedProtectionEnabled: false, removePlayedProtectionMinRemaining: 2,
     dblClickAction: 'mark_next', ctrlDblClickAction: 'smart_skip',
@@ -320,7 +320,9 @@ const audioDeviceSelectIds = [
     'sel-pl-out-2',
     'sel-pl-out-3',
     'sel-pl-out-4',
-    'sel-out-cartwall'
+    'sel-out-cartwall',
+    'sel-aux-out-1',
+    'sel-aux-out-2'
 ];
 
 function isRustAudioModeSelected() {
@@ -404,6 +406,9 @@ function migrateVisiblePrefsToRustOutputIds(rustDevices = {}, browserOutputs = [
     generalPrefs.outMonitor = resolveRustOutputIdFromBrowserValue(generalPrefs.outMonitor, rustDevices, browserOutputs);
     generalPrefs.outCue = resolveRustOutputIdFromBrowserValue(generalPrefs.outCue, rustDevices, browserOutputs);
     generalPrefs.outCartwall = resolveRustOutputIdFromBrowserValue(generalPrefs.outCartwall, rustDevices, browserOutputs);
+    generalPrefs.auxiliaryOutputs = (generalPrefs.auxiliaryOutputs || []).map(value => (
+        resolveRustOutputIdFromBrowserValue(value, rustDevices, browserOutputs)
+    ));
     generalPrefs.playlistSharedDevice = resolveRustOutputIdFromBrowserValue(generalPrefs.playlistSharedDevice, rustDevices, browserOutputs);
     generalPrefs.playlistOutputs = (generalPrefs.playlistOutputs || []).map(value => (
         resolveRustOutputIdFromBrowserValue(value, rustDevices, browserOutputs)
@@ -424,11 +429,15 @@ function updateAudioRoutingVisibility() {
     const playlistSharedWrap = document.getElementById('playlist-shared-output-wrap');
     const playlistIndependentWrap = document.getElementById('playlist-independent-output-wrap');
     const cartwallDeviceRow = document.getElementById('cartwall-device-row');
+    const aux1DeviceRow = document.getElementById('aux1-device-row');
+    const aux2DeviceRow = document.getElementById('aux2-device-row');
 
     const monitorEnabled = document.getElementById('chk-monitor-enabled')?.checked === true;
     const monitorVolumeUiEnabled = document.getElementById('chk-monitor-volume-ui')?.checked === true;
     const playlistMode = document.getElementById('sel-playlist-output-mode')?.value || 'disabled';
     const cartwallMode = document.getElementById('sel-cartwall-mode')?.value || 'master';
+    const aux1Mode = document.getElementById('sel-aux-mode-1')?.value || 'master';
+    const aux2Mode = document.getElementById('sel-aux-mode-2')?.value || 'master';
     const audioEngineHint = document.getElementById('audio-engine-hint');
     if (audioEngineHint) {
         audioEngineHint.textContent = 'Rust es el motor principal: enumera tarjetas nativas y es dueño del audio al aire.';
@@ -441,6 +450,8 @@ function updateAudioRoutingVisibility() {
     if (playlistSharedWrap) playlistSharedWrap.style.display = playlistMode === 'shared' ? 'grid' : 'none';
     if (playlistIndependentWrap) playlistIndependentWrap.style.display = playlistMode === 'independent' ? 'grid' : 'none';
     if (cartwallDeviceRow) cartwallDeviceRow.style.display = cartwallMode === 'device' ? 'flex' : 'none';
+    if (aux1DeviceRow) aux1DeviceRow.style.display = aux1Mode === 'device' ? 'flex' : 'none';
+    if (aux2DeviceRow) aux2DeviceRow.style.display = aux2Mode === 'device' ? 'flex' : 'none';
 }
 
 function normalizeAudioRouteSignature(prefs = {}) {
@@ -457,7 +468,9 @@ function normalizeAudioRouteSignature(prefs = {}) {
         playlistOutputMode: normalized.playlistOutputMode || 'disabled',
         playlistSharedDevice: normalized.playlistSharedDevice || normalized.outMain || 'default',
         playlistOutputs: Array.isArray(normalized.playlistOutputs) ? normalized.playlistOutputs.slice(0, 4) : [],
-        cartwallOutputMode: normalized.cartwallOutputMode || 'master'
+        cartwallOutputMode: normalized.cartwallOutputMode || 'master',
+        auxiliaryOutputModes: Array.isArray(normalized.auxiliaryOutputModes) ? normalized.auxiliaryOutputModes.slice(0, 2) : [],
+        auxiliaryOutputs: Array.isArray(normalized.auxiliaryOutputs) ? normalized.auxiliaryOutputs.slice(0, 2) : []
     });
 }
 
@@ -478,6 +491,8 @@ function applyAudioPrefsToForm() {
     ensureSelectValue(document.getElementById('sel-pl-out-3'), generalPrefs.playlistOutputs[2]);
     ensureSelectValue(document.getElementById('sel-pl-out-4'), generalPrefs.playlistOutputs[3]);
     ensureSelectValue(document.getElementById('sel-out-cartwall'), generalPrefs.outCartwall);
+    ensureSelectValue(document.getElementById('sel-aux-out-1'), generalPrefs.auxiliaryOutputs?.[0] || 'default');
+    ensureSelectValue(document.getElementById('sel-aux-out-2'), generalPrefs.auxiliaryOutputs?.[1] || 'default');
 
     const chkMonitorEnabled = document.getElementById('chk-monitor-enabled');
     if (chkMonitorEnabled) chkMonitorEnabled.checked = generalPrefs.monitorEnabled === true;
@@ -493,6 +508,10 @@ function applyAudioPrefsToForm() {
 
     const cartwallMode = document.getElementById('sel-cartwall-mode');
     if (cartwallMode) cartwallMode.value = generalPrefs.cartwallOutputMode || 'master';
+    const auxMode1 = document.getElementById('sel-aux-mode-1');
+    if (auxMode1) auxMode1.value = generalPrefs.auxiliaryOutputModes?.[0] || 'master';
+    const auxMode2 = document.getElementById('sel-aux-mode-2');
+    if (auxMode2) auxMode2.value = generalPrefs.auxiliaryOutputModes?.[1] || 'master';
 
     updateAudioRoutingVisibility();
 }
@@ -682,6 +701,8 @@ if (selDblClick && selCtrlDblClick) {
     'sel-monitor-source-mode',
     'sel-playlist-output-mode',
     'sel-cartwall-mode',
+    'sel-aux-mode-1',
+    'sel-aux-mode-2',
     'sel-monitor-volume-ui-mode'
 ].forEach(id => {
     const el = document.getElementById(id);
@@ -718,6 +739,14 @@ function saveAll() {
         document.getElementById('sel-pl-out-4').value
     ];
     generalPrefs.cartwallOutputMode = document.getElementById('sel-cartwall-mode').value;
+    generalPrefs.auxiliaryOutputModes = [
+        document.getElementById('sel-aux-mode-1')?.value || 'master',
+        document.getElementById('sel-aux-mode-2')?.value || 'master'
+    ];
+    generalPrefs.auxiliaryOutputs = [
+        document.getElementById('sel-aux-out-1')?.value || 'default',
+        document.getElementById('sel-aux-out-2')?.value || 'default'
+    ];
     // Rust es el unico motor: forzamos siempre la preferencia, ignorando el select.
     generalPrefs.audioEngineMode = 'rustAudio';
     generalPrefs.rustPlaylistOwnerEnabled = true;
@@ -773,6 +802,7 @@ function saveAll() {
 // de tarjetas de audio y los toggles relevantes se serializan a JSON.
 const __SETTINGS_SNAPSHOT_IDS = [
     'sel-out-main', 'sel-out-monitor', 'sel-out-cue', 'sel-out-cartwall',
+    'sel-aux-mode-1', 'sel-aux-mode-2', 'sel-aux-out-1', 'sel-aux-out-2',
     'sel-pl-out-1', 'sel-pl-out-2', 'sel-pl-out-3', 'sel-pl-out-4',
     'sel-playlist-shared', 'sel-playlist-output-mode', 'sel-cartwall-mode',
     'sel-monitor-source-mode', 'sel-monitor-volume-ui-mode',

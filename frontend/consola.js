@@ -11,7 +11,9 @@ const stripDefs = [
     { key: 'pl1', label: 'PL 1', dest: 'LINEA/AUXILIAR' },
     { key: 'pl2', label: 'PL 2', dest: 'LINEA/AUXILIAR' },
     { key: 'pl3', label: 'PL 3', dest: 'LINEA/AUXILIAR' },
-    { key: 'pl4', label: 'PL 4', dest: 'LINEA/AUXILIAR' }
+    { key: 'pl4', label: 'PL 4', dest: 'LINEA/AUXILIAR' },
+    { key: 'aux1', label: 'AUX 1', dest: 'PLAYLIST AUX' },
+    { key: 'aux2', label: 'AUX 2', dest: 'PLAYLIST AUX' }
 ];
 
 function meterId(key, channel) {
@@ -177,6 +179,7 @@ function rustMeterBusToStripKey(bus = '') {
     if (normalized === 'jingle' || normalized === 'jingles' || normalized === 'overlay') return 'jingle';
     if (normalized === 'cartwall') return 'cartwall';
     if (['pl1', 'pl2', 'pl3', 'pl4'].includes(normalized)) return normalized;
+    if (['aux1', 'aux2'].includes(normalized)) return normalized;
     if (normalized === 'playlists') return 'pl1';
     return '';
 }
@@ -212,8 +215,8 @@ function paintRustMetersToStrips(meters = []) {
         // las playlists tienen su propia salida y NO suman al master, pero
         // jingle/cartwall siempre sí (son pisadores sobre el programa).
         const buses = playlistMode === 'independent'
-            ? ['jingle', 'cartwall']
-            : ['jingle', 'cartwall', 'pl1', 'pl2', 'pl3', 'pl4'];
+            ? ['jingle', 'cartwall', 'aux1', 'aux2']
+            : ['jingle', 'cartwall', 'pl1', 'pl2', 'pl3', 'pl4', 'aux1', 'aux2'];
         const masterSum = buses.reduce((acc, key) => {
             const level = byStrip.get(key);
             if (!level) return acc;

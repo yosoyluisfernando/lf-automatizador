@@ -227,8 +227,7 @@ module.exports = function(context) {
         }
         if (healthOnly) context.lastRustEncoderHealthAt = now;
         context.encoderSourceContract = { ...contract, ...health, active: healthOnly ? previous.active === true : contract.active, signature };
-        if (!context.rustAudioEngine?.command) return;
-        context.rustAudioEngine.command({
+        const encoderCommand = {
             cmd: 'encoder',
             action: healthOnly ? 'status' : action,
             source: contract.source,
@@ -250,7 +249,15 @@ module.exports = function(context) {
             ffmpegTime: health.ffmpegTime,
             maxGapMs: health.maxGapMs,
             gapWarnings: health.gapWarnings
-        }).catch(err => writeLog(`RustAudio encoder ${action}: ${err.message || err}`));
+        };
+        if (context.isAppQuitting) {
+            if (context.rustAudioEngine?.isRunning?.() && context.rustAudioEngine?.send) {
+                context.rustAudioEngine.send(encoderCommand);
+            }
+            return;
+        }
+        if (!context.rustAudioEngine?.command) return;
+        context.rustAudioEngine.command(encoderCommand).catch(err => writeLog(`RustAudio encoder ${action}: ${err.message || err}`));
     }
 
     // Detiene la fuente PCM compartida y la captura SOLO si ya no queda ningún
@@ -1257,7 +1264,7 @@ module.exports = function(context) {
         return (!res.canceled && res.filePaths.length > 0) ? res.filePaths[0] : null; 
     }); 
     
-    ipcMain.handle('dialog:savePlaylist', async (e, defName) => { const res = await dialog.showSaveDialog(context.mainWindow, { title: 'Guardar Playlist', defaultPath: defName || 'Mi_Playlist.LFPlay', filters: [{ name: 'LFPlay Playlist', extensions: ['lfplay'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; }); 
+    ipcMain.handle('dialog:savePlaylist', async (e, defName) => { const currentWin = BrowserWindow.fromWebContents(e.sender) || context.mainWindow; const res = await dialog.showSaveDialog(currentWin, { title: 'Guardar Playlist', defaultPath: defName || 'Mi_Playlist.LFPlay', filters: [{ name: 'LFPlay Playlist', extensions: ['lfplay'] }] }); return (!res.canceled && res.filePath) ? res.filePath : null; }); 
     
     ipcMain.handle('dialog:selectFolder', async (event) => { 
         const currentWin = BrowserWindow.fromWebContents(event.sender) || context.eventEditorWindow || context.libraryWindow || context.settingsWindow || context.mainWindow; 

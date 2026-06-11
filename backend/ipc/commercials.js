@@ -149,7 +149,21 @@ module.exports = function(context) {
     ipcMain.handle('commercial-get-settings', () => {
         try {
             const rows = db.prepare('SELECT key, value FROM commercial_settings').all();
-            return rows.reduce((acc, row) => { acc[row.key] = row.value; return acc; }, {});
+            const settings = rows.reduce((acc, row) => { acc[row.key] = row.value; return acc; }, {});
+            
+            // Integración desde la raíz con el Gestor de Tipos de Archivo
+            const fs = require('fs');
+            const fileTypesPath = path.join(context.configDir, 'file_types.json');
+            if (fs.existsSync(fileTypesPath)) {
+                try {
+                    const fileTypes = JSON.parse(fs.readFileSync(fileTypesPath, 'utf8'));
+                    const comType = fileTypes.find(t => t.id === 't_comercial');
+                    if (comType && comType.shortcutRoot) settings.commercialsRoot = comType.shortcutRoot;
+                    const jingType = fileTypes.find(t => t.id === 't_station_id');
+                    if (jingType && jingType.shortcutRoot) settings.jinglesRoot = jingType.shortcutRoot;
+                } catch (e) {}
+            }
+            return settings;
         } catch (err) {
             writeLog('Error commercial-get-settings: ' + err.message);
             return {};
@@ -161,8 +175,34 @@ module.exports = function(context) {
             const safeType = rootType === 'jingles' ? 'jingles' : 'commercials';
             const res = await dialog.showOpenDialog(context.commercialManagerWindow || context.mainWindow, { title: safeType === 'jingles' ? 'Seleccionar raiz de jingles' : 'Seleccionar raiz de comerciales', properties: ['openDirectory'] });
             if (res.canceled || res.filePaths.length === 0) return { success: false };
-            db.prepare('INSERT INTO commercial_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`${safeType}Root`, res.filePaths[0]);
-            return { success: true, path: res.filePaths[0] };
+            const selectedPath = res.filePaths[0];
+            
+            db.prepare('INSERT INTO commercial_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`${safeType}Root`, selectedPath);
+            
+            // Integración desde la raíz con el Gestor de Tipos de Archivo
+            const fs = require('fs');
+            const fileTypesPath = path.join(context.configDir, 'file_types.json');
+            if (fs.existsSync(fileTypesPath)) {
+                try {
+                    const fileTypes = JSON.parse(fs.readFileSync(fileTypesPath, 'utf8'));
+                    const targetId = safeType === 'commercials' ? 't_comercial' : 't_station_id';
+                    let typeObj = fileTypes.find(t => t.id === targetId);
+                    if (!typeObj) {
+                        typeObj = { id: targetId, showShortcut: true };
+                        fileTypes.push(typeObj);
+                    }
+                    typeObj.shortcutRoot = selectedPath;
+                    fs.writeFileSync(fileTypesPath, JSON.stringify(fileTypes, null, 2), 'utf8');
+                    
+                    if (context.mainWindow) {
+                        context.mainWindow.webContents.send('file-types-data-updated');
+                    }
+                } catch (e) {
+                    writeLog('Error saving file_types.json: ' + e.message);
+                }
+            }
+            
+            return { success: true, path: selectedPath };
         } catch (err) {
             writeLog('Error commercial-set-root: ' + err.message);
             return { success: false, error: err.message };
@@ -233,6 +273,10 @@ module.exports = function(context) {
                 } else if (filters.status === 'upcoming') {
                     where.push("enabled = 1 AND validity_start IS NOT NULL AND validity_start != '' AND validity_start > ?");
                     args.push(now);
+                } else if (filters.status === 'expiring') {
+                    const soon = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+                    where.push("enabled = 1 AND COALESCE(status, 'draft') != 'draft' AND validity_end IS NOT NULL AND validity_end != '' AND validity_end >= ? AND validity_end <= ?");
+                    args.push(now, soon);
                 } else if (filters.status === 'expired') {
                     where.push("(COALESCE(status, '') = 'expired' OR (validity_end IS NOT NULL AND validity_end != '' AND validity_end < ?))");
                     args.push(now);

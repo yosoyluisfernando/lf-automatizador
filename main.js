@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, MenuItem, screen, shell, safeStorage, powerMonitor, powerSaveBlocker, nativeImage } = require('electron');
 const i18n = require('./backend/i18n_main');
 const path = require('path');
 const fs = require('fs');
@@ -10,10 +10,12 @@ const { getConfigDir } = require('./backend/utils/app_paths');
 const { version: APP_VERSION } = require('./package.json');
 const db = require('./database');
 const { RustAudioEngineProbe } = require('./backend/audio_engine_process');
+const { defaultFileTypes, normalizeFileTypes } = require('./frontend/file_types_data');
 const { cleanCsvList, mergeCsvList, cleanMetaString, tokenSet, jaccard, waitRateLimit } = require('./backend/utils/helpers.js');
 const { redactSensitiveText, rotateLogIfNeeded, scrubLogFile } = require('./backend/utils/log_security');
 const { resolveFfmpegRuntime } = require('./backend/utils/ffmpeg_resolver');
 const { verifyMicrosoftAuthenticode } = require('./backend/utils/windows_authenticode');
+const fileTypeResolver = require('./backend/services/file_type_resolver');
 const {
   getTrackFileSignature,
   storeTrackFileSignature,
@@ -172,11 +174,15 @@ function buildStartupRouteCommands() {
             : cartwallMode === 'cue'    ? outCue
             : cartwallMode === 'device' ? (cfg.outCartwall || outMain)
             : outMain;
+        const auxModes = Array.isArray(cfg.auxiliaryOutputModes) ? cfg.auxiliaryOutputModes : ['master', 'master'];
+        const auxOutputs = Array.isArray(cfg.auxiliaryOutputs) ? cfg.auxiliaryOutputs : ['default', 'default'];
         const routes = [
             { cmd: 'route', bus: 'master',   outputId: outMain },
             { cmd: 'route', bus: 'jingle',   outputId: outMain },
             { cmd: 'route', bus: 'cue',      outputId: outCue },
             { cmd: 'route', bus: 'cartwall', outputId: outCartwall },
+            { cmd: 'route', bus: auxModes[0] === 'cue' ? 'cue' : (auxModes[0] === 'device' ? 'aux1-independent' : 'aux1'), outputId: auxModes[0] === 'cue' ? outCue : (auxModes[0] === 'device' ? (auxOutputs[0] || outMain) : outMain) },
+            { cmd: 'route', bus: auxModes[1] === 'cue' ? 'cue' : (auxModes[1] === 'device' ? 'aux2-independent' : 'aux2'), outputId: auxModes[1] === 'cue' ? outCue : (auxModes[1] === 'device' ? (auxOutputs[1] || outMain) : outMain) },
         ];
         if (cfg.monitorEnabled === true) {
             routes.push({
@@ -212,6 +218,7 @@ const rustAudioEngine = new RustAudioEngineProbe({
     // futuros eventos de fin de pista, etc.). El renderer escucha
     // 'audio-engine-rust-event' y reacciona sin tener que mantener relojes.
     onEngineEvent: (message) => {
+        if (isAppQuitting) return;
         try {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('audio-engine-rust-event', message);
@@ -225,6 +232,9 @@ const rustAudioEngine = new RustAudioEngineProbe({
             if (consoleWindow && !consoleWindow.isDestroyed()) {
                 consoleWindow.webContents.send('audio-engine-rust-event', message);
             }
+            if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+                auxiliaryWindow.webContents.send('audio-engine-rust-event', message);
+            }
             if (encoderWindow && !encoderWindow.isDestroyed()) {
                 encoderWindow.webContents.send('audio-engine-rust-event', message);
             }
@@ -232,6 +242,30 @@ const rustAudioEngine = new RustAudioEngineProbe({
     }
 });
 let appSuspensionBlockerId = null;
+let appShutdownCleanupStarted = false;
+
+function runAppShutdownCleanup(reason = 'app-shutdown') {
+    if (appShutdownCleanupStarted) return;
+    appShutdownCleanupStarted = true;
+    isAppQuitting = true;
+    forceQuit = true;
+    try {
+        if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) {
+            powerSaveBlocker.stop(appSuspensionBlockerId);
+        }
+    } catch (err) {}
+    try { rustAudioEngine.stop(); } catch (err) {}
+    try { db.walCheckpoint(); } catch (err) {}
+    try { writeLog(`[CIERRE] Limpieza principal completada: ${reason}`); } catch (err) {}
+}
+
+function confirmAppQuit(reason = 'confirm-app-quit') {
+    runAppShutdownCleanup(reason);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.close();
+    }
+    app.quit();
+}
 
 function broadcastAudioPowerEvent(payload = {}) {
     const message = { at: Date.now(), ...payload };
@@ -804,7 +838,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const configDir = getConfigDir(path.join(__dirname, 'config'), __dirname);
 
 const uiPrefsPath = path.join(configDir, 'ui_prefs.json');
-let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating' };
+let uiPrefs = { menuVisible: true, controlsPos: 'bottom', temp: true, hum: true, leftPanel: true, ext: false, sysLog: true, showRemainingTime: false, cartwall: false, cartwallLastMode: 'floating', auxiliaryPanel: false, auxiliaryPanelLastMode: 'floating', auxiliaryPanelLayout: 'stacked', rightPanelView: 'cartwall' };
 try { if (fs.existsSync(uiPrefsPath)) uiPrefs = { ...uiPrefs, ...JSON.parse(fs.readFileSync(uiPrefsPath, 'utf-8')) }; } catch(e) {}
 function saveUiPrefs() { try { fs.writeFileSync(uiPrefsPath, JSON.stringify(uiPrefs, null, 2)); } catch(e) {} }
 if (uiPrefs.cartwall) uiPrefs.cartwallLastMode = 'docked';
@@ -815,6 +849,7 @@ const shortcutEditableByWebContents = new Map();
 const cwConfigPath = path.join(configDir, 'cartwall_profiles.json');
 const fileTypesPath = path.join(configDir, 'file_types.json');
 const explicitTypesPath = path.join(configDir, 'explicit_types.json');
+const fileTypeOptionsPath = path.join(configDir, 'file_type_options.json');
 
 let mainWindow;
 let activePlaylistTab = 0;
@@ -828,7 +863,7 @@ let playlistMenuList = [
     { index: 2, name: 'Playlist 3' }, { index: 3, name: 'Playlist 4' }
 ];
 let settingsWindow; let eventEditorWindow; let eventEditorContextKey = null; let eventGroupsWindow; let commercialManagerWindow = null; let genreEditorWindow = null; let artistCatalogWindow = null; let audioEditorWindow; let previewWindow; let encoderWindow; let libraryWindow = null; let artistCardWindow = null; let musicSeparationWindow = null;
-let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let aboutWindow = null;
+let transitionEditorWindow = null; let jingleEditorWindow = null; let consoleWindow = null; let taskManagerWindow = null; let reportsWindow = null; let cartwallWindow = null; let cartwallDockRequested = false; let auxiliaryWindow = null; let auxiliaryDockRequested = false; let aboutWindow = null;
 let fileTypesManagerWindow = null;
 let ffmpegProcess = null; let activeEncoderConfig = null; let isAppQuitting = false; let forceQuit = false;
 let lastEditorSource = 'playlist'; 
@@ -1175,40 +1210,19 @@ function shuffleClockwheelArray(array) {
 }
 
 function getClockwheelFileTypes() {
-    return loadJsonConfig(fileTypesPath, []);
+    return normalizeFileTypes(loadJsonConfig(fileTypesPath, defaultFileTypes));
 }
 
 function getClockwheelExplicitTypes() {
     return loadJsonConfig(explicitTypesPath, {});
 }
 
-function getClockwheelTypeData(filePath, row = null, fileTypes = [], explicitTypes = {}) {
-    if (row?.type_id) {
-        const found = fileTypes.find(type => type.id === row.type_id);
-        if (found) return found;
-    }
-    if (explicitTypes[filePath]) {
-        const found = fileTypes.find(type => type.id === explicitTypes[filePath]);
-        if (found) return found;
-    }
-    const dirPath = path.dirname(filePath);
-    if (explicitTypes[dirPath]) {
-        const found = fileTypes.find(type => type.id === explicitTypes[dirPath]);
-        if (found) return found;
-    }
+function getClockwheelFileTypeOptions() {
+    return loadJsonConfig(fileTypeOptionsPath, {});
+}
 
-    const nameStr = path.basename(filePath).toLowerCase();
-    for (const type of fileTypes) {
-        const identifier = String(type.identifier || '').toLowerCase().trim();
-        if (!identifier) continue;
-        if (/^[a-z0-9]+$/.test(identifier)) {
-            const regex = new RegExp(`\\b${identifier}\\b`, 'i');
-            if (regex.test(nameStr)) return type;
-        } else if (nameStr.includes(identifier)) {
-            return type;
-        }
-    }
-    return null;
+function getClockwheelTypeData(filePath, row = null, fileTypes = [], explicitTypes = {}, optionsMap = {}) {
+    return fileTypeResolver.resolveFileType(filePath, row, fileTypes, explicitTypes, optionsMap);
 }
 
 function getClockwheelGenreCategoryDefs(trackRows = []) {
@@ -1382,7 +1396,7 @@ function isClockwheelTimeLocutionTrack(track) {
     return track?.rowType === 'time' || track?.filePath === 'time_locution';
 }
 
-function getClockwheelCandidates(trackRows = [], categoryDefs = [], fileTypes = [], explicitTypes = {}) {
+function getClockwheelCandidates(trackRows = [], categoryDefs = [], fileTypes = [], explicitTypes = {}, fileTypeOptions = {}) {
     const byCategory = new Map();
     categoryDefs.forEach(category => byCategory.set(category.id, []));
     const timeCategory = fileTypes.find(type => /locuci|hora|time|saytime/i.test(`${type.name} ${type.identifier}`));
@@ -1401,7 +1415,7 @@ function getClockwheelCandidates(trackRows = [], categoryDefs = [], fileTypes = 
     trackRows.forEach(row => {
         const filePath = row.file_path || '';
         if (!filePath || !AUDIO_FILE_RE.test(filePath)) return;
-        const typeData = getClockwheelTypeData(filePath, row, fileTypes, explicitTypes);
+        const typeData = getClockwheelTypeData(filePath, row, fileTypes, explicitTypes, fileTypeOptions);
         const catId = typeData ? typeData.id : 'default';
         const track = {
             filePath,
@@ -1451,6 +1465,7 @@ function pickClockwheelTrack(pool, recent, prefs) {
 function buildClockwheelPlan(payload = {}) {
     const fileTypes = getClockwheelFileTypes();
     const explicitTypes = getClockwheelExplicitTypes();
+    const fileTypeOptions = getClockwheelFileTypeOptions();
     const trackRows = db.prepare(`
         SELECT file_path, custom_title, custom_artist, genre, primary_genre, subgenre, genres_json,
                inicio, fin, duration
@@ -1459,7 +1474,7 @@ function buildClockwheelPlan(payload = {}) {
     const prefs = normalizeClockwheelPrefs(payload, fileTypes);
     const categoryDefs = getClockwheelCategoryDefs(trackRows, fileTypes);
     const pattern = getClockwheelPatternCategories(prefs.pattern, categoryDefs, fileTypes);
-    const byCategory = getClockwheelCandidates(trackRows, categoryDefs, fileTypes, explicitTypes);
+    const byCategory = getClockwheelCandidates(trackRows, categoryDefs, fileTypes, explicitTypes, fileTypeOptions);
     const recent = { paths: [], artists: [], titles: [], folders: [] };
     const tracks = [];
     const missing = new Map();
@@ -2275,6 +2290,7 @@ function createWindow() {
     mainWindow.on('closed', () => { isAppQuitting = true; app.quit(); });
 }
 function syncCartwallMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-cartwall') : null; if (item) item.checked = checked; }
+function syncAuxiliaryMenuState(checked) { const appMenu = Menu.getApplicationMenu(); const item = appMenu ? appMenu.getMenuItemById('view-toggle-auxiliary') : null; if (item) item.checked = checked; }
 function createApplicationMenu() {
     const appMenuLanguage = loadJsonConfig(generalSettingsPath, {}).language || 'es';
     i18n.init(appMenuLanguage);
@@ -2308,6 +2324,7 @@ function createApplicationMenu() {
                 { label: i18n.t('menu.toggle_left_panel'), type: 'checkbox', checked: uiPrefs.leftPanel, click: (item) => { uiPrefs.leftPanel = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-left-panel', item.checked); } },
                 { label: i18n.t('menu.toggle_extensions'), type: 'checkbox', checked: uiPrefs.ext, click: (item) => { uiPrefs.ext = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-extensions', item.checked); } },
                 { id: 'view-toggle-cartwall', label: i18n.t('menu.toggle_cartwall'), type: 'checkbox', checked: !!cartwallWindow || uiPrefs.cartwall, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-cartwall', item.checked); } },
+                { id: 'view-toggle-auxiliary', label: 'Playlists auxiliares', type: 'checkbox', checked: !!auxiliaryWindow || uiPrefs.auxiliaryPanel, click: (item) => { if (mainWindow) mainWindow.webContents.send('menu-toggle-auxiliary', item.checked); } },
                 { type: 'separator' },
                 { label: i18n.t('menu.toggle_syslog'), type: 'checkbox', checked: uiPrefs.sysLog, click: (item) => { uiPrefs.sysLog = item.checked; saveUiPrefs(); if (mainWindow) mainWindow.webContents.send('toggle-sys-log', item.checked); } },
                 { type: 'separator' },
@@ -2329,11 +2346,16 @@ function createApplicationMenu() {
                 { label: '⏹ ' + i18n.t('menu.add_stop'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stop'); } },
                 {
                     label: '⏭️ ' + i18n.t('menu.play_next_playlist'),
-                    submenu: playlistMenuList.map(pl => ({
-                        label: pl.name,
-                        enabled: activePlaylistTab !== pl.index,
-                        click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', pl.index); }
-                    }))
+                    submenu: [
+                        ...playlistMenuList.map(pl => ({
+                            label: pl.name,
+                            enabled: activePlaylistTab !== pl.index,
+                            click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-playlist', pl.index); }
+                        })),
+                        { type: 'separator' },
+                        { label: 'Auxiliar 1', click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-auxiliary', 0); } },
+                        { label: 'Auxiliar 2', click: () => { if (mainWindow) mainWindow.webContents.send('menu-play-next-auxiliary', 1); } }
+                    ]
                 },
                 { label: '📝 ' + i18n.t('menu.add_note'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-note'); } },
                 { label: '📡 ' + i18n.t('menu.add_stream_url'), click: () => { if (mainWindow) mainWindow.webContents.send('menu-add-stream-url'); } },
@@ -2460,7 +2482,23 @@ app.whenReady().then(() => {
         );
         ps.unref();
     }
-}); app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); }); app.on('will-quit', () => { try { if (appSuspensionBlockerId !== null && powerSaveBlocker.isStarted(appSuspensionBlockerId)) powerSaveBlocker.stop(appSuspensionBlockerId); } catch (e) {} try { rustAudioEngine.stop(); } catch (e) {} try { db.walCheckpoint(); } catch (e) {} }); ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
+});
+app.on('before-quit', () => {
+    runAppShutdownCleanup('before-quit');
+});
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
+app.on('will-quit', () => {
+    runAppShutdownCleanup('will-quit');
+});
+app.on('quit', () => {
+    runAppShutdownCleanup('quit');
+});
+process.once('exit', () => {
+    runAppShutdownCleanup('process-exit');
+});
+ipcMain.on('active-tab-changed', (e, tabIndex) => { activePlaylistTab = tabIndex; createApplicationMenu(); });
 ipcMain.on('playlist-names-changed', (e, list) => {
     if (Array.isArray(list) && list.length) {
         playlistMenuList = list
@@ -2469,7 +2507,80 @@ ipcMain.on('playlist-names-changed', (e, list) => {
     }
     createApplicationMenu();
 });
-ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { forceQuit = true; app.quit(); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
+
+function updateAuxiliaryUiState(partial = {}) {
+    const mode = ['hidden', 'docked', 'floating'].includes(partial.mode) ? partial.mode : null;
+    if (mode) {
+        uiPrefs.auxiliaryPanel = mode === 'docked';
+        if (['docked', 'floating'].includes(mode)) uiPrefs.auxiliaryPanelLastMode = mode;
+        saveUiPrefs();
+        syncAuxiliaryMenuState(mode !== 'hidden');
+    }
+    const payload = { mode: mode || (uiPrefs.auxiliaryPanel ? 'docked' : 'hidden') };
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-ui-state', payload);
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) auxiliaryWindow.webContents.send('auxiliary-ui-state', { mode: 'floating' });
+}
+
+ipcMain.on('open-auxiliary-window', () => {
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+        if (auxiliaryWindow.isMinimized()) auxiliaryWindow.restore();
+        auxiliaryWindow.focus();
+        updateAuxiliaryUiState({ mode: 'floating' });
+        return;
+    }
+    auxiliaryDockRequested = false;
+    updateAuxiliaryUiState({ mode: 'floating' });
+    auxiliaryWindow = new BrowserWindow({
+        icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', 'main.png')),
+        width: 720,
+        height: 640,
+        title: 'Playlists auxiliares',
+        autoHideMenuBar: true,
+        webPreferences: { nodeIntegration: true, contextIsolation: false, webSecurity: false }
+    });
+    auxiliaryWindow.loadFile(path.join(__dirname, 'frontend', 'auxiliary_playlists.html'));
+    auxiliaryWindow.on('closed', () => {
+        const shouldDock = auxiliaryDockRequested;
+        auxiliaryDockRequested = false;
+        auxiliaryWindow = null;
+        updateAuxiliaryUiState({ mode: shouldDock ? 'docked' : 'hidden' });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(shouldDock ? 'auxiliary-docked' : 'auxiliary-floating-closed');
+    });
+});
+
+ipcMain.on('auxiliary-dock', () => {
+    if (!auxiliaryWindow || auxiliaryWindow.isDestroyed()) return;
+    auxiliaryDockRequested = true;
+    auxiliaryWindow.close();
+});
+
+ipcMain.on('auxiliary-hide', () => {
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+        auxiliaryDockRequested = false;
+        auxiliaryWindow.close();
+        return;
+    }
+    updateAuxiliaryUiState({ mode: 'hidden' });
+});
+
+ipcMain.on('auxiliary-main-resume', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-main-resume');
+});
+
+ipcMain.on('auxiliary-main-jump', (_event, targetIndex) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-main-jump', targetIndex);
+});
+ipcMain.on('auxiliary-play-from-main', (_event, targetIndex) => {
+    if (auxiliaryWindow && !auxiliaryWindow.isDestroyed()) {
+        auxiliaryWindow.webContents.send('auxiliary-play-from-main', targetIndex);
+        return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-play-from-main', targetIndex);
+});
+ipcMain.on('auxiliary-execute-event', (_event, payload = {}) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auxiliary-execute-event', payload);
+});
+ipcMain.on('toggle-menu-bar', () => { uiPrefs.menuVisible = !uiPrefs.menuVisible; saveUiPrefs(); if (mainWindow) mainWindow.setMenuBarVisibility(uiPrefs.menuVisible); }); ipcMain.on('confirm-app-quit', () => { confirmAppQuit('confirm-app-quit'); }); ipcMain.handle('dialog:askClose', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_close.title'), message: i18n.t('dialogs.ask_close.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:askClear', async () => { const res = await dialog.showMessageBox(mainWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.save'), i18n.t('dialogs.buttons.dont_save'), i18n.t('dialogs.buttons.cancel')], defaultId: 0, cancelId: 2, title: i18n.t('dialogs.ask_clear.title'), message: i18n.t('dialogs.ask_clear.message'), noLink: true }); return res.response; }); ipcMain.handle('dialog:confirm', async (e, msg) => { const ownerWindow = BrowserWindow.fromWebContents(e.sender) || mainWindow; const res = await dialog.showMessageBox(ownerWindow, { type: 'question', buttons: [i18n.t('dialogs.buttons.yes'), i18n.t('dialogs.buttons.no')], defaultId: 1, cancelId: 1, title: i18n.t('dialogs.confirm.title'), message: msg, noLink: true }); if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.focus(); return res.response === 0; });
 ipcMain.on('preview-ui-layout', (e, data) => { if (mainWindow) mainWindow.webContents.send('preview-ui-layout', data); });
 ipcMain.on('revert-ui-layout', () => { if (mainWindow) mainWindow.webContents.send('revert-ui-layout'); });
 ipcMain.handle('dialog:pickFolder', async (e, opts = {}) => {
@@ -2665,6 +2776,7 @@ const sharedState = {
     get readTagsAsync() { return readTagsAsync; },
     get genreFileTagToLibraryLabel() { return genreFileTagToLibraryLabel; },
     get libraryWindow() { return libraryWindow; },
+    get fileTypesManagerWindow() { return fileTypesManagerWindow; },
     get reportsWindow() { return reportsWindow; },
     set reportsWindow(win) { reportsWindow = win; },
     get consoleWindow() { return consoleWindow; },
@@ -2778,5 +2890,6 @@ require('./backend/ipc/windows')(sharedState);
 require('./backend/ipc/system')(sharedState);
 require('./backend/ipc/cartwall')(sharedState);
 require('./backend/ipc/library')(sharedState);
+require('./backend/ipc/library_index')(sharedState);
 require('./backend/ipc/stream')(sharedState);
 require('./backend/ipc/history')(sharedState);
