@@ -38,8 +38,13 @@ db.appChannel = { ...appChannel, dbPath };
 db.dbPath = dbPath;
 
 // Optimizaciones de rendimiento para SQLite en apps de Audio
-db.pragma('journal_mode = WAL'); 
-db.pragma('synchronous = NORMAL'); 
+db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+// Varias conexiones escriben sobre el mismo archivo (proceso principal y
+// library_worker). Sin busy_timeout, un choque de escritura lanza
+// "database is locked" de inmediato; con él, la conexión espera a que el otro
+// lado libere el lock (las transacciones se mantienen cortas a propósito).
+db.pragma('busy_timeout = 5000');
 db.pragma('cache_size = -32000');   // 32 MB de caché en memoria para accesos ultra rápidos
 db.pragma('temp_store = MEMORY');  // Tablas temporales en RAM
 db.pragma('mmap_size = 314572800'); // 300MB Memory-Mapped I/O para lecturas sin cuello de botella

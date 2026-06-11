@@ -240,15 +240,13 @@ function createMainLibrarySearchController(options = {}) {
     async function addFolder() {
         const folder = await ipcRenderer.invoke('dialog:pickFolder', { title: 'Agregar carpeta al indice musical' });
         if (!folder) return;
-        const ok = await ipcRenderer.invoke(
-            'dialog:confirm',
-            'Se van a importar los metadatos originales de los archivos para mejorar la precision de las busquedas. Deseas continuar?'
-        );
-        if (!ok) return;
 
         const typeId = byId('library-index-type')?.value || '';
         const recursive = byId('library-index-recursive')?.checked !== false;
-        setModalMessage('Indexando carpeta...', 'warn');
+        setModalMessage('Registrando carpeta...', 'warn');
+        // Agregar SOLO registra la carpeta (operación instantánea). El escaneo
+        // e importación de metadatos ocurren únicamente cuando el operador
+        // pulsa "Actualizar todo": nunca de forma automática.
         const added = await ipcRenderer.invoke('library-index-add-root', {
             rootPath: folder,
             typeId: typeId || null,
@@ -259,14 +257,9 @@ function createMainLibrarySearchController(options = {}) {
             setModalMessage(added?.error || 'No se pudo agregar la carpeta.', 'error');
             return;
         }
-        const synced = await ipcRenderer.invoke('library-index-sync-root', added.root.root_path || added.root.rootPath || folder);
         await refreshRoots();
-        await refreshActiveSearch();
-        if (synced?.success) {
-            setModalMessage(`Carpeta agregada. Archivos indexados: ${synced.indexed || 0}.`, 'ok');
-        } else {
-            setModalMessage(synced?.error || 'Carpeta agregada, pero no se pudo sincronizar.', 'warn');
-        }
+        setModalMessage('Carpeta agregada. Pulsa "Actualizar todo" para escanearla e importar sus metadatos.', 'ok');
+        setStatus('Carpeta agregada al índice. Usa ↻ para sincronizar.', 'warn');
     }
 
     // Estado del índice para el cuadro de diagnóstico. Solo conteos (sin

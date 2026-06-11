@@ -300,16 +300,19 @@ function createLibraryIndexService(options = {}) {
         };
         report(0);
 
-        // Transacciones por lotes: una sola transaccion con decenas de miles de
-        // upserts (cada uno con stat + lectura de tags si la pista es nueva)
-        // retiene el lock de escritura de SQLite durante minutos y bloquea los
-        // guardados del resto de la aplicacion. Por lotes, el lock se libera
-        // entre tandas y ademas podemos reportar avance real.
+        // La parte lenta es leer disco (stat + tags ID3 de archivos nuevos: en
+        // un HDD puede tomar ~100 ms por archivo). Eso debe ocurrir FUERA de la
+        // transaccion: si el lock de escritura se mantiene durante la lectura
+        // de tags, cualquier otra escritura de la app (guardar pista, agregar
+        // carpeta) recibe "database is locked" durante decenas de segundos.
+        // Por eso: construir los payloads sin lock, y tomar el lock solo para
+        // los upserts (milisegundos por lote).
         const CHUNK_SIZE = 500;
-        const runChunk = db.transaction((filePaths) => {
-            for (const filePath of filePaths) {
+        const PROGRESS_EVERY = 50;
+        const runChunk = db.transaction((payloads) => {
+            for (const payload of payloads) {
                 try {
-                    upsertTrack.run(buildIndexPayload(filePath, root, now));
+                    upsertTrack.run(payload);
                     indexed++;
                 } catch (err) {
                     failed++;
@@ -317,7 +320,18 @@ function createLibraryIndexService(options = {}) {
             }
         });
         for (let i = 0; i < files.length; i += CHUNK_SIZE) {
-            runChunk(files.slice(i, i + CHUNK_SIZE));
+            const chunk = files.slice(i, i + CHUNK_SIZE);
+            const payloads = [];
+            for (let j = 0; j < chunk.length; j++) {
+                try {
+                    payloads.push(buildIndexPayload(chunk[j], root, now));
+                } catch (err) {
+                    failed++;
+                }
+                const processed = i + j + 1;
+                if (processed % PROGRESS_EVERY === 0) report(processed);
+            }
+            runChunk(payloads);
             report(Math.min(i + CHUNK_SIZE, total));
         }
         db.transaction(() => {

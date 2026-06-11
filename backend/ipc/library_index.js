@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { createLibraryIndexService } = require('../services/library_index');
+const { createLibraryIndexService, normalizeDiskPath } = require('../services/library_index');
 
 module.exports = function registerLibraryIndexIpc(context) {
     const { ipcMain, db, fs, configDir, writeLog, runLibraryWorkerTask } = context;
@@ -41,6 +41,16 @@ module.exports = function registerLibraryIndexIpc(context) {
     function ensureLibraryRoot() {
         const rootPath = getConfiguredLibraryRoot();
         if (!rootPath || !fs.existsSync(rootPath)) return null;
+        // Este helper corre en TODOS los handlers (búsquedas y estado
+        // incluidos). Solo debe ESCRIBIR cuando la raíz aún no está registrada:
+        // un upsert incondicional choca con el lock de escritura mientras el
+        // worker sincroniza y revienta con "database is locked".
+        const targetKey = normalizeDiskPath(rootPath).toLowerCase();
+        const existing = service.listRoots().find(root =>
+            normalizeDiskPath(root.rootPath).toLowerCase() === targetKey
+            && root.source === 'library_root'
+            && root.locked && root.enabled && root.recursive);
+        if (existing) return existing;
         const result = service.addRoot({
             rootPath,
             source: 'library_root',
