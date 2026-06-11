@@ -80,8 +80,19 @@ El instalador NSIS es por-usuario y no requiere admin. La raíz estaba en el asi
 
 Los tres puntos donde `render.js` clonaba `manualCuesDB` completo (decenas de miles de claves) con spread en el hilo de la UI —incluido el camino caliente justo antes de salir al aire— ahora mezclan en sitio con `Object.assign` (también en libreria.js, 4 sitios).
 
-## 5. Pendiente / recomendaciones
+## 5. Integración de la 0.9.15 y rediseño del buscador principal (2026-06-11, noche)
 
-- **Rama 0.9.15**: al integrarla, `performSearch` debe (a) pasar el `query` real al backend para que filtre allí (nunca `query: ''` + 3000 filas), o (b) reutilizar `library_search_worker.js`. Y `backend/services/library_index.js` debe consultarse vía `library_worker`, no en el main.
+Por decisión del operador, la rama `codex/respaldo-auditoria-eventos` (v0.9.15) se integró a `main` (merge e4a710b). Con eso el buscador de la interfaz principal ya vive en `main`, y se corrigió de raíz:
+
+- **Búsqueda**: `performSearch` ya NO pide 3000 filas con `query:''` ni ejecuta Fuse/Levenshtein en el hilo de la UI. La consulta real viaja al backend y la búsqueda difusa corre en `library_worker` sobre una sesión cacheada (firma = conteo + último `updated_at` del índice; el índice Fuse solo se reconstruye cuando el índice cambia). La UI solo pinta los 150 resultados finales, con protección contra respuestas tardías.
+- **Sincronización**: `library-index-sync-all` / `sync-root` ya NO corren en el proceso main (readdirSync recursivo + lectura de tags ID3 por archivo bloqueaban todo). Corren en `library_worker`, con transacciones por lotes de 500 (el lock de escritura de SQLite se libera entre tandas) y **progreso real**: el worker emite mensajes `{progress}`, main los retransmite (`library-index-sync-progress`) y el cuadro de estado muestra `Sincronizando índice (carpeta 1/3)... 42% (810/1938)`.
+- **Botón ↻**: conserva el orden pedido — primero refresca el explorador de archivos, después sincroniza el índice — ahora con porcentaje visible y sin reentradas.
+- **Arranque**: nuevo canal ligero `library-index-status` (solo conteos, jamás escanea). Al abrir el software el cuadro muestra p. ej. `Índice listo: 1938 pistas · 15 pendientes · últ. sync 09/06/2026`. No hay ningún análisis automático al arrancar.
+
+Verificado bajo Electron con la base real de esta máquina: estado (1938 pistas, 3 raíces), búsqueda con query, y sync completo con 9 eventos de progreso. Suite completa: 245 tests, 0 fallos (los 3 que fallaban antes del merge eran de módulos de esta rama y ya pasan).
+
+## 6. Pendiente / recomendaciones
+
+- ~~Rama 0.9.15~~: integrada y corregida (ver sección 5).
 - **Contención HDD (amplificador real)**: si tras estas correcciones persisten incidencias en discos mecánicos, el siguiente paso de raíz es priorizar I/O: pausar precargas de auxiliares/pre-escucha mientras el deck al aire llena su búfer inicial. No se implementó aquí porque el mecanismo dominante verificado era el bloqueo del main.
 - El fallo de test "Rust stdin EPIPE during stop" es preexistente en `main` y merece revisión aparte.

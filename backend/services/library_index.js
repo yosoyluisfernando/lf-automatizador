@@ -284,7 +284,7 @@ function createLibraryIndexService(options = {}) {
         };
     }
 
-    function syncRoot(rootPath) {
+    function syncRoot(rootPath, onProgress = null) {
         const root = selectRoot.get(normalizeDiskPath(rootPath));
         if (!root) return { success: false, error: 'Raiz no registrada.' };
         if (root.enabled !== 1) return { success: false, error: 'Raiz deshabilitada.' };
@@ -293,8 +293,20 @@ function createLibraryIndexService(options = {}) {
         const files = collectAudioFiles(root.root_path, root.recursive === 1);
         let indexed = 0;
         let failed = 0;
+        const total = files.length;
+        const report = (processed) => {
+            if (typeof onProgress !== 'function') return;
+            try { onProgress({ rootPath: root.root_path, processed, total }); } catch (err) {}
+        };
+        report(0);
 
-        const tx = db.transaction((filePaths) => {
+        // Transacciones por lotes: una sola transaccion con decenas de miles de
+        // upserts (cada uno con stat + lectura de tags si la pista es nueva)
+        // retiene el lock de escritura de SQLite durante minutos y bloquea los
+        // guardados del resto de la aplicacion. Por lotes, el lock se libera
+        // entre tandas y ademas podemos reportar avance real.
+        const CHUNK_SIZE = 500;
+        const runChunk = db.transaction((filePaths) => {
             for (const filePath of filePaths) {
                 try {
                     upsertTrack.run(buildIndexPayload(filePath, root, now));
@@ -303,17 +315,25 @@ function createLibraryIndexService(options = {}) {
                     failed++;
                 }
             }
+        });
+        for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+            runChunk(files.slice(i, i + CHUNK_SIZE));
+            report(Math.min(i + CHUNK_SIZE, total));
+        }
+        db.transaction(() => {
             markMissing.run(now, root.root_path, now);
             updateRootScan.run(now, now, root.root_path);
-        });
-        tx(files);
+        })();
 
         return { success: true, rootPath: root.root_path, scanned: files.length, indexed, failed };
     }
 
-    function syncAllRoots() {
+    function syncAllRoots(onProgress = null) {
         const roots = listRootsStmt.all().filter(root => root.enabled === 1);
-        const results = roots.map(root => syncRoot(root.root_path));
+        const results = roots.map((root, index) => syncRoot(root.root_path, payload => {
+            if (typeof onProgress !== 'function') return;
+            onProgress({ ...payload, rootIndex: index + 1, rootCount: roots.length });
+        }));
         return {
             success: true,
             roots: results,
@@ -321,6 +341,22 @@ function createLibraryIndexService(options = {}) {
             indexed: results.reduce((sum, item) => sum + (item.indexed || 0), 0),
             failed: results.reduce((sum, item) => sum + (item.failed || 0), 0)
         };
+    }
+
+    // Estado ligero del indice (solo conteos): pensado para mostrarse al abrir
+    // el software sin disparar ningun escaneo de disco.
+    function getStatus() {
+        const roots = listRoots();
+        const counts = db.prepare(`
+            SELECT COALESCE(status, '') AS status, COUNT(*) AS count
+            FROM library_index_tracks
+            GROUP BY COALESCE(status, '')
+        `).all();
+        const byStatus = {};
+        let total = 0;
+        counts.forEach(row => { byStatus[row.status] = row.count; total += row.count; });
+        const lastScanAt = roots.reduce((max, root) => (root.lastScanAt && root.lastScanAt > max ? root.lastScanAt : max), '');
+        return { total, byStatus, rootCount: roots.length, lastScanAt };
     }
 
     function search(payload = {}) {
@@ -387,6 +423,7 @@ function createLibraryIndexService(options = {}) {
         syncRoot,
         syncAllRoots,
         search,
+        getStatus,
         getRootConflict,
         collectAudioFiles
     };

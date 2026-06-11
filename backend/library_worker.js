@@ -4,6 +4,8 @@ const db = require('../database');
 const { getDbTracksMap } = require('./services/track_mapper.js');
 const { getConfigDir } = require('./utils/app_paths');
 const fileTypeResolver = require('./services/file_type_resolver');
+const { createLibraryIndexService } = require('./services/library_index');
+const { createSearchSession } = require('../frontend/library_search_shared');
 const { defaultFileTypes, normalizeFileTypes } = require('../frontend/file_types_data');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
@@ -718,6 +720,79 @@ function getArtistCardDetailsForTrackPath(filePath) {
     };
 }
 
+// ── Índice musical de la interfaz principal ────────────────────────────────
+// Todo el trabajo del índice (escaneo de carpetas, lectura de tags, consultas
+// y búsqueda difusa) corre en este hilo: ni la interfaz ni el proceso main
+// deben ejecutarlo. El progreso se reporta con mensajes {progress} que main
+// retransmite a las ventanas sin resolver la tarea pendiente.
+let libraryIndexService = null;
+function getLibraryIndexService() {
+    if (!libraryIndexService) libraryIndexService = createLibraryIndexService({ db, configDir });
+    return libraryIndexService;
+}
+
+function reportProgress(payload) {
+    try { parentPort.postMessage({ progress: { kind: 'library-index-sync', ...payload } }); } catch (err) {}
+}
+
+// Sesión de búsqueda difusa cacheada sobre library_index_tracks. La firma
+// (conteo + último updated_at) detecta cambios del índice y evita reconstruir
+// el índice Fuse en cada tecleo.
+let indexSearchCache = { signature: '', session: null };
+
+function searchLibraryIndexFuzzy(payload = {}) {
+    const query = String(payload.query || '').trim();
+    const typeId = String(payload.typeId || '').trim();
+    const limit = Math.min(5000, Math.max(1, Number(payload.limit) || 150));
+
+    const sig = db.prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM library_index_tracks").get();
+    const signature = `${sig.c}|${sig.m}`;
+    if (!indexSearchCache.session || indexSearchCache.signature !== signature) {
+        const rows = db.prepare(`
+            SELECT file_path, root_path, title, artist, album, year, genre, duration,
+                   file_size, file_mtime_ms, type_id, status, last_seen_at
+            FROM library_index_tracks
+            ORDER BY
+                CASE status WHEN 'treated' THEN 0 WHEN 'pending' THEN 1 WHEN 'changed' THEN 2 ELSE 3 END,
+                artist COLLATE NOCASE,
+                title COLLATE NOCASE
+        `).all().map(row => ({
+            filePath: row.file_path,
+            rootPath: row.root_path,
+            title: row.title,
+            artist: row.artist,
+            album: row.album,
+            year: row.year,
+            genre: row.genre,
+            duration: row.duration,
+            fileSize: row.file_size,
+            fileMtimeMs: row.file_mtime_ms,
+            typeId: row.type_id,
+            status: row.status,
+            lastSeenAt: row.last_seen_at
+        }));
+        indexSearchCache = {
+            signature,
+            session: createSearchSession(rows, {
+                keys: [
+                    { name: 'searchTitle', weight: 0.38 },
+                    { name: 'searchArtist', weight: 0.24 },
+                    { name: 'searchGenre', weight: 0.16 },
+                    { name: 'searchAlbum', weight: 0.10 },
+                    { name: 'searchPath', weight: 0.12 }
+                ]
+            })
+        };
+    }
+
+    const matchesType = item => {
+        if (!typeId || typeId === 'all') return true;
+        if (typeId === '__music') return !item.typeId;
+        return item.typeId === typeId;
+    };
+    return indexSearchCache.session.search(query).filter(matchesType).slice(0, limit);
+}
+
 async function runTask(action, payload) {
     if (action === 'clockwheel-build-plan') return { success: true, plan: buildClockwheelPlan(payload || {}) };
     if (action === 'lib-get-db-tracks') {
@@ -725,6 +800,18 @@ async function runTask(action, payload) {
         // consultas (más el mapeo por fila) tardan segundos y, si corrieran en
         // main, congelarían todas las ventanas y el puente con RustAudio.
         return { success: true, cuesDB: getDbTracksMap(payload?.paths, payload?.options || {}) };
+    }
+    if (action === 'library-index-search') {
+        return { success: true, results: searchLibraryIndexFuzzy(payload || {}) };
+    }
+    if (action === 'library-index-sync-all') {
+        return getLibraryIndexService().syncAllRoots(reportProgress);
+    }
+    if (action === 'library-index-sync-root') {
+        return getLibraryIndexService().syncRoot(payload?.rootPath, reportProgress);
+    }
+    if (action === 'library-index-status') {
+        return { success: true, status: getLibraryIndexService().getStatus() };
     }
     if (action === 'lib-rebuild-artist-profiles') {
         const safePaths = Array.isArray(payload) ? payload.filter(Boolean) : null;

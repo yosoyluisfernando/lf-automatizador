@@ -4,8 +4,24 @@ const path = require('path');
 const { createLibraryIndexService } = require('../services/library_index');
 
 module.exports = function registerLibraryIndexIpc(context) {
-    const { ipcMain, db, fs, configDir, writeLog } = context;
+    const { ipcMain, db, fs, configDir, writeLog, runLibraryWorkerTask } = context;
     const service = createLibraryIndexService({ db, fs, configDir });
+
+    // El trabajo pesado (escaneo, tags, búsqueda difusa) corre en
+    // library_worker: si corriera aquí bloquearía el event loop del proceso
+    // principal (todas las ventanas congeladas y falsos timeouts de RustAudio).
+    // La instancia local `service` queda como red de seguridad y para las
+    // operaciones baratas (listar/agregar raíces).
+    async function runInWorker(action, payload, fallback) {
+        try {
+            const result = await runLibraryWorkerTask(action, payload);
+            if (result && result.success !== false) return result;
+            writeLog?.(`${action}: worker fallo (${result?.error || 'sin detalle'}); usando proceso principal.`);
+        } catch (err) {
+            writeLog?.(`${action}: worker fallo (${err.message}); usando proceso principal.`);
+        }
+        return fallback();
+    }
 
     function readJson(filePath, fallback) {
         try {
@@ -75,33 +91,47 @@ module.exports = function registerLibraryIndexIpc(context) {
         }
     });
 
-    ipcMain.handle('library-index-sync-root', (event, rootPath) => {
+    ipcMain.handle('library-index-sync-root', async (event, rootPath) => {
         try {
             ensureLibraryRoot();
-            return service.syncRoot(rootPath);
+            return await runInWorker('library-index-sync-root', { rootPath }, () => service.syncRoot(rootPath));
         } catch (err) {
             writeLog?.(`Error library-index-sync-root: ${err.message}`);
             return { success: false, error: err.message };
         }
     });
 
-    ipcMain.handle('library-index-sync-all', () => {
+    ipcMain.handle('library-index-sync-all', async () => {
         try {
             ensureLibraryRoot();
-            return service.syncAllRoots();
+            return await runInWorker('library-index-sync-all', {}, () => service.syncAllRoots());
         } catch (err) {
             writeLog?.(`Error library-index-sync-all: ${err.message}`);
             return { success: false, error: err.message };
         }
     });
 
-    ipcMain.handle('library-index-search', (event, payload = {}) => {
+    ipcMain.handle('library-index-search', async (event, payload = {}) => {
         try {
             ensureLibraryRoot();
-            return { success: true, results: service.search(payload) };
+            const result = await runInWorker('library-index-search', payload || {}, () => ({ success: true, results: service.search(payload) }));
+            return { success: true, results: Array.isArray(result.results) ? result.results : [] };
         } catch (err) {
             writeLog?.(`Error library-index-search: ${err.message}`);
             return { success: false, error: err.message, results: [] };
+        }
+    });
+
+    // Estado ligero para el cuadro de diagnóstico (al abrir el software y tras
+    // cada sincronización). Solo conteos: jamás dispara un escaneo de disco.
+    ipcMain.handle('library-index-status', async () => {
+        try {
+            ensureLibraryRoot();
+            const result = await runInWorker('library-index-status', {}, () => ({ success: true, status: service.getStatus() }));
+            return { success: true, status: result.status || null };
+        } catch (err) {
+            writeLog?.(`Error library-index-status: ${err.message}`);
+            return { success: false, error: err.message, status: null };
         }
     });
 };

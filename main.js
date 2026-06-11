@@ -328,6 +328,13 @@ function getLibraryWorker() {
     if (libraryWorker) return libraryWorker;
     libraryWorker = new Worker(path.join(__dirname, 'backend', 'library_worker.js'));
     libraryWorker.on('message', (message) => {
+        // Mensajes de progreso (sincronización del índice): se retransmiten a
+        // las ventanas sin resolver la tarea pendiente.
+        if (message?.progress) {
+            sendToWindowSafe(mainWindow, 'library-index-sync-progress', message.progress);
+            sendToWindowSafe(libraryWindow, 'library-index-sync-progress', message.progress);
+            return;
+        }
         const pending = libraryWorkerPending.get(message?.id);
         if (!pending) return;
         libraryWorkerPending.delete(message.id);

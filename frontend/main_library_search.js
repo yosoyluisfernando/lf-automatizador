@@ -5,7 +5,6 @@ const path = require('path');
 const { ipcRenderer } = require('electron');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { defaultFileTypes, normalizeFileTypes } = require('./file_types_data');
-const { fuzzySearch } = require('./library_search_shared');
 
 const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
 const fileTypesPath = path.join(configDir, 'file_types.json');
@@ -46,6 +45,8 @@ function createMainLibrarySearchController(options = {}) {
     let fileTypes = [];
     let roots = [];
     let searchTimer = null;
+    let searchToken = 0;
+    let syncInProgress = false;
 
     function setStatus(message = '', tone = '') {
         const node = byId('main-library-search-status');
@@ -135,19 +136,6 @@ function createMainLibrarySearchController(options = {}) {
         return title || path.basename(result.filePath || '') || 'Sin titulo';
     }
 
-    function fuzzyFilter(items = [], query = '') {
-        return fuzzySearch(items, query, {
-            titleBuilder: resultTitle,
-            keys: [
-                { name: 'searchTitle', weight: 0.38 },
-                { name: 'searchArtist', weight: 0.24 },
-                { name: 'searchGenre', weight: 0.16 },
-                { name: 'searchAlbum', weight: 0.10 },
-                { name: 'searchPath', weight: 0.12 }
-            ]
-        });
-    }
-
     function renderResults(items = []) {
         const results = byId('main-library-search-results');
         if (!results) return;
@@ -200,14 +188,19 @@ function createMainLibrarySearchController(options = {}) {
         }
         setSearchMode(true);
         setStatus('Buscando...');
-        const result = await ipcRenderer.invoke('library-index-search', { query: '', typeId, limit: 3000 });
+        // La consulta REAL viaja al backend y la búsqueda difusa corre en
+        // library_worker (hilo aparte, índice cacheado). Esta interfaz solo
+        // pinta los resultados finales: nada de traer miles de filas y
+        // filtrarlas aquí (eso congelaba toda la ventana).
+        const token = ++searchToken;
+        const result = await ipcRenderer.invoke('library-index-search', { query, typeId, limit: 150 });
+        if (token !== searchToken) return; // hay una búsqueda más reciente en curso
         if (!result?.success) {
             renderResults([]);
             setStatus(result?.error || 'No se pudo buscar.');
             return;
         }
-        const rawItems = Array.isArray(result.results) ? result.results : [];
-        const items = fuzzyFilter(rawItems, query).slice(0, 150);
+        const items = Array.isArray(result.results) ? result.results : [];
         renderResults(items);
         setStatus(`${items.length} resultado(s)`);
     }
@@ -276,27 +269,71 @@ function createMainLibrarySearchController(options = {}) {
         }
     }
 
-    async function syncAll() {
-        setModalMessage('Actualizando explorador e indice...', 'warn');
-        setStatus('Actualizando explorador...');
-        if (typeof options.onRefreshExplorer === 'function') {
-            try {
-                await options.onRefreshExplorer();
-                setStatus('Explorador actualizado. Sincronizando indice...');
-            } catch (err) {
-                setStatus('No se pudo actualizar el explorador. Sincronizando indice...');
+    // Estado del índice para el cuadro de diagnóstico. Solo conteos (sin
+    // escaneo): se muestra al abrir el software y tras cada sincronización.
+    async function refreshIndexStatus() {
+        try {
+            const result = await ipcRenderer.invoke('library-index-status');
+            if (syncInProgress) return; // el progreso de sync manda sobre el estado
+            if (!result?.success || !result.status) return;
+            const status = result.status;
+            if (!status.total) {
+                setStatus('Índice vacío. Usa ↻ para sincronizar tu música.', 'warn');
+                return;
             }
-        }
-        const result = await ipcRenderer.invoke('library-index-sync-all');
-        await refreshRoots();
-        await refreshActiveSearch();
-        if (result?.success) {
-            const message = `Actualizacion lista. Escaneados: ${result.scanned || 0}, indexados: ${result.indexed || 0}.`;
-            setModalMessage(message, 'ok');
-            setStatus(message);
-        } else {
-            setModalMessage(result?.error || 'No se pudo actualizar el indice.', 'error');
-            setStatus('No se pudo actualizar el indice.');
+            const pending = (status.byStatus?.pending || 0) + (status.byStatus?.changed || 0);
+            const missing = status.byStatus?.missing || 0;
+            const parts = [`Índice listo: ${status.total} pistas`];
+            if (pending > 0) parts.push(`${pending} pendientes`);
+            if (missing > 0) parts.push(`${missing} faltantes`);
+            if (status.lastScanAt) parts.push(`últ. sync ${formatDate(status.lastScanAt)}`);
+            setStatus(parts.join(' · '), pending > 0 || missing > 0 ? 'warn' : 'ok');
+        } catch (err) {}
+    }
+
+    function handleSyncProgress(payload = {}) {
+        const total = Number(payload.total) || 0;
+        const processed = Math.min(Number(payload.processed) || 0, total);
+        const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+        const rootInfo = payload.rootCount > 1 ? ` (carpeta ${payload.rootIndex}/${payload.rootCount})` : '';
+        const message = total > 0
+            ? `Sincronizando índice${rootInfo}... ${percent}% (${processed}/${total})`
+            : `Escaneando carpetas${rootInfo}...`;
+        setStatus(message, 'warn');
+        setModalMessage(message, 'warn');
+    }
+
+    async function syncAll() {
+        if (syncInProgress) return;
+        syncInProgress = true;
+        try {
+            setModalMessage('Actualizando explorador e indice...', 'warn');
+            setStatus('Actualizando explorador...');
+            // Orden pedido por el operador: primero refrescar el explorador de
+            // archivos, después sincronizar el índice (con progreso visible).
+            if (typeof options.onRefreshExplorer === 'function') {
+                try {
+                    await options.onRefreshExplorer();
+                    setStatus('Explorador actualizado. Sincronizando indice...');
+                } catch (err) {
+                    setStatus('No se pudo actualizar el explorador. Sincronizando indice...');
+                }
+            }
+            const result = await ipcRenderer.invoke('library-index-sync-all');
+            await refreshRoots();
+            await refreshActiveSearch();
+            if (result?.success) {
+                const message = `Actualizacion lista. Escaneados: ${result.scanned || 0}, indexados: ${result.indexed || 0}.`;
+                setModalMessage(message, 'ok');
+                setStatus(message, 'ok');
+                syncInProgress = false;
+                refreshIndexStatus().catch(() => {});
+            } else {
+                setModalMessage(result?.error || 'No se pudo actualizar el indice.', 'error');
+                setStatus('No se pudo actualizar el indice.', 'error');
+            }
+        } finally {
+            syncInProgress = false;
         }
     }
 
@@ -338,12 +375,16 @@ function createMainLibrarySearchController(options = {}) {
                 .then(refreshActiveSearch)
                 .catch(() => {});
         });
+        ipcRenderer.on('library-index-sync-progress', (event, payload) => handleSyncProgress(payload || {}));
     }
 
     function init() {
         loadFileTypes();
         bind();
         refreshRoots().catch(() => {});
+        // Al abrir el software solo se informa el estado del índice (conteos);
+        // jamás se lanza un análisis o escaneo automático en el arranque.
+        refreshIndexStatus().catch(() => {});
     }
 
     return {
