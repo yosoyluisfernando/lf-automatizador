@@ -71,6 +71,7 @@ config/artists/img/
 
 # Archivos internos que no pertenecen al repo público
 PLAN_GENERADOR_PLAYLIST.md
+PLAN_AUDIO_DISCO_SATURADO.md
 tests/
 manual/
 docs/
