@@ -36,7 +36,9 @@ test('main process prevents app suspension while allowing the display to sleep a
 test('application shutdown cleanup runs before windows can leave child processes alive', () => {
     assert.match(mainSource, /function runAppShutdownCleanup\(reason = 'app-shutdown'\)/);
     assert.match(mainSource, /app\.on\('before-quit', \(\) => \{\s*runAppShutdownCleanup\('before-quit'\);/);
-    assert.match(mainSource, /ipcMain\.on\('confirm-app-quit', \(\) => \{ runAppShutdownCleanup\('confirm-app-quit'\); app\.quit\(\); \}\)/);
+    assert.match(mainSource, /function confirmAppQuit\(reason = 'confirm-app-quit'\)/);
+    assert.match(mainSource, /mainWindow\.close\(\);[\s\S]*app\.quit\(\);/);
+    assert.match(mainSource, /ipcMain\.on\('confirm-app-quit', \(\) => \{ confirmAppQuit\('confirm-app-quit'\); \}\)/);
     assert.match(mainSource, /rustAudioEngine\.stop\(\)/);
     assert.match(mainSource, /appShutdownCleanupStarted/);
     assert.match(mainSource, /onEngineEvent: \(message\) => \{\s*if \(isAppQuitting\) return;/);

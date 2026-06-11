@@ -230,8 +230,26 @@
                 </div>
                 
                 <div class="sidebar-content active-content" id="content-explorador" style="display: flex;">
+                    <div class="library-search-results" id="main-library-search-results" style="display: none;"></div>
                     <div class="explorer-content" id="file-explorer">
                         <p style="padding: 15px; color: #888; text-align: center;" data-i18n="main_window.sidebar.loading_dirs">Cargando directorios...</p>
+                    </div>
+                    <div class="library-search-input-row">
+                        <div class="library-search-input-wrap">
+                            <span class="library-search-deco">🔎</span>
+                            <input id="main-library-search-input" class="library-search-input" type="search" placeholder="Buscar en biblioteca e indice" spellcheck="false">
+                        </div>
+                    </div>
+                    <div class="library-search-dock" id="main-library-search-dock">
+                        <div class="library-search-row">
+                            <select id="main-library-type-filter" class="library-search-type" title="Filtrar por tipo de archivo">
+                                <option value="all">Todo</option>
+                            </select>
+                            <button id="main-library-clear-btn" class="library-search-icon-btn danger" title="Limpiar busqueda visual">X</button>
+                            <button id="main-library-refresh-btn" class="library-search-icon-btn" title="Actualizar explorador e indice">↻</button>
+                            <button id="main-library-settings-btn" class="library-search-icon-btn" title="Configurar carpetas indexadas">⚙</button>
+                        </div>
+                        <div id="main-library-search-status" class="library-search-status"></div>
                     </div>
                 </div>
 
@@ -393,7 +411,7 @@
                     <span>🎛️ Botonera de efectos</span>
                     <button id="cw-profile-button" class="cw-profile-button" title="Perfiles">👤 Principal</button>
                     <button id="btn-undock-cartwall" class="toolbar-btn" title="Desacoplar a ventana flotante">⏏️</button>
-                    <button id="btn-hide-cartwall" class="toolbar-btn" title="Ocultar botonera">X</button>
+                    <button id="btn-hide-cartwall" class="toolbar-btn cw-close-btn" title="Ocultar botonera">X</button>
                 </div>
                 <div class="cw-tabs-container" id="cw-tabs">
                 </div>
@@ -463,6 +481,38 @@
                     <button id="btn-eq-cancel" class="settings-btn" style="background-color: #c0392b; color: white;" data-i18n="modals.eq.cancel">❌ Cancelar</button>
                     <button id="btn-eq-save" class="settings-btn" style="background-color: #27ae60; color: white;" data-i18n="modals.eq.save">💾 Guardar Cambios</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="library-index-modal" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content library-index-modal-content">
+            <div class="library-index-modal-head">
+                <h3>Carpetas indexadas</h3>
+                <button id="library-index-close" class="library-search-icon-btn" title="Cerrar">X</button>
+            </div>
+            <div class="library-index-notice">
+                Al agregar carpetas se importaran metadatos originales del archivo para mejorar la busqueda.
+            </div>
+            <div class="library-index-form">
+                <select id="library-index-type" class="settings-input"></select>
+                <label class="library-index-check"><input id="library-index-recursive" type="checkbox" checked> Incluir subcarpetas</label>
+                <button id="library-index-add-folder" class="settings-btn">Agregar carpeta</button>
+                <button id="library-index-sync-all" class="settings-btn">Actualizar todo</button>
+            </div>
+            <div id="library-index-message" class="library-index-message"></div>
+            <div class="library-index-table-wrap">
+                <table class="library-index-table">
+                    <thead>
+                        <tr>
+                            <th>Carpeta</th>
+                            <th>Tipo</th>
+                            <th>Estado</th>
+                            <th>Ultimo escaneo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="library-index-root-body"></tbody>
+                </table>
             </div>
         </div>
     </div>

@@ -174,7 +174,7 @@ function isoFromDate(value) {
     return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 function assetReady(asset) {
-    return !!(asset?.clientName || asset?.campaignName) && asset.status !== 'draft' && asset.enabled !== false;
+    return asset.enabled !== false;
 }
 function assetValidityLabel(asset) {
     if (!asset?.validityStart && !asset?.validityEnd) return '--';
@@ -201,7 +201,7 @@ function populateSelect(select, includeAll = false) {
     if (includeAll) {
         const option = document.createElement('option');
         option.value = 'all';
-        option.textContent = 'Todas';
+        option.textContent = i18n.t('commercial_manager.opt_all_fem') || 'Todas';
         select.appendChild(option);
     }
     categories.forEach(category => {
@@ -310,16 +310,40 @@ function renderAssetsTable() {
     });
 }
 
+function isCommercial(asset) {
+    return asset.rootType === 'commercials' || ['commercial','promo','courtesy','public_service','government','social'].includes(asset.commercialType);
+}
+
+function populateInventoryTabs(assetsArray, commId, jingId, emptyId, limit) {
+    const ready = assetsArray.filter(assetReady);
+    const comms = ready.filter(isCommercial).slice(0, limit);
+    const jings = ready.filter(a => !isCommercial(a)).slice(0, limit);
+    
+    $(commId).replaceChildren();
+    $(jingId).replaceChildren();
+    
+    comms.forEach(a => $(commId).appendChild(createSpotCard(a)));
+    jings.forEach(a => $(jingId).appendChild(createSpotCard(a)));
+    
+    if (ready.length === 0) {
+        $(emptyId).style.display = 'block';
+        $(commId).style.display = 'none';
+        $(jingId).style.display = 'none';
+    } else {
+        $(emptyId).style.display = 'none';
+        // Restaurar display según la pestaña activa se maneja con CSS/clases, pero aseguramos que el contenedor activo se vea.
+        const commActive = $('tab-inv-commercials')?.classList.contains('active') || $('tab-cont-commercials')?.classList.contains('active');
+        $(commId).style.display = commActive ? 'flex' : 'none';
+        $(jingId).style.display = !commActive ? 'flex' : 'none';
+    }
+}
+
 function renderInventory() {
-    const host = $('inventory-list');
-    host.replaceChildren();
-    assets.filter(assetReady).slice(0, 120).forEach(asset => host.appendChild(createSpotCard(asset)));
+    populateInventoryTabs(assets, 'inventory-commercials', 'inventory-jingles', 'inventory-empty-hint', 120);
 }
 
 function renderContinuityInventory() {
-    const host = $('continuity-inventory');
-    host.replaceChildren();
-    assets.filter(assetReady).slice(0, 80).forEach(asset => host.appendChild(createSpotCard(asset)));
+    populateInventoryTabs(assets, 'continuity-commercials', 'continuity-jingles', 'continuity-empty-hint', 80);
 }
 
 function createSpotCard(asset) {
@@ -500,16 +524,75 @@ function addAssetsToBlock(assetItems, block = ensureEditableBlock()) {
 function renderBasicRows() {
     const body = $('basic-body');
     body.replaceChildren();
+    let dragSrcId = null;
+
     blocks.filter(block => block.mode !== 'advanced').forEach((block, index) => {
         const tr = document.createElement('tr');
         tr.className = block.id === currentBlockId ? 'selected' : '';
+        tr.draggable = true;
+        tr.style.cursor = 'grab';
         const names = (block.items || []).map(item => item.title || basename(item.filePath)).join(', ') || i18n.t('commercial_manager.js_no_spots') || '(Sin spots)';
         tr.innerHTML = `<td>${index + 1}</td><td>${esc(block.primaryTime || '--')}</td><td><strong>${esc(names)}</strong></td><td>${block.repeatActive ? `${i18n.t('commercial_manager.js_every') || 'Cada'} ${block.repeatInterval || 0} ${i18n.t('commercial_manager.js_min') || 'min'}` : (i18n.t('commercial_manager.js_exact_time') || 'Hora exacta')}</td><td><button class="danger" data-delete="${esc(block.id)}">X</button></td>`;
+        
+        tr.addEventListener('dragstart', (e) => {
+            dragSrcId = block.id;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', block.id);
+            tr.style.opacity = '0.4';
+        });
+        tr.addEventListener('dragend', () => tr.style.opacity = '1');
+        tr.addEventListener('dragover', (e) => { e.preventDefault(); return false; });
+        tr.addEventListener('dragenter', () => tr.style.borderTop = '2px solid var(--accent)');
+        tr.addEventListener('dragleave', () => tr.style.borderTop = '');
+        tr.addEventListener('drop', (e) => {
+            e.stopPropagation();
+            tr.style.borderTop = '';
+            
+            const payloadStr = e.dataTransfer.getData('application/json');
+            if (payloadStr) {
+                try {
+                    const payload = JSON.parse(payloadStr);
+                    if (Array.isArray(payload) && payload.length > 0) {
+                        const toIndex = blocks.findIndex(b => b.id === block.id);
+                        if (toIndex !== -1) {
+                            const newBlocks = [];
+                            payload.forEach(asset => {
+                                const newBlock = createBlock({ mode: 'basic', name: asset.title || basename(asset.filePath) });
+                                newBlock.items.push(assetToBlockItem(asset));
+                                newBlocks.push(newBlock);
+                            });
+                            blocks.splice(toIndex, 0, ...newBlocks);
+                            currentBlockId = newBlocks[newBlocks.length - 1].id;
+                            loadBlockEditor(newBlocks[newBlocks.length - 1]);
+                            renderBasicRows();
+                            renderContinuityGrid();
+                        }
+                        return false;
+                    }
+                } catch(err) {}
+            }
+            
+            if (dragSrcId !== null && dragSrcId !== block.id) {
+                const fromIndex = blocks.findIndex(b => b.id === dragSrcId);
+                const toIndex = blocks.findIndex(b => b.id === block.id);
+                if (fromIndex !== -1 && toIndex !== -1) {
+                    const draggedBlock = blocks.splice(fromIndex, 1)[0];
+                    blocks.splice(toIndex, 0, draggedBlock);
+                    renderBasicRows();
+                    renderContinuityGrid();
+                }
+            }
+            return false;
+        });
+
         tr.addEventListener('click', (event) => {
             if (event.target.dataset.delete) return;
+            currentBlockId = block.id;
             loadBlockEditor(block);
+            renderBasicRows();
         });
-        tr.querySelector('button').addEventListener('click', async () => {
+        tr.querySelector('button').addEventListener('click', async (event) => {
+            event.stopPropagation();
             await ipcRenderer.invoke('commercial-delete-block', block.id);
             blocks = blocks.filter(item => item.id !== block.id);
             currentBlockId = blocks[0]?.id || null;
@@ -625,10 +708,53 @@ function renderTanda() {
     opening.className = 'tanda-item fixed';
     opening.innerHTML = `<div class="tanda-title">${i18n.t('commercial_manager.js_open_tanda') || 'Apertura de tanda / ID'}</div><div>00:05</div><div class="tanda-meta">${i18n.t('commercial_manager.js_global_rule') || 'Regla global del sistema'}</div>`;
     host.appendChild(opening);
+    let dragSrcIndex = null;
     items.forEach((item, index) => {
         const row = document.createElement('div');
         row.className = 'tanda-item';
-        row.innerHTML = `<div class="tanda-title">${esc(item.title || basename(item.filePath))}</div><div>${secondsToClock(item.duration)}</div><div class="tanda-meta">${i18n.t('commercial_manager.js_order') || 'Orden'} ${index + 1} | ${i18n.t('commercial_manager.js_temp') || 'Temporal'}</div>`;
+        row.draggable = true;
+        row.style.cursor = 'grab';
+        row.innerHTML = `<div class="tanda-title">${esc(item.title || basename(item.filePath))}</div><div>${secondsToClock(item.duration)}</div><div class="tanda-meta">${i18n.t('commercial_manager.js_order') || 'Orden'} ${index + 1} <button class="danger" style="margin-left:8px; padding:2px 5px;" data-delete="${index}">X</button></div>`;
+        
+        row.addEventListener('dragstart', (e) => {
+            dragSrcIndex = index;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', index);
+            row.style.opacity = '0.4';
+        });
+        row.addEventListener('dragend', () => {
+            row.style.opacity = '1';
+        });
+        row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            return false;
+        });
+        row.addEventListener('dragenter', () => {
+            row.style.borderTop = '2px solid var(--accent)';
+        });
+        row.addEventListener('dragleave', () => {
+            row.style.borderTop = '';
+        });
+        row.addEventListener('drop', (e) => {
+            e.stopPropagation();
+            row.style.borderTop = '';
+            if (dragSrcIndex !== null && dragSrcIndex !== index) {
+                const draggedItem = block.items.splice(dragSrcIndex, 1)[0];
+                block.items.splice(index, 0, draggedItem);
+                renderTanda();
+                renderBasicRows();
+            }
+            return false;
+        });
+
+        row.querySelector('button[data-delete]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            block.items.splice(index, 1);
+            renderTanda();
+            renderBasicRows();
+            renderContinuityGrid();
+        });
+
         host.appendChild(row);
     });
     const drop = document.createElement('div');
@@ -728,6 +854,12 @@ function bindEvents() {
         await loadAssets(false);
     });
     $('btn-save-asset').addEventListener('click', saveAsset);
+    
+    $('btn-preview-asset').addEventListener('click', () => {
+        if (!selectedAsset || !selectedAsset.filePath) return;
+        ipcRenderer.send('open-preview', selectedAsset.filePath);
+    });
+
     $('btn-disable-asset').addEventListener('click', async () => {
         if (!selectedAsset) return;
         selectedAsset.enabled = false;
@@ -769,11 +901,26 @@ function bindEvents() {
     $('btn-generate-grid').addEventListener('click', () => {
         setStatus(i18n.t('commercial_manager.js_gen_ready') || 'Generador automatico preparado...');
     });
-    $('basic-drop').addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
-    $('basic-drop').addEventListener('drop', event => {
+    $('sub-basic').addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
+    $('sub-basic').addEventListener('drop', event => {
         event.preventDefault();
-        const payload = JSON.parse(event.dataTransfer.getData('application/json') || '[]');
-        addAssetsToBlock(payload);
+        const payloadStr = event.dataTransfer.getData('application/json');
+        if (!payloadStr) return;
+        try {
+            const payload = JSON.parse(payloadStr);
+            if (Array.isArray(payload) && payload.length > 0) {
+                payload.forEach(asset => {
+                    const block = createBlock({ mode: 'basic', name: asset.title || basename(asset.filePath) });
+                    block.items.push(assetToBlockItem(asset));
+                    blocks.push(block);
+                    currentBlockId = block.id;
+                });
+                renderBasicRows();
+                renderContinuityGrid();
+                const lastBlock = blocks.find(b => b.id === currentBlockId);
+                if (lastBlock) loadBlockEditor(lastBlock);
+            }
+        } catch(err) {}
     });
     const dropzone = $('asset-dropzone');
     dropzone.addEventListener('dragover', event => { event.preventDefault(); });
@@ -781,6 +928,38 @@ function bindEvents() {
         event.preventDefault();
         importPaths([...event.dataTransfer.files].map(file => file.path).filter(Boolean));
     });
+    
+    $('orphans-card').addEventListener('click', () => {
+        $('filter-status').value = 'draft';
+        showView('library');
+        loadAssets(false);
+    });
+
+    $('expiring-card').addEventListener('click', () => {
+        $('filter-status').value = 'expiring';
+        showView('library');
+        loadAssets(false);
+    });
+
+    const setupTabs = (btnComm, btnJing, divComm, divJing, divEmpty) => {
+        const toggle = (showComm) => {
+            $(btnComm).classList.toggle('active', showComm);
+            $(btnJing).classList.toggle('active', !showComm);
+            $(btnComm).style.background = showComm ? 'var(--accent)' : 'transparent';
+            $(btnComm).style.color = showComm ? '#000' : '#fff';
+            $(btnJing).style.background = !showComm ? 'var(--accent)' : 'transparent';
+            $(btnJing).style.color = !showComm ? '#000' : '#fff';
+            if ($(divEmpty).style.display !== 'block') {
+                $(divComm).style.display = showComm ? 'flex' : 'none';
+                $(divJing).style.display = !showComm ? 'flex' : 'none';
+            }
+        };
+        $(btnComm).addEventListener('click', () => toggle(true));
+        $(btnJing).addEventListener('click', () => toggle(false));
+    };
+    setupTabs('tab-inv-commercials', 'tab-inv-jingles', 'inventory-commercials', 'inventory-jingles', 'inventory-empty-hint');
+    setupTabs('tab-cont-commercials', 'tab-cont-jingles', 'continuity-commercials', 'continuity-jingles', 'continuity-empty-hint');
+
     window.addEventListener('keydown', event => {
         if (event.ctrlKey && event.key.toLowerCase() === 's') {
             event.preventDefault();

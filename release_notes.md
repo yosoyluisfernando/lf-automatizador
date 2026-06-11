@@ -1,4 +1,4 @@
-## 🚀 Novedades y Mejoras en la versión 0.9.14
+## 🚀 Novedades y Mejoras en la versión 0.9.15
 
 ### ✨ Nuevas Funciones Principales
 * **Nuevo Generador Automático de Playlist:** Se diseñó y construyó desde cero una ventana independiente dedicada exclusivamente a armar playlists automáticas basadas en patrones de reloj.

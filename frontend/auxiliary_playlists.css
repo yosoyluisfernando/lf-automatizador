@@ -58,6 +58,38 @@
     color: #00a8ff;
 }
 
+.aux-icon-btn.aux-dock-btn {
+    width: auto;
+    min-width: 28px;
+    height: 24px;
+    padding: 3px 7px;
+    background: transparent;
+    border-color: transparent;
+    color: #aaa;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.aux-icon-btn.aux-dock-btn:hover {
+    color: #00a8ff;
+    background: #333;
+    border-color: #444;
+}
+
+.aux-icon-btn.aux-close-btn {
+    background: #8e1f18;
+    border-color: #c0392b;
+    color: #fff;
+    font-weight: bold;
+}
+
+.aux-icon-btn.aux-close-btn:hover {
+    background: #c0392b;
+    border-color: #ff6b5f;
+    color: #fff;
+    box-shadow: 0 0 8px rgba(231, 76, 60, 0.45);
+}
+
 .aux-toggle {
     width: 28px;
     height: 28px;

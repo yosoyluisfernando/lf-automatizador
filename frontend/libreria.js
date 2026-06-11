@@ -888,6 +888,8 @@ function createTreeNode(name, itemPath, isDirectory, iconOverride = null) {
     }
 
     node.onclick = (e) => { 
+        window.lfActivePanel = 'library';
+        window.dispatchEvent(new CustomEvent('lf-panel-focus', { detail: { panel: 'library' } }));
         e.stopPropagation(); 
         if (e.ctrlKey) {
             if (selectedTreeNodes.has(itemPath)) {
@@ -1241,6 +1243,8 @@ function renderVirtualQueue() {
         });
 
         tr.onclick = (e) => {
+            window.lfActivePanel = 'library';
+        window.dispatchEvent(new CustomEvent('lf-panel-focus', { detail: { panel: 'library' } }));
             const pathId = track.fullPath;
             if (e.shiftKey && lastSelectedPath) {
                 const lastIndex = filteredTracks.findIndex(t => t.fullPath === lastSelectedPath);
@@ -1275,26 +1279,19 @@ function setupVirtualScroll() {
 window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || filteredTracks.length === 0) return;
     
-    // Suprimir tracks de la lista
+    // Suprimir tracks de la lista (deshabilitado según solicitud del usuario)
     if (e.key === 'Delete') {
         e.preventDefault();
-        if (selectedPaths.size > 0 && !isAnalyzing) {
-            workQueueTracks = workQueueTracks.filter(t => !selectedPaths.has(t.fullPath));
-            selectedPaths.clear();
-            lastSelectedPath = null;
-            filteredTracks = [...workQueueTracks];
-            initFuseEngine();
-            applySortingAndRender();
-            saveLibSession();
-        }
         return;
     }
 
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+        if (window.lfActivePanel !== 'library') return;
         e.preventDefault(); selectedPaths.clear(); filteredTracks.forEach(t => selectedPaths.add(t.fullPath)); applySelectionToVisibleRows(); return;
     }
     const navKeys = ['ArrowUp', 'ArrowDown'];
     if (navKeys.includes(e.key)) {
+        if (window.lfActivePanel !== 'library') return;
         e.preventDefault();
         let currentIndex = lastSelectedPath ? filteredTracks.findIndex(t => t.fullPath === lastSelectedPath) : 0;
         if (currentIndex === -1) currentIndex = 0;
@@ -1314,6 +1311,32 @@ window.addEventListener('keydown', (e) => {
         } else {
             applySelectionToVisibleRows();
         }
+    }
+});
+
+window.addEventListener('lf-panel-focus', (e) => {
+    if (e.detail && e.detail.panel !== 'library') {
+        if (selectedPaths.size > 0 || activeTreeNodeElements.size > 0) {
+            selectedPaths.clear();
+            lastSelectedPath = null;
+            selectedTreeNodes.clear();
+            activeTreeNodeElements.forEach(n => n.classList.remove('active'));
+            activeTreeNodeElements.clear();
+            applySelectionToVisibleRows();
+            renderVirtualQueue();
+        }
+    }
+});
+
+window.addEventListener('lf-clear-selections', () => {
+    if (selectedPaths.size > 0 || activeTreeNodeElements.size > 0) {
+        selectedPaths.clear();
+        lastSelectedPath = null;
+        selectedTreeNodes.clear();
+        activeTreeNodeElements.forEach(n => n.classList.remove('active'));
+        activeTreeNodeElements.clear();
+        applySelectionToVisibleRows();
+        renderVirtualQueue();
     }
 });
 

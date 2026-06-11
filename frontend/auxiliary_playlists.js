@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
     const { ipcRenderer, webUtils } = require('electron');
     const fs = require('fs');
     const path = require('path');
@@ -33,6 +33,7 @@
     let roots = [];
     let statusTimer = null;
     let menuEl = null;
+    let focusedAuxListIndex = null;
     let menuAnchor = null;
     let autoTimers = [null, null];
     let metadataCache = {};
@@ -608,6 +609,9 @@
     }
 
     function selectRowWithEvent(list, index, event) {
+        const listIndex = state.lists.indexOf(list);
+        window.lfActivePanel = 'aux' + listIndex;
+        window.dispatchEvent(new CustomEvent('lf-panel-focus', { detail: { panel: 'aux' + listIndex } }));
         if (!isValidRowIndex(list, index)) return;
         if (event?.shiftKey && isValidRowIndex(list, list.selectionAnchor)) {
             const start = Math.min(list.selectionAnchor, index);
@@ -998,10 +1002,23 @@
     async function savePlaylist(listIndex) {
         const list = state.lists[listIndex];
         const target = await ipcRenderer.invoke('dialog:savePlaylist', list.currentPath || `${list.name.replace(/[^a-zA-Z0-9_-]+/g, '_')}.LFPlay`);
-        if (!target) return;
+        if (!target) return false;
         fs.writeFileSync(target, JSON.stringify(list.rows, null, 2), 'utf-8');
         list.currentPath = target;
         saveState();
+        return true;
+    }
+
+    async function handleClearList(listIndex) {
+        const list = state.lists[listIndex];
+        if (list.rows.length === 0) return;
+        const response = await ipcRenderer.invoke('dialog:askClear');
+        if (response === 2) return;
+        if (response === 0) {
+            const saved = await savePlaylist(listIndex);
+            if (!saved) return;
+        }
+        clearList(listIndex);
     }
 
     function extractRows(data) {
@@ -1350,7 +1367,7 @@
         addMenuItem(menuEl, iconLabel('🔗', 'Comprobar enlaces rotos'), () => checkBrokenLinks(listIndex));
         addMenuSeparator(menuEl);
         addMenuItem(menuEl, iconLabel('❌', 'Eliminar seleccionadas'), () => deleteSelected(listIndex), 'danger');
-        addMenuItem(menuEl, iconLabel('🗑️', 'Vaciar toda la lista'), () => clearList(listIndex), 'danger');
+        addMenuItem(menuEl, iconLabel('🗑️', 'Vaciar toda la lista'), () => handleClearList(listIndex), 'danger');
         finishMenuPosition(button);
     }
 
@@ -1431,7 +1448,7 @@
             }
         });
         addMenuSeparator(menuEl);
-        addMenuItem(menuEl, iconLabel('🗑️', 'Borrar toda la lista'), () => clearList(listIndex));
+        addMenuItem(menuEl, iconLabel('🗑️', 'Borrar toda la lista'), () => handleClearList(listIndex));
         addMenuItem(menuEl, iconLabel('❌', 'Borrar cancion actual'), () => deleteSelected(listIndex), 'danger');
         finishMenuPosition(position || rowEl);
     }
@@ -1586,12 +1603,12 @@
         if (floating) container.classList.add('is-floating');
         container.innerHTML = `
             <div class="aux-header">
-                <span class="aux-title">Playlists auxiliares</span>
+                <span class="aux-title">🎧 Playlists auxiliares</span>
                 <button class="aux-toggle" data-aux-toggle="0" title="Mostrar Auxiliar 1">1</button>
                 <button class="aux-toggle" data-aux-toggle="1" title="Mostrar Auxiliar 2">2</button>
                 <button class="aux-icon-btn" data-aux-action="layout" title="Alternar vertical/horizontal">&#8646;</button>
-                ${floating ? '<button class="aux-icon-btn" data-aux-action="dock" title="Acoplar">&#9166;</button>' : '<button class="aux-icon-btn" data-aux-action="undock" title="Desacoplar">&#8599;</button>'}
-                <button class="aux-icon-btn" data-aux-action="hide" title="Ocultar">X</button>
+                ${floating ? '<button class="aux-icon-btn aux-dock-btn" data-aux-action="dock" title="Acoplar">⏏️</button>' : '<button class="aux-icon-btn aux-dock-btn" data-aux-action="undock" title="Desacoplar">⏏️</button>'}
+                <button class="aux-icon-btn aux-close-btn" data-aux-action="hide" title="Ocultar">X</button>
             </div>
             <div class="aux-content" data-aux-content>
                 ${[0, 1].map(i => `
@@ -1654,7 +1671,7 @@
                 saveState();
                 renderAll();
             });
-            box.querySelector('[data-list-action="clear"]').addEventListener('click', () => clearList(i));
+            box.querySelector('[data-list-action="clear"]').addEventListener('click', () => handleClearList(i));
             box.querySelector('[data-list-action="open"]').addEventListener('click', () => openPlaylist(i));
             box.querySelector('[data-list-action="save"]').addEventListener('click', () => savePlaylist(i));
             box.querySelector('[data-list-action="commands"]').addEventListener('click', e => {
@@ -1751,22 +1768,99 @@
         if (menuEl && !menuEl.contains(e.target)) hideMenu();
     });
 
+    window.addEventListener('lf-panel-focus', (e) => {
+        const p = e.detail?.panel;
+        if (p === 'aux0') focusedAuxListIndex = 0;
+        else if (p === 'aux1') focusedAuxListIndex = 1;
+        else focusedAuxListIndex = null;
+
+        let changed = false;
+        state.lists.forEach((list, index) => {
+            if (p !== 'aux' + index) {
+                if (list.selectedIndex >= 0 || (list.selectedIndices && list.selectedIndices.length)) {
+                    list.selectedIndex = -1;
+                    list.selectedIndices = [];
+                    list.selectionAnchor = -1;
+                    changed = true;
+                }
+            }
+        });
+        if (changed) {
+            saveState();
+            renderAll();
+        }
+    });
+
+    window.addEventListener('lf-clear-selections', () => {
+        focusedAuxListIndex = null;
+        clearAllSelections();
+    });
+
     document.addEventListener('keydown', e => {
+        const tag = String(document.activeElement?.tagName || '').toLowerCase();
+        if (['input', 'textarea', 'select'].includes(tag)) return;
+        
         if (e.key === 'Escape') {
             hideMenu();
             clearAllSelections();
         } else if (e.key === 'Delete') {
-            const tag = String(document.activeElement?.tagName || '').toLowerCase();
-            if (['input', 'textarea', 'select'].includes(tag)) return;
-            const targets = state.lists.map((list, index) => getSelectedIndices(list).length ? index : -1).filter(index => index >= 0);
-            if (!targets.length) return;
-            e.preventDefault();
-            targets.forEach(deleteSelected);
+            if (focusedAuxListIndex === null) return;
+            const list = state.lists[focusedAuxListIndex];
+            if (getSelectedIndices(list).length > 0) {
+                e.preventDefault();
+                deleteSelected(focusedAuxListIndex);
+            }
+        } else if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+            if (focusedAuxListIndex !== null) {
+                e.preventDefault();
+                const list = state.lists[focusedAuxListIndex];
+                if (list.rows.length > 0) {
+                    list.selectedIndices = list.rows.map((_, i) => i);
+                    list.selectedIndex = list.rows.length - 1;
+                    list.selectionAnchor = 0;
+                    saveState();
+                    renderAll();
+                }
+            }
+        } else if (['ArrowUp', 'ArrowDown'].includes(e.key)) {
+            if (focusedAuxListIndex !== null) {
+                e.preventDefault();
+                const list = state.lists[focusedAuxListIndex];
+                if (list.rows.length === 0) return;
+                let currentIndex = list.selectedIndex >= 0 ? list.selectedIndex : 0;
+                let nextIndex = e.key === 'ArrowUp' ? currentIndex - 1 : currentIndex + 1;
+                nextIndex = Math.max(0, Math.min(list.rows.length - 1, nextIndex));
+                
+                if (e.shiftKey) {
+                    const anchor = list.selectionAnchor >= 0 ? list.selectionAnchor : currentIndex;
+                    const start = Math.min(anchor, nextIndex);
+                    const end = Math.max(anchor, nextIndex);
+                    list.selectedIndices = [];
+                    for (let i = start; i <= end; i++) list.selectedIndices.push(i);
+                    list.selectedIndex = nextIndex;
+                } else {
+                    setSingleSelection(list, nextIndex);
+                }
+                saveState();
+                renderAll();
+                const root = roots[0];
+                if (root) {
+                    const box = root.querySelector(`[data-aux-list="${focusedAuxListIndex}"]`);
+                    if (box) {
+                        const rowEl = box.querySelector(`tbody tr[data-index="${nextIndex}"]`);
+                        if (rowEl) rowEl.scrollIntoView({ block: "nearest" });
+                    }
+                }
+            }
         }
     });
 
     ipcRenderer.on('auxiliary-main-resume', () => requestMainResume());
     ipcRenderer.on('auxiliary-main-jump', (_e, index) => requestMainJump(index));
+    ipcRenderer.on('auxiliary-play-from-main', (_e, index) => {
+        const listIndex = Number(index);
+        if (listIndex === 0 || listIndex === 1) playList(listIndex);
+    });
     ipcRenderer.on('audio-engine-rust-event', (_e, message = {}) => {
         if (message.type !== 'timeLocutionEnded') return;
         const player = String(message.player || '');

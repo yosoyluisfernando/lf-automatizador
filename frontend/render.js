@@ -31,6 +31,8 @@ const { prepareOverlaySession } = require('./pisador_runtime');
 const randomFolderSource = require('./random_folder_source');
 const musicSeparation = require('./music_separation_rules');
 const fileTypeAssignments = require('./file_type_assignments');
+const fileTypeResolver = require('../backend/services/file_type_resolver');
+const { initMainLibrarySearch } = require('./main_library_search');
 const { askIncludeSubfolders } = require('./random_subfolder_dialog');
 const { getConfigDir } = require('../backend/utils/app_paths');
 const { version: APP_VERSION } = require('../package.json');
@@ -612,6 +614,7 @@ if (playlistTable) {
         tbodys.push(tb);
     }
     playlistBody = tbodys[0];
+    ipcRenderer.on('request-close-check', handleRequestCloseCheck);
 }
 
 function normalizePlaylistColumnWidths(widths) {
@@ -865,6 +868,7 @@ function serializePlaylistRow(row) {
         temp: row.dataset.temp === 'true',
         noteText: row.dataset.noteText || null,
         targetTab: Number.isInteger(parseInt(row.dataset.targetTab, 10)) ? parseInt(row.dataset.targetTab, 10) : null,
+        targetAux: Number.isInteger(parseInt(row.dataset.targetAux, 10)) ? parseInt(row.dataset.targetAux, 10) : null,
         eventId: row.dataset.eventId || null,
         eventName: row.dataset.eventName || null,
         automaticPisadorRule: row.dataset.automaticPisadorRule || null,
@@ -1034,7 +1038,7 @@ function normalizeTimeLocutionRow(row) {
     return true;
 }
 
-const PLAYLIST_COMMAND_TYPES = new Set(['stop', 'note', 'playlist_jump', 'execute_event']);
+const PLAYLIST_COMMAND_TYPES = new Set(['stop', 'note', 'playlist_jump', 'aux_jump', 'execute_event']);
 
 function isPlaylistCommandRow(row) {
     return !!row && PLAYLIST_COMMAND_TYPES.has(row.dataset.type || '');
@@ -1050,6 +1054,9 @@ function isPlaylistStopRow(row) {
 
 function isPlaylistJumpRow(row) {
     return !!row && (row.dataset.type || '') === 'playlist_jump';
+}
+function isAuxiliaryJumpRow(row) {
+    return !!row && (row.dataset.type || '') === 'aux_jump';
 }
 
 function isPlaylistExecuteEventRow(row) {
@@ -1087,6 +1094,35 @@ function resolveNextOperationalRow(startRow, allowLoop = false) {
         }
     }
     return null;
+}
+
+function isPlaylistPlayableRow(row) {
+    return !!row && !isPlaylistNoteRow(row) && !isPlaylistCommandRow(row);
+}
+
+function resolveNextPlayableRow(startRow, allowLoop = false) {
+    let scan = startRow;
+    while (scan && scan.parentNode) {
+        if (isPlaylistPlayableRow(scan)) return scan;
+        scan = scan.nextElementSibling;
+    }
+    if (allowLoop) {
+        const tbody = startRow ? startRow.closest('tbody') : tbodys[pgmTab];
+        if (tbody) {
+            scan = tbody.firstElementChild;
+            while (scan && scan.parentNode) {
+                if (isPlaylistPlayableRow(scan)) return scan;
+                if (scan === startRow) break;
+                scan = scan.nextElementSibling;
+            }
+        }
+    }
+    return null;
+}
+
+function resolvePlayableMarkerRow(row, allowLoop = false) {
+    if (!row || !document.body.contains(row)) return null;
+    return isPlaylistPlayableRow(row) ? row : resolveNextPlayableRow(row.nextElementSibling, allowLoop);
 }
 
 function normalizePlaybackMode(mode) {
@@ -1164,6 +1200,17 @@ function setQueuedNextManual(row) {
     saveSessionSnapshot();
 }
 
+function getPlayableRowAfterCommand(commandRow, allowLoop = false) {
+    if (!commandRow || !commandRow.parentNode) return null;
+    const nextPlayable = resolveNextPlayableRow(commandRow.nextElementSibling, allowLoop);
+    if (nextPlayable && nextPlayable !== commandRow) return nextPlayable;
+    if (!allowLoop) {
+        const firstPlayable = resolveNextPlayableRow(commandRow.closest('tbody')?.firstElementChild, false);
+        return firstPlayable && firstPlayable !== commandRow ? firstPlayable : null;
+    }
+    return null;
+}
+
 function executePlaylistClickAction(actionKey, targetRow) {
     switch (actionKey) {
         case 'smart_play':
@@ -1199,6 +1246,7 @@ function formatSpecialPlaylistTitle(type, targetTab = null, noteText = '') {
     if (type === 'stop') return `${ICON_STOP_LABEL} Comando: STOP`;
     if (type === 'note') return `${ICON_NOTE_LABEL} ${noteText || 'Nota'}`;
     if (type === 'playlist_jump') return `${ICON_PLAYLIST_JUMP_LABEL} Reproducir Playlist ${(parseInt(targetTab, 10) || 0) + 1}`;
+    if (type === 'aux_jump') return `${ICON_PLAYLIST_JUMP_LABEL} Reproducir Auxiliar ${(parseInt(targetTab, 10) || 0) + 1}`;
     if (type === 'execute_event') return `${ICON_EVENT_LABEL} Ejecutar evento: ${noteText || 'Evento'}`;
     return '';
 }
@@ -3133,7 +3181,6 @@ function setPlaybackMode(mode, { announce = true } = {}) {
 
 function setLoopPlaylistMode(enabled, { announce = true } = {}) {
     setPlaybackMode(enabled === true ? 'infinite' : 'normal', { announce });
-            // atrás (primera fila) es un pointer residual del loop, no una cola intencional.
 }
 
 function openRepeatTrackOptionsDialog() {
@@ -3486,10 +3533,11 @@ async function restoreSessionState() {
                 let lastInsertedRow = null;
                 rows.forEach(item => {
                     const rowType = item.type || 'normal';
-                    const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'note' ? (item.noteText || item.titulo || '') : item.titulo);
+                    const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'aux_jump' ? item.targetAux : (rowType === 'note' ? (item.noteText || item.titulo || '') : item.titulo));
                     lastInsertedRow = createPlaylistRow(item.ruta, rowName, parseInt(item.duracion, 10) || 0, rowType, lastInsertedRow, 'bottom', targetTbody);
                     if (lastInsertedRow && rowType === 'random' && (item.recursive === true || item.recursive === 'true')) lastInsertedRow.dataset.recursive = 'true';
                     if (lastInsertedRow && rowType === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) lastInsertedRow.dataset.targetTab = parseInt(item.targetTab, 10);
+                    if (lastInsertedRow && rowType === 'aux_jump' && Number.isInteger(parseInt(item.targetAux, 10))) lastInsertedRow.dataset.targetAux = parseInt(item.targetAux, 10);
                     if (lastInsertedRow && rowType === 'note' && item.noteText) lastInsertedRow.dataset.noteText = item.noteText;
                     if (lastInsertedRow && rowType === 'execute_event') { lastInsertedRow.dataset.eventId = item.eventId || item.ruta || ''; lastInsertedRow.dataset.eventName = item.eventName || item.titulo || ''; }
                     if (lastInsertedRow && rowType === 'stream_url') {
@@ -3956,6 +4004,17 @@ ipcRenderer.on('incident-request-sync', () => {
 });
 
 const explorerContainer = document.getElementById('file-explorer');
+const mainLibrarySearchController = initMainLibrarySearch({
+    onRefreshExplorer: refreshMainExplorerFast,
+    onAddResult: async (item) => {
+        const row = await addTrackToPlaylist(item.filePath, 'normal', document.querySelector('.selected-row'), 'bottom', playlistBody);
+        if (row) {
+            calcularHorasPlaylist();
+            updateNextTrackVisuals();
+            saveSessionSnapshot();
+        }
+    }
+});
 
 let currentPlayingRow = null;
 let queuedNextRow = null;
@@ -4764,14 +4823,15 @@ async function handleSavePlaylist() {
     return false;
 }
 
-ipcRenderer.on('request-close-check', async () => {
-    if (tbodys[pgmTab].children.length === 0) { saveSessionSnapshot(true); ipcRenderer.send('confirm-app-quit'); return; }
+async function handleRequestCloseCheck() {
+    const programBody = tbodys[pgmTab] || tbodys[0];
+    if (!programBody || programBody.children.length === 0) { saveSessionSnapshot(true); ipcRenderer.send('confirm-app-quit'); return; }
     const response = await ipcRenderer.invoke('dialog:askClose');
     if (response === 2) return;
     if (response === 0) { const saved = await handleSavePlaylist(); if (!saved) return; }
     saveSessionSnapshot(true);
     ipcRenderer.send('confirm-app-quit');
-});
+}
 
 async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
     if (!targetTbody) return;
@@ -4809,10 +4869,11 @@ async function loadPlaylistRowsInChunks(data, targetTbody, chunkSize = 80) {
                     lastInsertedRow = await addTrackToPlaylist(item.ruta, 'normal', lastInsertedRow, 'bottom', targetTbody);
                 } else {
                     const rowType = item.type || 'normal';
-                    const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'note' ? (item.noteText || item.titulo || '') : (rowType === 'execute_event' ? (item.eventName || item.titulo || '') : item.titulo));
+                    const rowName = rowType === 'playlist_jump' ? item.targetTab : (rowType === 'aux_jump' ? item.targetAux : (rowType === 'note' ? (item.noteText || item.titulo || '') : (rowType === 'execute_event' ? (item.eventName || item.titulo || '') : item.titulo)));
                     lastInsertedRow = createPlaylistRow(item.ruta, rowName, parseInt(item.duracion, 10) || 0, rowType, lastInsertedRow, 'bottom', targetTbody);
                     if (lastInsertedRow && rowType === 'random' && (item.recursive === true || item.recursive === 'true')) lastInsertedRow.dataset.recursive = 'true';
                     if (lastInsertedRow && rowType === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) lastInsertedRow.dataset.targetTab = parseInt(item.targetTab, 10);
+                    if (lastInsertedRow && rowType === 'aux_jump' && Number.isInteger(parseInt(item.targetAux, 10))) lastInsertedRow.dataset.targetAux = parseInt(item.targetAux, 10);
                     if (lastInsertedRow && rowType === 'note' && item.noteText) lastInsertedRow.dataset.noteText = item.noteText;
                     if (lastInsertedRow && rowType === 'execute_event') { lastInsertedRow.dataset.eventId = item.eventId || item.ruta || ''; lastInsertedRow.dataset.eventName = item.eventName || item.titulo || ''; }
                     if (lastInsertedRow && rowType === 'stream_url') {
@@ -4878,6 +4939,7 @@ function normalizePlaylistItem(item = {}) {
         temp: item.temp === true || item.Temp === true || item.temporary === true || item.Temporary === true,
         noteText: item.noteText || item.NoteText || item.nota || item.Nota || null,
         targetTab: Number.isInteger(parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10)) ? parseInt(item.targetTab ?? item.TargetTab ?? item.playlistTarget ?? item.PlaylistTarget, 10) : null,
+        targetAux: Number.isInteger(parseInt(item.targetAux ?? item.TargetAux ?? item.auxTarget ?? item.AuxTarget, 10)) ? parseInt(item.targetAux ?? item.TargetAux ?? item.auxTarget ?? item.AuxTarget, 10) : null,
         eventId: item.eventId || item.EventId || item.eventID || item.idEvento || item.IdEvento || null,
         eventName: item.eventName || item.EventName || item.nombreEvento || item.NombreEvento || null,
         automaticPisadorRule: item.automaticPisadorRule || item.AutomaticPisadorRule || null,
@@ -5011,6 +5073,7 @@ ipcRenderer.on('menu-add-note', async () => {
     insertSpecialRow('note', null, noteText);
 });
 ipcRenderer.on('menu-play-next-playlist', (e, targetTab) => { insertSpecialRow('playlist_jump', targetTab); });
+ipcRenderer.on('menu-play-next-auxiliary', (e, targetAux) => { insertSpecialRow('aux_jump', targetAux); });
 
 let playlistNoteModalResolver = null;
 let playlistEventModalResolver = null;
@@ -5185,8 +5248,8 @@ function insertSpecialRow(type, targetTab = null, noteText = '') {
     const targetBody = tbodys[currentViewTab] || playlistBody;
     const selected = Array.from(targetBody.querySelectorAll('.selected-row'));
     const insertAfterElement = selected.length > 0 ? selected[selected.length - 1] : targetBody.lastElementChild;
-    const payloadName = type === 'playlist_jump' ? parseInt(targetTab, 10) : (type === 'execute_event' ? (noteText?.name || noteText?.eventName || '') : (noteText || ''));
-    const row = createPlaylistRow(type === 'playlist_jump' ? 'playlist_jump' : '', payloadName, 0, type, insertAfterElement, 'bottom', targetBody);
+    const payloadName = (type === 'playlist_jump' || type === 'aux_jump') ? parseInt(targetTab, 10) : (type === 'execute_event' ? (noteText?.name || noteText?.eventName || '') : (noteText || ''));
+    const row = createPlaylistRow((type === 'playlist_jump' || type === 'aux_jump') ? type : '', payloadName, 0, type, insertAfterElement, 'bottom', targetBody);
     if (row && type === 'execute_event') {
         row.dataset.eventId = noteText?.id || noteText?.eventId || '';
         row.dataset.eventName = noteText?.name || noteText?.eventName || payloadName || '';
@@ -6613,7 +6676,15 @@ function renderTypeShortcuts(container) {
                 if (existing) { const show = existing.style.display === 'none'; existing.style.display = show ? 'block' : 'none'; toggle.textContent = show ? '-' : '+'; return; }
                 try { const kids = fs.readdirSync(root).map(c => path.join(root, c)); renderTree(kids, li, false, true); toggle.textContent = '-'; } catch (err) {}
             };
-            div.onclick = (e) => { e.stopPropagation(); if (e.target.classList.contains('tree-toggle')) expand(); };
+            div.onclick = (e) => {
+                e.stopPropagation(); 
+                if (e.target.classList.contains('tree-toggle')) {
+                    expand();
+                    return;
+                }
+                hideAllMenus();
+                if (typeof handleExplorerSelection === 'function') handleExplorerSelection(e, div);
+            };
             div.ondblclick = (e) => { e.stopPropagation(); expand(); };
             div.oncontextmenu = (e) => {
                 e.preventDefault(); e.stopPropagation();
@@ -6655,6 +6726,78 @@ function showAddRootMenu(x, y, typeId) {
     setTimeout(() => document.addEventListener('mousedown', close, true), 0);
 }
 
+function normalizeExplorerPathKey(filePath = '') {
+    const normalized = path.normalize(String(filePath || ''));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function getExplorerTreeState() {
+    const expanded = [];
+    const selected = [];
+    explorerContainer.querySelectorAll('.tree-item[data-path]').forEach(item => {
+        const itemPath = item.dataset.path;
+        if (!itemPath) return;
+        if (item.classList.contains('selected')) selected.push(itemPath);
+        const childList = item.parentElement?.querySelector(':scope > ul');
+        const toggle = item.querySelector('.tree-toggle');
+        if (childList && childList.style.display !== 'none' && toggle?.textContent === '-') {
+            expanded.push(itemPath);
+        }
+    });
+    return { expanded, selected };
+}
+
+function isTypeShortcutRootPath(folderPath = '') {
+    const key = normalizeExplorerPathKey(folderPath);
+    return fileTypesData.some(type => type?.shortcutRoot && normalizeExplorerPathKey(type.shortcutRoot) === key);
+}
+
+function findExplorerItemByPath(folderPath = '') {
+    const key = normalizeExplorerPathKey(folderPath);
+    return Array.from(explorerContainer.querySelectorAll('.tree-item[data-path]'))
+        .find(item => normalizeExplorerPathKey(item.dataset.path) === key) || null;
+}
+
+function expandExplorerItem(item) {
+    const itemPath = item?.dataset?.path;
+    if (!itemPath) return false;
+    const li = item.parentElement;
+    if (!li) return false;
+    const iconSpan = item.querySelector('.icon-folder');
+    const toggleSpan = item.querySelector('.tree-toggle');
+    let childUl = li.querySelector(':scope > ul');
+    if (!childUl) {
+        try {
+            const children = fs.readdirSync(itemPath).map(child => path.join(itemPath, child));
+            renderTree(children, li, false, isTypeShortcutRootPath(itemPath));
+            childUl = li.querySelector(':scope > ul');
+        } catch (err) {
+            return false;
+        }
+    }
+    if (childUl) childUl.style.display = 'block';
+    if (toggleSpan) toggleSpan.textContent = '-';
+    if (iconSpan && iconSpan.textContent === '📁') iconSpan.textContent = '📂';
+    return true;
+}
+
+function restoreExplorerTreeState(state = {}) {
+    const expanded = Array.isArray(state.expanded) ? state.expanded : [];
+    expanded
+        .sort((a, b) => a.length - b.length)
+        .forEach(folderPath => {
+            const item = findExplorerItemByPath(folderPath);
+            if (item) expandExplorerItem(item);
+        });
+
+    const selected = Array.isArray(state.selected) ? state.selected : [];
+    selected.forEach(folderPath => {
+        const item = findExplorerItemByPath(folderPath);
+        if (item) item.classList.add('selected');
+    });
+    updateExplorerItemsCache();
+}
+
 async function loadDrives() {
     const isLinux = process.platform === 'linux';
     explorerContainer.innerHTML = '';
@@ -6676,9 +6819,19 @@ async function loadDrives() {
     renderTree(drives, explorerContainer, true);
 }
 
+async function refreshMainExplorerFast() {
+    const state = getExplorerTreeState();
+    await loadDrives();
+    restoreExplorerTreeState(state);
+}
+
+window.refreshMainExplorerFast = refreshMainExplorerFast;
+
 function clearSelection() { document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('selected')); }
 function updateExplorerItemsCache() { explorerItemsCache = Array.from(document.querySelectorAll('.tree-item')); }
 function handleExplorerSelection(e, div) {
+    window.lfActivePanel = 'library';
+    window.dispatchEvent(new CustomEvent('lf-panel-focus', { detail: { panel: 'library-shortcut' } }));
     updateExplorerItemsCache();
     const currentIndex = explorerItemsCache.indexOf(div);
     if (e.shiftKey && anchorExplorerIndex !== -1) {
@@ -7044,6 +7197,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         if (type === 'stop') ruta = 'playlist_command_stop';
         if (type === 'note') ruta = 'playlist_note';
         if (type === 'playlist_jump') ruta = 'playlist_jump';
+        if (type === 'aux_jump') ruta = 'aux_jump';
         if (type === 'execute_event') ruta = ruta || 'playlist_execute_event';
     }
 
@@ -7087,6 +7241,10 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             if (!Number.isInteger(targetTab) || targetTab < 0) targetTab = 0;
             tr.dataset.targetTab = targetTab;
         }
+        if (type === 'aux_jump') {
+            const targetAux = Math.max(0, Math.min(1, parseInt(nombre, 10) || 0));
+            tr.dataset.targetAux = targetAux;
+        }
         if (type === 'note') {
             const cleanNote = String(nombre || '').replace(/^(?:\u{1f4dd}|📝)\s*/u, '').trim();
             tr.dataset.noteText = cleanNote === 'Nota' ? '' : cleanNote;
@@ -7095,7 +7253,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             tr.dataset.eventId = ruta && ruta !== 'playlist_execute_event' ? ruta : '';
             tr.dataset.eventName = String(nombre || '').replace(/^(?:\u{1f4c5}|ðŸ“…)\s*Ejecutar evento:\s*/iu, '').trim();
         }
-        displayedName = formatSpecialPlaylistTitle(type, tr.dataset.targetTab, tr.dataset.noteText || '');
+        displayedName = formatSpecialPlaylistTitle(type, tr.dataset.targetAux ?? tr.dataset.targetTab, tr.dataset.noteText || '');
         if (type === 'execute_event') displayedName = formatSpecialPlaylistTitle(type, null, tr.dataset.eventName || nombre || '');
         pureName = displayedName;
         ext = '';
@@ -7112,7 +7270,7 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
             tr.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
             tr.style.color = '#aaaaaa';
             tr.style.fontStyle = 'italic';
-        } else if (type === 'playlist_jump') {
+        } else if (type === 'playlist_jump' || type === 'aux_jump') {
             tr.style.backgroundColor = 'rgba(155, 89, 182, 0.15)';
             tr.style.color = '#d2a8ff';
             tr.style.fontWeight = 'bold';
@@ -7268,6 +7426,8 @@ function createPlaylistRow(ruta, nombre, duracionSegundos, type = 'normal', inse
         }
     };
     tr.onclick = (e) => {
+        window.lfActivePanel = 'main';
+        window.dispatchEvent(new CustomEvent('lf-panel-focus', { detail: { panel: 'main' } }));
         const targetBody = tr.closest('tbody');
         const rows = Array.from(targetBody.children);
         const currentIndex = rows.indexOf(tr);
@@ -7478,6 +7638,7 @@ function serializePlaylistClipboardRow(tr, includeElement = false) {
         temp: tr.dataset.temp === 'true',
         noteText: tr.dataset.noteText || null,
         targetTab: Number.isInteger(parseInt(tr.dataset.targetTab, 10)) ? parseInt(tr.dataset.targetTab, 10) : null,
+        targetAux: Number.isInteger(parseInt(tr.dataset.targetAux, 10)) ? parseInt(tr.dataset.targetAux, 10) : null,
         eventId: tr.dataset.eventId || null,
         eventName: tr.dataset.eventName || null,
         automaticPisadorRule: tr.dataset.automaticPisadorRule || null,
@@ -7500,6 +7661,7 @@ function applyClipboardPlaylistMetadata(row, item, rowName) {
     if (item.automaticPisadorRule) row.dataset.automaticPisadorRule = item.automaticPisadorRule;
     if (item.type === 'note' && item.noteText) row.dataset.noteText = item.noteText;
     if (item.type === 'playlist_jump' && Number.isInteger(parseInt(item.targetTab, 10))) row.dataset.targetTab = parseInt(item.targetTab, 10);
+    if (item.type === 'aux_jump' && Number.isInteger(parseInt(item.targetAux, 10))) row.dataset.targetAux = parseInt(item.targetAux, 10);
     if (item.type === 'execute_event') {
         row.dataset.eventId = item.eventId || item.ruta || '';
         row.dataset.eventName = item.eventName || rowName || '';
@@ -7606,7 +7768,7 @@ document.getElementById('auto-pisador-cancel').addEventListener('click', closeAu
 
 document.getElementById('pm-copy').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr)); clipboardAction = 'copy'; hideAllMenus(); });
 document.getElementById('pm-cut').addEventListener('click', () => { clipboardData = Array.from(document.querySelectorAll('.selected-row')).map(tr => serializePlaylistClipboardRow(tr, true)); clipboardData.forEach(item => { if (item.element === queuedNextRow) queuedNextRow = null; item.element.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); clipboardAction = 'cut'; hideAllMenus(); });
-document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre)); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); applyClipboardPlaylistMetadata(newTr, item, rowName); targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
+document.getElementById('pm-paste').addEventListener('click', () => { if (clipboardData.length === 0) return; let targetRow = rightClickedRow; let targetTbody = targetRow ? targetRow.closest('tbody') : (tbodys[currentViewTab] || playlistBody); clipboardData.forEach(item => { const rowName = item.type === 'playlist_jump' ? item.targetTab : (item.type === 'aux_jump' ? item.targetAux : (item.type === 'note' ? (item.noteText || item.nombre) : (item.type === 'execute_event' ? (item.eventName || item.nombre) : item.nombre))); const newTr = createPlaylistRow(item.type === 'execute_event' ? (item.eventId || item.ruta) : item.ruta, rowName, parseInt(item.duracion), item.type, targetRow, 'bottom', targetTbody); applyClipboardPlaylistMetadata(newTr, item, rowName); targetRow = newTr; }); if (clipboardAction === 'cut') { clipboardData = []; clipboardAction = null; } calcularHorasPlaylist(); updateNextTrackVisuals(); saveSessionSnapshot(); hideAllMenus(); });
 document.getElementById('pm-delete').addEventListener('click', () => { document.querySelectorAll('.selected-row').forEach(tr => { if (tr === queuedNextRow) queuedNextRow = resolveNextOperationalRow(tr.nextElementSibling, false); tr.remove(); }); calcularHorasPlaylist(); updateNextTrackVisuals(); hideAllMenus(); });
 document.getElementById('pm-clear').addEventListener('click', () => { handleClearPlaylist(); hideAllMenus(); });
 document.getElementById('pm-preview').addEventListener('click', () => { if (rightClickedRow) ipcRenderer.send('open-preview', rightClickedRow.dataset.ruta); hideAllMenus(); });
@@ -7792,23 +7954,7 @@ ipcRenderer.on('apply-jingle-transition', (e, res) => {
 // que coincidio (matchedPath) y su typeData, para tambien poder leer las
 // opciones de separacion/historial de esa misma asignacion.
 function resolveExplicitAssignment(targetPath) {
-    if (!targetPath) return null;
-    const byId = id => fileTypesData.find(t => t.id === id) || null;
-    if (explicitTypesDB[targetPath]) { const found = byId(explicitTypesDB[targetPath]); if (found) return { matchedPath: targetPath, typeData: found }; }
-    const dirPath = path.dirname(targetPath);
-    if (!dirPath || dirPath === targetPath) return null;
-    if (explicitTypesDB[dirPath]) { const found = byId(explicitTypesDB[dirPath]); if (found) return { matchedPath: dirPath, typeData: found }; }
-    let prev = dirPath;
-    let ancestor = path.dirname(dirPath);
-    while (ancestor && ancestor !== prev) {
-        if (explicitTypesDB[ancestor] && fileTypeAssignments.includesSubfolders(ancestor, fileTypeOptionsDB)) {
-            const found = byId(explicitTypesDB[ancestor]);
-            if (found) return { matchedPath: ancestor, typeData: found };
-        }
-        prev = ancestor;
-        ancestor = path.dirname(ancestor);
-    }
-    return null;
+    return fileTypeResolver.resolveExplicitAssignment(targetPath, fileTypesData, explicitTypesDB, fileTypeOptionsDB);
 }
 
 function resolveExplicitTypeData(targetPath) {
@@ -7826,24 +7972,7 @@ function resolveIgnoreSeparation(targetPath) {
 function getTrackTypeData(filePath) {
     const types = fileTypesData;
     if (manualCuesDB[filePath] && manualCuesDB[filePath].typeId) { const found = types.find(t => t.id === manualCuesDB[filePath].typeId); if (found) return found; }
-    const explicit = resolveExplicitTypeData(filePath);
-    if (explicit) return explicit;
-
-    const nameStr = path.basename(filePath).toLowerCase();
-    for (let t of types) {
-        const identifiers = [t.identifier, ...(Array.isArray(t.aliases) ? t.aliases : [])].filter(Boolean);
-        for (const rawIdentifier of identifiers) {
-            if (!rawIdentifier || rawIdentifier.trim() === '') continue;
-            const iden = rawIdentifier.toLowerCase().trim();
-            if (/^[a-z0-9]+$/.test(iden)) {
-                const regex = new RegExp('\\b' + iden + '\\b', 'i');
-                if (regex.test(nameStr)) return t;
-            } else {
-                if (nameStr.includes(iden)) return t;
-            }
-        }
-    }
-    return null;
+    return fileTypeResolver.resolveFileType(filePath, null, types, explicitTypesDB, fileTypeOptionsDB);
 }
 
 function getLocutionTypeData() {
@@ -12026,6 +12155,10 @@ async function playRow(tr, isAutoMix = false, forcedFadeOutSeconds = 0, options 
         executePlaylistJumpCommandRow(tr, isAutoMix, forcedFadeOutSeconds);
         return;
     }
+    if (isAuxiliaryJumpRow(tr)) {
+        executeAuxiliaryJumpCommandRow(tr);
+        return;
+    }
     if (isPlaylistExecuteEventRow(tr)) {
         executeEventCommandRow(tr);
         return;
@@ -12945,6 +13078,11 @@ function isPlaybackFullyStopped() {
 
 function executeStopCommandRow(commandRow) {
     const rowToRemove = commandRow;
+    queuedNextRow = getPlayableRowAfterCommand(commandRow, isInfinitePlaybackMode());
+    if (queuedNextRow) {
+        delete queuedNextRow.dataset.manualNext;
+        delete queuedNextRow.dataset.manualDeferred;
+    }
     stopAll();
     setTimeout(() => {
         if (!isPlaybackFullyStopped()) {
@@ -12995,6 +13133,22 @@ function executePlaylistJumpCommandRow(commandRow, isAutoMix = false, forcedFade
     updateTabsUI();
     recordIncident(`[PLAYLIST] Saltando a Playlist ${targetTab + 1}.`, { category: 'air', level: 'success', autoAction: true });
     playRow(targetRow, isAutoMix, forcedFadeOutSeconds);
+}
+
+function executeAuxiliaryJumpCommandRow(commandRow) {
+    const targetAux = Math.max(0, Math.min(1, parseInt(commandRow?.dataset?.targetAux, 10) || 0));
+    queuedNextRow = getPlayableRowAfterCommand(commandRow, isInfinitePlaybackMode());
+    if (queuedNextRow) {
+        delete queuedNextRow.dataset.manualNext;
+        delete queuedNextRow.dataset.manualDeferred;
+    }
+    try {
+        ipcRenderer.send('auxiliary-play-from-main', targetAux);
+        recordIncident(`[PLAYLIST] Saltando a Auxiliar ${targetAux + 1}.`, { category: 'air', level: 'success', autoAction: true });
+    } catch (err) {
+        recordIncident(`[PLAYLIST] No se pudo saltar a Auxiliar ${targetAux + 1}: ${err.message || err}.`, { category: 'air', level: 'error', autoAction: true });
+    }
+    stopAll();
 }
 
 async function executeEventCommandRow(commandRow) {
@@ -13444,10 +13598,12 @@ window.addEventListener('keydown', (e) => {
     if (isEditableShortcutTarget(e.target)) return;
     if (e.key === 'Alt') { e.preventDefault(); return; }
     if (e.key.toLowerCase() === 'escape') {
-        e.preventDefault(); document.querySelectorAll('.playlist-table tr').forEach(el => el.classList.remove('selected-row'));
+        e.preventDefault(); 
+        window.dispatchEvent(new CustomEvent('lf-clear-selections'));
         document.querySelectorAll('.event-item').forEach(el => el.classList.remove('selected')); selectedEventId = null; updateSelectedEventControls(); hideAllMenus(); return;
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+        if (window.lfActivePanel && window.lfActivePanel !== 'main') return;
         e.preventDefault();
         const targetBody = tbodys[currentViewTab] || playlistBody;
         const rows = Array.from(targetBody.children);
@@ -13460,18 +13616,21 @@ window.addEventListener('keydown', (e) => {
         return;
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+        if (window.lfActivePanel && window.lfActivePanel !== 'main') return;
         e.preventDefault();
         const copyBtn = document.getElementById('pm-copy');
         if (copyBtn) copyBtn.click();
         return;
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+        if (window.lfActivePanel && window.lfActivePanel !== 'main') return;
         e.preventDefault();
         const cutBtn = document.getElementById('pm-cut');
         if (cutBtn) cutBtn.click();
         return;
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'v') {
+        if (window.lfActivePanel && window.lfActivePanel !== 'main') return;
         e.preventDefault();
         if (typeof clipboardData === 'undefined' || clipboardData.length === 0) return;
 
@@ -13499,10 +13658,13 @@ window.addEventListener('keydown', (e) => {
         case 'n': e.preventDefault(); skipToNextTrack(); break;
         case 'q': e.preventDefault(); const selectedQ = resolveNextOperationalRow(document.querySelector('.selected-row'), false); if (selectedQ) { setQueuedNextManual(selectedQ); } break;
         case 'f': e.preventDefault(); toggleStopAfter(); break;
-        case 'delete': e.preventDefault(); const selected = document.querySelectorAll('.selected-row'); if (selected.length > 0) { selected.forEach(el => el.remove()); calcularHorasPlaylist(); updateNextTrackVisuals(); } break;
+        case 'delete': 
+            if (window.lfActivePanel && window.lfActivePanel !== 'main') break;
+            e.preventDefault(); const selected = document.querySelectorAll('.selected-row'); if (selected.length > 0) { selected.forEach(el => el.remove()); calcularHorasPlaylist(); updateNextTrackVisuals(); } break;
     }
     const navKeys = ['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
     if (navKeys.includes(e.key)) {
+        if (window.lfActivePanel && window.lfActivePanel !== 'main') return;
         e.preventDefault();
         const rows = Array.from(playlistBody.children);
         if (rows.length === 0) return;
@@ -16536,3 +16698,21 @@ async function populateAutoDuckingDevices() {
     }
 }
 
+
+window.addEventListener('lf-panel-focus', (e) => {
+    if (e.detail && e.detail.panel !== 'main') {
+        document.querySelectorAll('.playlist-table tr').forEach(el => el.classList.remove('selected-row'));
+        anchorRowIndex = -1;
+        lastSelectedRowIndex = -1;
+    }
+    if (e.detail && e.detail.panel !== 'library-shortcut') {
+        if (typeof clearSelection === 'function') clearSelection();
+    }
+});
+
+window.addEventListener('lf-clear-selections', () => {
+    document.querySelectorAll('.playlist-table tr').forEach(el => el.classList.remove('selected-row'));
+    anchorRowIndex = -1;
+    lastSelectedRowIndex = -1;
+    if (typeof clearSelection === 'function') clearSelection();
+});

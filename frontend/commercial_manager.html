@@ -147,7 +147,7 @@
             <div class="toolbar">
                 <select id="filter-root" style="width:150px;"><option value="all" data-i18n="commercial_manager.opt_all">Todo</option><option value="commercials" data-i18n="commercial_manager.lbl_commercials">Comerciales</option><option value="jingles" data-i18n="commercial_manager.lbl_jingles">Jingles</option></select>
                 <select id="filter-category" style="width:180px;"><option value="all" data-i18n="commercial_manager.opt_all_fem">Todas</option></select>
-                <select id="filter-status" style="width:150px;"><option value="all" data-i18n="commercial_manager.opt_all_masc">Todos</option><option value="draft" data-i18n="commercial_manager.opt_no_meta">Sin metadata</option><option value="active" data-i18n="commercial_manager.opt_active">Vigentes</option><option value="upcoming" data-i18n="commercial_manager.opt_upcoming">Proximos</option><option value="expired" data-i18n="commercial_manager.opt_expired">Vencidos</option></select>
+                <select id="filter-status" style="width:150px;"><option value="all" data-i18n="commercial_manager.opt_all_masc">Todos</option><option value="draft" data-i18n="commercial_manager.opt_no_meta">Sin metadata</option><option value="active" data-i18n="commercial_manager.opt_active">Vigentes</option><option value="upcoming" data-i18n="commercial_manager.opt_upcoming">Proximos</option><option value="expiring" data-i18n="commercial_manager.opt_expiring">Por expirar</option><option value="expired" data-i18n="commercial_manager.opt_expired">Vencidos</option></select>
                 <button id="btn-apply-category" data-i18n="commercial_manager.btn_apply_cat">Etiquetar seleccionados</button>
             </div>
             <div class="scroll">
@@ -190,9 +190,16 @@
             <div class="panel-title" data-i18n="commercial_manager.pan_resources">Libreria de recursos</div>
             <div class="stack">
                 <div id="expiring-card" class="smart-card">0 spots por expirar pronto</div>
-                <div id="orphans-card" class="smart-card" style="color:var(--bad);border-color:var(--bad);">0 spots sin metadata</div>
-                <div style="font-size:10px;color:#666;text-transform:uppercase;font-weight:800;" data-i18n="commercial_manager.hint_ready">Spots listos para usar</div>
-                <div id="inventory-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                <div id="orphans-card" class="smart-card" style="color:var(--bad);border-color:var(--bad);" data-i18n="commercial_manager.lbl_orphans">0 spots sin metadata</div>
+                
+                <div class="inventory-tabs" style="display:flex; gap:4px; margin-top:5px; border-bottom:1px solid #333; padding-bottom:5px;">
+                    <button id="tab-inv-commercials" class="active" style="flex:1; font-size:10px; background:var(--accent); color:#000;">Comerciales</button>
+                    <button id="tab-inv-jingles" style="flex:1; font-size:10px;">Jingles e IDs</button>
+                </div>
+                
+                <div id="inventory-commercials" style="display:flex;flex-direction:column;gap:8px; flex:1; overflow-y:auto;"></div>
+                <div id="inventory-jingles" style="display:none;flex-direction:column;gap:8px; flex:1; overflow-y:auto;"></div>
+                <div id="inventory-empty-hint" style="display:none; color:#888; font-size:10px; text-align:center; padding:10px; border:1px dashed #444; border-radius:4px;">No tienes spots listos. Ve a la Biblioteca y asigna un Cliente o Campaña.</div>
             </div>
         </aside>
         <section class="center">
@@ -211,7 +218,7 @@
                         <thead><tr><th style="width:48px;" data-i18n="commercial_manager.th_ord">Ord</th><th style="width:130px;" data-i18n="commercial_manager.th_time">Hora</th><th data-i18n="commercial_manager.th_spot">Spot</th><th data-i18n="commercial_manager.th_rule">Regla</th><th style="width:80px;" data-i18n="commercial_manager.th_action">Accion</th></tr></thead>
                         <tbody id="basic-body"></tbody>
                     </table>
-                    <div id="basic-drop" class="drop-hint" data-i18n="commercial_manager.hint_drop_basic">Suelta un spot aqui para agregarlo a la lista manual.</div>
+                    <div id="basic-drop" class="drop-hint" data-i18n="commercial_manager.hint_drop_basic">Suelta spots en cualquier parte de esta lista para agregarlos como eventos.</div>
                 </div>
             </div>
             <div id="sub-advanced" class="subview">
@@ -242,7 +249,15 @@
     <main id="view-continuity" class="view view-continuity">
         <aside class="left">
             <div class="panel-title" data-i18n="commercial_manager.pan_inventory">Inventario SQLite</div>
-            <div class="stack" id="continuity-inventory"></div>
+            <div class="stack">
+                <div class="inventory-tabs" style="display:flex; gap:4px; border-bottom:1px solid #333; padding-bottom:5px;">
+                    <button id="tab-cont-commercials" class="active" style="flex:1; font-size:10px; background:var(--accent); color:#000;">Comerciales</button>
+                    <button id="tab-cont-jingles" style="flex:1; font-size:10px;">Jingles e IDs</button>
+                </div>
+                <div id="continuity-commercials" style="display:flex;flex-direction:column;gap:8px; flex:1; overflow-y:auto;"></div>
+                <div id="continuity-jingles" style="display:none;flex-direction:column;gap:8px; flex:1; overflow-y:auto;"></div>
+                <div id="continuity-empty-hint" style="display:none; color:#888; font-size:10px; text-align:center; padding:10px; border:1px dashed #444; border-radius:4px;">Sin spots listos.</div>
+            </div>
         </aside>
         <section class="center">
             <div class="toolbar"><div id="continuity-day-tabs" style="display:flex;gap:5px;"></div><span id="selected-slot-label" style="margin-left:auto;color:#888;font-size:12px;" data-i18n="commercial_manager.lbl_select_block">Selecciona un bloque</span></div>

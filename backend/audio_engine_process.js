@@ -43,6 +43,19 @@ function isBenignRustStderr(message = '') {
     return String(message).includes('Dropping DeviceSink, audio playing through this sink will stop');
 }
 
+function isBrokenPipeError(err) {
+    const code = err?.code || '';
+    const message = err?.message || String(err || '');
+    return (
+        code === 'EPIPE'
+        || code === 'ERR_STREAM_DESTROYED'
+        || code === 'ERR_STREAM_WRITE_AFTER_END'
+        || /write EPIPE/i.test(message)
+        || /write after end/i.test(message)
+        || /stream.*destroyed/i.test(message)
+    );
+}
+
 const REPORT_MAX_BYTES = 5 * 1024 * 1024;
 const REPORT_KEEP_BYTES = 1024 * 1024;
 const ROUTINE_STATUS_LOG_INTERVAL_MS = 30000;
@@ -186,6 +199,17 @@ class RustAudioEngineProbe {
 
             this.readline = readline.createInterface({ input: this.process.stdout });
             this.readline.on('line', line => this.handleLine(line, processGeneration));
+            this.process.stdin.on('error', err => {
+                if (processGeneration !== this.processGeneration) return;
+                const message = err.message || String(err);
+                if (isBrokenPipeError(err) && this.stopping) {
+                    this.logEvent('stdin-closed-during-stop', { error: message });
+                    return;
+                }
+                this.lastError = message;
+                this.logEvent('stdin-error', { error: message });
+                this.rejectPending(message);
+            });
             this.process.stderr.on('data', chunk => {
                 if (processGeneration !== this.processGeneration) return;
                 const stderrText = String(chunk || '').trim();
@@ -501,13 +525,26 @@ class RustAudioEngineProbe {
      * Devuelve true si se escribió, false si el motor no está corriendo.
      */
     send(command = {}) {
-        if (!this.isRunning()) return false;
+        if (!this.canWriteToStdin()) return false;
         try {
             this.process.stdin.write(`${JSON.stringify(command)}\n`);
             return true;
-        } catch (_) {
+        } catch (err) {
+            if (!isBrokenPipeError(err)) {
+                this.logEvent('send-error', { command, error: err.message || String(err) });
+            }
             return false;
         }
+    }
+
+    canWriteToStdin() {
+        return !!(
+            this.isRunning()
+            && this.process?.stdin
+            && !this.process.stdin.destroyed
+            && this.process.stdin.writable !== false
+            && !this.process.stdin.writableEnded
+        );
     }
 
     command(command = {}, timeoutMs = null) {
@@ -545,6 +582,9 @@ class RustAudioEngineProbe {
             this.pending.push(pending);
             this.pendingByRequestId.set(requestId, pending);
             try {
+                if (!this.canWriteToStdin()) {
+                    throw Object.assign(new Error('RustAudio stdin no esta disponible.'), { code: 'ERR_STREAM_DESTROYED' });
+                }
                 this.logEvent('command', { command: commandWithRequestId });
                 this.process.stdin.write(`${JSON.stringify(commandWithRequestId)}\n`);
             } catch (err) {
