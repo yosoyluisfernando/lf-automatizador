@@ -2822,6 +2822,69 @@ fn ensure_output(state: &mut EngineState, requested_id: &str) -> Result<(String,
     Ok((id, name))
 }
 
+// ============================================================================
+// AUDIO INMUNE A SATURACIÓN DE DISCO (ver PLAN_AUDIO_DISCO_SATURADO.md)
+//
+// El grafo del mezclador corre dentro del callback de render del dispositivo
+// (WASAPI/ALSA). Un Decoder perezoso sobre `File` lee del DISCO a medida que
+// el callback pide muestras: si el disco se bloquea (antivirus, Windows
+// Update), el callback se bloquea y el SO repite el último buffer → el bucle
+// audible de 1-3 s reportado en producción. Regla de oro: el hilo de audio en
+// tiempo real jamás toca el disco.
+//
+// Solución: precargar el archivo COMPLETO a RAM en el load (~10 MB típico por
+// pista; el load corre en el hilo de despacho, fuera del aire) y decodificar
+// desde un Cursor en memoria. Tras el load, el disco puede morir y la pista
+// al aire no se entera. Para archivos gigantes (programas grabados) que no
+// conviene precargar, se conserva el camino File con streaming — ese caso lo
+// cierra la fase de ring buffer del plan.
+//
+// El builder replica EXACTAMENTE lo que hace `impl TryFrom<File> for Decoder`
+// de rodio 0.22 (with_byte_len + with_seekable), así `total_duration()` y los
+// seeks se comportan igual que antes.
+
+/// Tope de precarga a RAM. Por encima de esto se usa streaming desde disco.
+const PRELOAD_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Lector unificado: Cursor en RAM (camino normal) o BufReader<File>
+/// (fallback para archivos gigantes). Send + Sync como supertraits para que
+/// `Box<dyn PreloadedRead>` satisfaga los bounds del Decoder de rodio.
+trait PreloadedRead: io::Read + io::Seek + Send + Sync {}
+impl<T: io::Read + io::Seek + Send + Sync> PreloadedRead for T {}
+
+/// Abre el lector del archivo: RAM si cabe en `preload_cap`, disco si no.
+/// Separado del decoder para poder probar el tope en tests unitarios.
+fn open_playback_reader(file_path: &str, preload_cap: u64) -> Result<(Box<dyn PreloadedRead>, bool, u64), String> {
+    let byte_len = std::fs::metadata(file_path)
+        .map_err(|err| format!("No se pudo abrir archivo: {}", err))?
+        .len();
+    if byte_len <= preload_cap {
+        let bytes = std::fs::read(file_path)
+            .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
+        Ok((Box::new(io::Cursor::new(bytes)), true, byte_len))
+    } else {
+        eprintln!(
+            "[preload] Archivo supera el tope de precarga ({} bytes): streaming desde disco. {}",
+            byte_len, file_path
+        );
+        let file = File::open(file_path)
+            .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
+        Ok((Box::new(io::BufReader::new(file)), false, byte_len))
+    }
+}
+
+/// Abre un decoder para reproducción. Devuelve (decoder, precargado_en_ram).
+fn open_playback_decoder(file_path: &str) -> Result<(Decoder<Box<dyn PreloadedRead>>, bool), String> {
+    let (reader, preloaded, byte_len) = open_playback_reader(file_path, PRELOAD_MAX_BYTES)?;
+    let decoder = Decoder::builder()
+        .with_data(reader)
+        .with_byte_len(byte_len)
+        .with_seekable(true)
+        .build()
+        .map_err(|err| format!("No se pudo decodificar audio: {}", err))?;
+    Ok((decoder, preloaded))
+}
+
 fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, gain: f32, paused: bool, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
     let (resolved_output_id, resolved_output_name) = ensure_output(state, output_id)?;
     if is_program_bus(bus_id) && state.program_mixer_input.is_none() {
@@ -2842,8 +2905,8 @@ fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, 
     } else {
         None
     };
-    let file = File::open(file_path).map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
-    let decoder = Decoder::try_from(file).map_err(|err| format!("No se pudo decodificar audio: {}", err))?;
+    // Precarga a RAM: el decoder nunca tocará el disco desde el callback.
+    let (decoder, _preloaded) = open_playback_decoder(file_path)?;
     // Duración: para pistas normales (cache_dir vacío) usamos el decoder ya
     // abierto con `total_duration()` — barato, y su duración real vive en el
     // SQLite del frontend. Para LOCUCIONES (cache_dir presente: clima/hora
@@ -2940,9 +3003,10 @@ fn load_audio_player_sequence(state: &mut EngineState, player_id: &str, file_pat
         total_ms = total_ms.saturating_add(cached_audio_duration_ms(path, cache_dir));
     }
     // Encolar todos los archivos en el mismo player → reproducción gapless.
+    // Precargados a RAM: el callback no toca disco (son archivos cortos).
     for path in file_paths {
-        let file = File::open(path).map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
-        let decoder = Decoder::try_from(file).map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
+        let (decoder, _preloaded) = open_playback_decoder(path)
+            .map_err(|e| format!("{} ({})", e, path))?;
         let metered = MeteredSource::new(decoder, Arc::clone(&meter));
         player.append(metered);
     }
@@ -4275,10 +4339,9 @@ fn start_time_locution(
     // así `time_locution_started_at` (más abajo) coincide con el inicio real
     // del audio y el reloj acumulativo no arranca desfasado.
     for path in &files {
-        let file = File::open(path)
-            .map_err(|e| format!("No se pudo abrir {}: {}", path, e))?;
-        let decoder = Decoder::try_from(file)
-            .map_err(|e| format!("No se pudo decodificar {}: {}", path, e))?;
+        // Precarga a RAM (locuciones: archivos cortos) — el callback no toca disco.
+        let (decoder, _preloaded) = open_playback_decoder(path)
+            .map_err(|e| format!("{} ({})", e, path))?;
         let metered = MeteredSource::new(decoder, Arc::clone(&meter));
         player.append(metered);
     }
@@ -4334,7 +4397,35 @@ enum EngineEvent {
 /// VU meters ultra fluidos a 50 FPS y posición de cabezal precisa, sin lag.
 const PUSH_TICK_MS: u64 = 20;
 
+/// Sube la clase de prioridad del PROCESO del motor (complemento del MMCSS del
+/// hilo de audio, que activa cpal vía el feature `audio_thread_priority`).
+/// Con el sistema cargado (antivirus, Windows Update), el scheduler atiende
+/// antes al motor que a los procesos normales. No requiere administrador en
+/// ninguna edición de Windows (10/11 Home/Pro/LTSC); en Linux la prioridad
+/// negativa puede no estar permitida y se ignora en silencio.
+fn raise_process_priority() {
+    #[cfg(windows)]
+    unsafe {
+        // ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000 (kernel32, linkeado por defecto).
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut core::ffi::c_void;
+            fn SetPriorityClass(handle: *mut core::ffi::c_void, class: u32) -> i32;
+        }
+        const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x0000_8000;
+        if SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) == 0 {
+            eprintln!("[priority] No se pudo subir la prioridad del proceso (se continúa en Normal).");
+        }
+    }
+    #[cfg(unix)]
+    unsafe {
+        // nice -5 para el proceso; sin privilegios falla con EACCES y se ignora.
+        let _ = libc::setpriority(libc::PRIO_PROCESS, 0, -5);
+    }
+}
+
 fn main() {
+    raise_process_priority();
     let mut state = EngineState::default();
     println!(
         "{{\"type\":\"ready\",\"engine\":\"rustAudio\",\"version\":\"0.2.13\",\"updatedAt\":{}}}",
@@ -5086,5 +5177,73 @@ fn main() {
         }
 
         emit_status(&state, &request_id);
+    }
+}
+
+// ============================================================================
+// Tests unitarios (cargo test corre en CI). Cubren la precarga a RAM del
+// plan "audio inmune a saturación de disco": el decoder de reproducción no
+// debe depender del disco una vez cargado.
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WAV PCM 16-bit mono 44.1 kHz mínimo y válido (100 muestras).
+    fn write_test_wav(path: &std::path::Path) {
+        let samples: u32 = 100;
+        let data_len = samples * 2;
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // mono
+        bytes.extend_from_slice(&44100u32.to_le_bytes());
+        bytes.extend_from_slice(&(44100u32 * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..samples {
+            bytes.extend_from_slice(&((i % 64) as i16 * 100).to_le_bytes());
+        }
+        std::fs::write(path, bytes).expect("escribir wav de prueba");
+    }
+
+    fn test_wav_path(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("lf_engine_test_{}.wav", name));
+        write_test_wav(&path);
+        path
+    }
+
+    #[test]
+    fn precarga_a_ram_cuando_cabe_en_el_tope() {
+        let path = test_wav_path("ram");
+        let (_, preloaded, byte_len) =
+            open_playback_reader(path.to_str().unwrap(), PRELOAD_MAX_BYTES).unwrap();
+        assert!(preloaded, "archivo pequeño debe precargarse a RAM");
+        assert!(byte_len > 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streaming_desde_disco_cuando_supera_el_tope() {
+        let path = test_wav_path("disk");
+        let (_, preloaded, _) = open_playback_reader(path.to_str().unwrap(), 0).unwrap();
+        assert!(!preloaded, "con tope 0 debe caer al camino de disco");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn decoder_precargado_decodifica_y_reporta_duracion() {
+        let path = test_wav_path("decode");
+        let (decoder, preloaded) = open_playback_decoder(path.to_str().unwrap()).unwrap();
+        assert!(preloaded);
+        assert!(decoder.total_duration().is_some(), "with_byte_len debe permitir total_duration");
+        let count = decoder.count();
+        assert!(count > 0, "el decoder debe producir muestras desde RAM");
+        let _ = std::fs::remove_file(&path);
     }
 }

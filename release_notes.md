@@ -9,6 +9,10 @@
 * El botón ↻ refresca primero el explorador de archivos y luego sincroniza el índice, mostrando el **porcentaje de avance** en el cuadro de estado.
 * Al abrir el software, el cuadro de estado informa la situación del índice (pistas, pendientes, última sincronización) **sin ejecutar ningún análisis automático**.
 
+### 🔊 Motor de audio inmune a saturación de disco
+* **Fin del "disco rayado" cuando el sistema está cargado:** cada pista se precarga completa a memoria al cargarse; una vez al aire, el antivirus o Windows Update pueden saturar el disco sin que el audio se entere (verificado: con el disco al 100%, la reproducción se mantiene perfecta donde antes había bucles de 1–3 segundos).
+* **Prioridad de audio profesional:** el hilo de render se registra como tiempo real ante el sistema (MMCSS "Pro Audio" en Windows 10/11, RtKit en Linux) y el motor corre con prioridad elevada de proceso. Sin requerir administrador.
+
 ### 🛠️ Estabilidad e instalación
 * Corregido el error "A JavaScript error occurred in the main process (Object has been destroyed)" al cerrar ventanas mientras el analizador trabajaba.
 * **Ya no se necesita ejecutar el programa como administrador:** el asistente de primer inicio pide permisos (UAC) únicamente para instalar el Visual C++ Redistributable, como debe ser.

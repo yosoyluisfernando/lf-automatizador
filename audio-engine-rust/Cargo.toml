@@ -4,7 +4,12 @@ version = "0.3.1"
 edition = "2021"
 
 [dependencies]
-cpal = "0.17.3"
+# `audio_thread_priority`: registra el hilo de render como tiempo real
+# (MMCSS "Pro Audio" en Windows, RtKit/SCHED_RR en Linux). Sin este feature,
+# cpal solo hace SetThreadPriority básico. Parte del plan "audio inmune a
+# saturación de disco": el scheduler protege el callback cuando el sistema
+# está cargado (antivirus, Windows Update). No requiere administrador.
+cpal = { version = "0.17.3", features = ["audio_thread_priority"] }
 # Decodificadores adicionales de Symphonia, todos código abierto y libres de
 # regalías (patentes vencidas o licencias permisivas), por eso se pueden
 # compilar y distribuir sin problema:

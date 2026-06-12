@@ -53,6 +53,7 @@ jobs:
             fakeroot \
             dpkg \
             libasound2-dev \
+            libdbus-1-dev \
             libx11-dev \
             libxkbfile-dev \
             libxi-dev \
