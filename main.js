@@ -278,7 +278,30 @@ function broadcastAudioPowerEvent(payload = {}) {
     } catch (err) {}
 }
 
+// Prioridad ABOVE_NORMAL para los procesos de la aplicación (principal y
+// renderer de la ventana principal). Dos efectos: el scheduler los atiende
+// antes cuando el sistema está cargado (antivirus, Windows Update), y Windows
+// 11 NO aplica su "modo eficiencia"/EcoQoS automático a procesos por encima de
+// prioridad normal aunque lleven horas minimizados. El motor Rust ya hace lo
+// propio por su cuenta. No requiere administrador; en Linux puede no estar
+// permitido y se ignora en silencio.
+function raiseAppProcessPriority(target = 'main-process') {
+    const aboveNormal = os.constants.priority.PRIORITY_ABOVE_NORMAL;
+    try {
+        os.setPriority(process.pid, aboveNormal);
+    } catch (err) {}
+    try {
+        if (target === 'renderer' && mainWindow && !mainWindow.isDestroyed()) {
+            os.setPriority(mainWindow.webContents.getOSProcessId(), aboveNormal);
+            writeLog('[ENERGIA] Prioridad ABOVE_NORMAL aplicada al proceso principal y al renderer.');
+        }
+    } catch (err) {
+        writeLog(`[ENERGIA] No se pudo subir la prioridad del renderer: ${err?.message || err}`);
+    }
+}
+
 function installAudioPowerGuards() {
+    raiseAppProcessPriority();
     try {
         if (appSuspensionBlockerId === null || !powerSaveBlocker.isStarted(appSuspensionBlockerId)) {
             appSuspensionBlockerId = powerSaveBlocker.start('prevent-app-suspension');
@@ -842,6 +865,12 @@ ipcMain.handle('task-manager-snapshot', async () => {
 });
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Emisión 24/7: Chromium jamás debe estrangular timers ni degradar renderers
+// en segundo plano (ventana minimizada u oculta durante horas). Complementa el
+// backgroundThrottling:false de la ventana principal cubriendo TODAS las
+// ventanas (consola, auxiliares, biblioteca).
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 
 const configDir = getConfigDir(path.join(__dirname, 'config'), __dirname);
 
@@ -2280,7 +2309,12 @@ function createWindow() {
         setTimeout(() => { if (!rendererLoaded) loadIndex(); }, delay);
     };
 
-    mainWindow.webContents.on('did-finish-load', () => { rendererLoaded = true; });
+    mainWindow.webContents.on('did-finish-load', () => {
+        rendererLoaded = true;
+        // El pid del renderer existe recién aquí (y cambia si el proceso de
+        // render se recupera tras un crash): reaplicar la prioridad siempre.
+        raiseAppProcessPriority('renderer');
+    });
     mainWindow.webContents.on('did-fail-load', (e, errorCode, errorDesc, validatedURL, isMainFrame) => {
         // -3 (ERR_ABORTED) ocurre en navegaciones/recargas normales: no es un fallo real.
         if (isMainFrame === false || errorCode === -3) return;
