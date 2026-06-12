@@ -221,6 +221,7 @@
         </div>
 
         <div class="bottom-panel">
+            <div class="dock-zone" id="dock-left">
             <div class="sidebar" id="left-sidebar">
                 <div class="tabs">
                     <button class="active" id="tab-btn-explorador" data-i18n="main_window.sidebar.explorer">Explorador</button>
@@ -352,7 +353,8 @@
                 </div>
             </div>
 
-            <div class="sidebar-resizer" id="sidebar-resizer" title="Arrastra para cambiar el tamaño"></div>
+            <div class="sidebar-resizer dock-resizer" id="sidebar-resizer" title="Arrastra para cambiar el tamaño" data-panel="left-sidebar"></div>
+            </div>
 
             <div class="main-content">
                 <div class="controls-bar">
@@ -404,7 +406,8 @@
                 </div>
             </div>
 
-            <div class="cartwall-resizer" id="cartwall-resizer" title="Arrastra para cambiar el tamaño" style="display: none;"></div>
+            <div class="dock-zone" id="dock-right">
+            <div class="cartwall-resizer dock-resizer" id="cartwall-resizer" title="Arrastra para cambiar el tamaño" style="display: none;" data-panel="right-panel-cartwall"></div>
 
             <div class="cartwall-panel" id="right-panel-cartwall" style="display: none;">
                 <div class="cw-header">
@@ -419,8 +422,9 @@
                 </div>
             </div>
 
-            <div class="auxiliary-resizer" id="auxiliary-resizer" title="Arrastra para cambiar el tamaño" style="display: none;"></div>
+            <div class="auxiliary-resizer dock-resizer" id="auxiliary-resizer" title="Arrastra para cambiar el tamaño" style="display: none;" data-panel="right-panel-auxiliary"></div>
             <div id="right-panel-auxiliary" style="display: none;"></div>
+            </div>
 
         </div>
     </div>

@@ -3876,13 +3876,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     if (cwPanel) {
-        cwPanel.style.display = uiPrefs.cartwall ? 'flex' : 'none';
-        syncCartwallResizerVisibility();
+        DockManager.setVisible('right-panel-cartwall', 'cartwall-resizer', uiPrefs.cartwall);
     }
     const auxPanel = document.getElementById('right-panel-auxiliary');
     if (auxPanel) {
-        auxPanel.style.display = uiPrefs.auxiliaryPanel ? 'flex' : 'none';
-        syncAuxiliaryResizerVisibility();
+        DockManager.setVisible('right-panel-auxiliary', 'auxiliary-resizer', uiPrefs.auxiliaryPanel);
     }
 
     loadDatabasesFromSQLite().finally(() => {
@@ -14127,27 +14125,21 @@ function rememberCartwallMode(mode) {
 async function showCartwallDocked() {
     await initCartwall({ forceRender: true });
     isCartwallUndocked = false;
-    const panel = getCartwallPanel();
-    if (panel) panel.style.display = 'flex';
-    syncCartwallResizerVisibility();
+    DockManager.setVisible('right-panel-cartwall', 'cartwall-resizer', true);
     rememberCartwallMode('docked');
     setCartwallUiState({ mode: 'docked' });
 }
 
 function hideCartwallDocked() {
-    const panel = getCartwallPanel();
-    if (panel) panel.style.display = 'none';
-    syncCartwallResizerVisibility();
+    DockManager.setVisible('right-panel-cartwall', 'cartwall-resizer', false);
     rememberCartwallMode('hidden');
     setCartwallUiState({ mode: 'hidden' });
 }
 
 async function openCartwallFloating() {
     await initCartwall();
-    const panel = getCartwallPanel();
-    if (panel) panel.style.display = 'none';
+    DockManager.setVisible('right-panel-cartwall', 'cartwall-resizer', false);
     isCartwallUndocked = true;
-    syncCartwallResizerVisibility();
     rememberCartwallMode('floating');
     setCartwallUiState({ mode: 'floating' });
     ipcRenderer.send('open-cartwall-window');
@@ -14232,8 +14224,7 @@ function isDockedAuxiliaryVisible() {
 }
 
 function syncAuxiliaryResizerVisibility() {
-    const resizer = document.getElementById('auxiliary-resizer');
-    if (resizer) resizer.style.display = isDockedAuxiliaryVisible() ? 'flex' : 'none';
+    DockManager.setVisible('right-panel-auxiliary', 'auxiliary-resizer', isDockedAuxiliaryVisible());
 }
 
 function rememberAuxiliaryMode(mode) {
@@ -14243,23 +14234,17 @@ function rememberAuxiliaryMode(mode) {
 }
 
 function showAuxiliaryDocked() {
-    const panel = getAuxiliaryPanel();
-    if (panel) panel.style.display = 'flex';
-    syncAuxiliaryResizerVisibility();
+    DockManager.setVisible('right-panel-auxiliary', 'auxiliary-resizer', true);
     rememberAuxiliaryMode('docked');
 }
 
 function hideAuxiliaryDocked() {
-    const panel = getAuxiliaryPanel();
-    if (panel) panel.style.display = 'none';
-    syncAuxiliaryResizerVisibility();
+    DockManager.setVisible('right-panel-auxiliary', 'auxiliary-resizer', false);
     rememberAuxiliaryMode('hidden');
 }
 
 function openAuxiliaryFloating() {
-    const panel = getAuxiliaryPanel();
-    if (panel) panel.style.display = 'none';
-    syncAuxiliaryResizerVisibility();
+    DockManager.setVisible('right-panel-auxiliary', 'auxiliary-resizer', false);
     rememberAuxiliaryMode('floating');
     ipcRenderer.send('open-auxiliary-window');
 }
@@ -15276,48 +15261,132 @@ ipcRenderer.on('remote-cw-move-button', (e, payload) => {
     moveCartwallRuntime(payload.fromTabIndex, payload.fromId, payload.toTabIndex, payload.toId);
 });
 
+ipcRenderer.on('set-right-panel-order', (e, order) => {
+    DockManager.setRightPanelOrder(order);
+});
+
 window.addEventListener('blur', hideAllMenus);
 
-// Sidebar Resizer Logic
-function initSidebarResizer() {
-    const sidebar = document.getElementById('left-sidebar');
-    const resizer = document.getElementById('sidebar-resizer');
+// Dock Manager Logic
+class DockManager {
+    static panels = {};
+    static isResizing = false;
 
-    if (sidebar && resizer) {
-        let isResizing = false;
-
-        resizer.addEventListener('mousedown', (e) => {
-            isResizing = true;
-            resizer.classList.add('resizing');
-            document.body.style.cursor = 'col-resize';
+    static init() {
+        document.querySelectorAll('.dock-resizer').forEach(resizer => {
+            resizer.addEventListener('mousedown', (e) => {
+                DockManager.isResizing = true;
+                resizer.classList.add('resizing');
+                document.body.style.cursor = 'col-resize';
+                resizer.dataset.active = 'true';
+                e.preventDefault();
+            });
         });
 
         document.addEventListener('mousemove', (e) => {
-            if (!isResizing) return;
-            const newWidth = e.clientX - sidebar.getBoundingClientRect().left;
-            sidebar.style.width = `${newWidth}px`;
+            if (!DockManager.isResizing) return;
+            const resizer = document.querySelector('.dock-resizer[data-active="true"]');
+            if (!resizer) return;
+
+            const panelId = resizer.dataset.panel;
+            const panel = document.getElementById(panelId);
+            const zone = resizer.closest('.dock-zone').id;
+            const config = DockManager.panels[panelId];
+
+            if (!panel || !config) return;
+
+            let newWidth;
+            if (zone === 'dock-left') {
+                newWidth = e.clientX - panel.getBoundingClientRect().left;
+            } else {
+                newWidth = panel.getBoundingClientRect().right - e.clientX;
+            }
+
+            const min = config.min;
+            const max = Math.floor(window.innerWidth * config.maxVw);
+            panel.style.width = `${Math.max(min, Math.min(max, newWidth))}px`;
         });
 
         document.addEventListener('mouseup', () => {
-            if (isResizing) {
-                isResizing = false;
-                resizer.classList.remove('resizing');
+            if (DockManager.isResizing) {
+                DockManager.isResizing = false;
+                const resizer = document.querySelector('.dock-resizer[data-active="true"]');
+                if (resizer) {
+                    resizer.classList.remove('resizing');
+                    delete resizer.dataset.active;
+                    
+                    const panelId = resizer.dataset.panel;
+                    const panel = document.getElementById(panelId);
+                    const config = DockManager.panels[panelId];
+                    if (panel && config) {
+                        localStorage.setItem(config.storageKey, panel.style.width);
+                    }
+                }
                 document.body.style.cursor = '';
-                localStorage.setItem('lf-sidebar-width', sidebar.style.width);
             }
         });
+    }
 
-        const savedWidth = localStorage.getItem('lf-sidebar-width');
-        if (savedWidth) {
-            sidebar.style.width = savedWidth;
+    static register(panelId, min, maxVw, storageKey) {
+        DockManager.panels[panelId] = { min, maxVw, storageKey };
+        const panel = document.getElementById(panelId);
+        if (panel) {
+            const saved = localStorage.getItem(storageKey);
+            if (saved) panel.style.width = saved;
+        }
+    }
+
+    static setRightPanelOrder(order) {
+        const targetZone = document.getElementById('dock-right');
+        if (!targetZone) return;
+
+        const cwPanel = document.getElementById('right-panel-cartwall');
+        const cwResizer = document.getElementById('cartwall-resizer');
+        const auxPanel = document.getElementById('right-panel-auxiliary');
+        const auxResizer = document.getElementById('auxiliary-resizer');
+
+        if (order === 'cartwall-first') {
+            if (cwResizer && cwPanel) {
+                targetZone.appendChild(cwResizer);
+                targetZone.appendChild(cwPanel);
+            }
+            if (auxResizer && auxPanel) {
+                targetZone.appendChild(auxResizer);
+                targetZone.appendChild(auxPanel);
+            }
+        } else {
+            if (auxResizer && auxPanel) {
+                targetZone.appendChild(auxResizer);
+                targetZone.appendChild(auxPanel);
+            }
+            if (cwResizer && cwPanel) {
+                targetZone.appendChild(cwResizer);
+                targetZone.appendChild(cwPanel);
+            }
+        }
+    }
+
+    static setVisible(panelId, resizerId, visible) {
+        const panel = document.getElementById(panelId);
+        const resizer = document.getElementById(resizerId);
+        if (panel) panel.style.display = visible ? 'flex' : 'none';
+        if (resizer) resizer.style.display = visible ? 'flex' : 'none';
+        
+        if (panelId === 'right-panel-auxiliary' && panel) {
+            if (visible) panel.classList.add('auxiliary-panel-docked');
+            else panel.classList.remove('auxiliary-panel-docked');
         }
     }
 }
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initSidebarResizer);
+    document.addEventListener('DOMContentLoaded', () => {
+        DockManager.init();
+        DockManager.register('left-sidebar', 200, 0.5, 'lf-sidebar-width');
+    });
 } else {
-    initSidebarResizer();
+    DockManager.init();
+    DockManager.register('left-sidebar', 200, 0.5, 'lf-sidebar-width');
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -15598,85 +15667,20 @@ ipcRenderer.on('stream-error', (_e, { streamId, message: errMsg } = {}) => {
 
 // Cartwall Resizer Logic
 function syncCartwallResizerVisibility() {
-    const resizer = document.getElementById('cartwall-resizer');
-    if (resizer) resizer.style.display = isDockedCartwallVisible() ? 'flex' : 'none';
-}
-
-function initCartwallResizer() {
-    const panel = document.getElementById('right-panel-cartwall');
-    const resizer = document.getElementById('cartwall-resizer');
-    if (!panel || !resizer) return;
-
-    let isResizing = false;
-
-    resizer.addEventListener('mousedown', (e) => {
-        isResizing = true;
-        resizer.classList.add('resizing');
-        document.body.style.cursor = 'col-resize';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isResizing) return;
-        const newWidth = window.innerWidth - e.clientX;
-        panel.style.width = `${Math.max(280, Math.min(Math.floor(window.innerWidth * 0.5), newWidth))}px`;
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false;
-            resizer.classList.remove('resizing');
-            document.body.style.cursor = '';
-            localStorage.setItem('lf-cartwall-width', panel.style.width);
-        }
-    });
-
-    const savedWidth = localStorage.getItem('lf-cartwall-width');
-    if (savedWidth) panel.style.width = savedWidth;
-}
-
-function initAuxiliaryResizer() {
-    const panel = document.getElementById('right-panel-auxiliary');
-    const resizer = document.getElementById('auxiliary-resizer');
-    if (!panel || !resizer) return;
-
-    let isResizing = false;
-
-    resizer.addEventListener('mousedown', (e) => {
-        isResizing = true;
-        resizer.classList.add('resizing');
-        document.body.style.cursor = 'col-resize';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isResizing) return;
-        const newWidth = window.innerWidth - e.clientX;
-        panel.style.width = `${Math.max(300, Math.min(Math.floor(window.innerWidth * 0.55), newWidth))}px`;
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false;
-            resizer.classList.remove('resizing');
-            document.body.style.cursor = '';
-            localStorage.setItem('lf-auxiliary-width', panel.style.width);
-        }
-    });
-
-    const savedWidth = localStorage.getItem('lf-auxiliary-width');
-    if (savedWidth) panel.style.width = savedWidth;
+    DockManager.setVisible('right-panel-cartwall', 'cartwall-resizer', isDockedCartwallVisible());
 }
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-        initCartwallResizer();
-        initAuxiliaryResizer();
+        DockManager.register('right-panel-cartwall', 280, 0.5, 'lf-cartwall-width');
+        DockManager.register('right-panel-auxiliary', 300, 0.55, 'lf-auxiliary-width');
+        DockManager.setRightPanelOrder(uiPrefs.rightPanelOrder || 'cartwall-first');
         syncAuxiliaryResizerVisibility();
     });
 } else {
-    initCartwallResizer();
-    initAuxiliaryResizer();
+    DockManager.register('right-panel-cartwall', 280, 0.5, 'lf-cartwall-width');
+    DockManager.register('right-panel-auxiliary', 300, 0.55, 'lf-auxiliary-width');
+    DockManager.setRightPanelOrder(uiPrefs.rightPanelOrder || 'cartwall-first');
     syncAuxiliaryResizerVisibility();
 }
 
