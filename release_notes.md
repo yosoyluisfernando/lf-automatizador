@@ -10,7 +10,7 @@
 * Al abrir el software, el cuadro de estado informa la situación del índice (pistas, pendientes, última sincronización) **sin ejecutar ningún análisis automático**.
 
 ### 🔊 Motor de audio inmune a saturación de disco
-* **Fin del "disco rayado" cuando el sistema está cargado:** cada pista se precarga completa a memoria al cargarse; una vez al aire, el antivirus o Windows Update pueden saturar el disco sin que el audio se entere (verificado: con el disco al 100%, la reproducción se mantiene perfecta donde antes había bucles de 1–3 segundos).
+* **Fin del "disco rayado" cuando el sistema está cargado:** cada pista se precarga completa a memoria al cargarse; una vez al aire, el antivirus o Windows Update pueden saturar el disco sin que el audio se entere (verificado: con el disco al 100%, la reproducción se mantiene perfecta donde antes había bucles de 1–3 segundos). Los archivos gigantes (programas grabados de más de 200 MB) usan un decodificador en hilo dedicado con 10 segundos de colchón.
 * **Prioridad de audio profesional:** el hilo de render se registra como tiempo real ante el sistema (MMCSS "Pro Audio" en Windows 10/11, RtKit en Linux) y el motor corre con prioridad elevada de proceso. Sin requerir administrador.
 
 ### 🛠️ Estabilidad e instalación

@@ -133,6 +133,13 @@ Regla violada (la misma de toda esta investigación): el hilo de audio en tiempo
 
 Orden sugerido: 1 → 4 → 3 → 2 (el 1 elimina el síntoma para el 99% de los casos; el 2 es el cierre completo).
 
+### RESULTADO (2026-06-12) — plan ejecutado COMPLETO
+- **Fase 1 (precarga a RAM):** implementada en los 3 caminos de reproducción; tope 200 MB.
+- **Fase 2 (verificación real):** pista al aire mientras 3 procesos leían la biblioteca completa en paralelo → avance del reloj de reproducción 1.0008× el reloj de pared, **stall máximo 19 ms** (antes: bucles de 1–3 s).
+- **Fase 3 (prioridades):** MMCSS "Pro Audio" (Windows) / RtKit (Linux) vía feature de cpal + proceso en ABOVE_NORMAL; `libdbus-1-dev` en CI y `libdbus-1-3` en el .deb.
+- **Fase 4 (archivos >200 MB):** `StreamedFileSource` — hilo decodificador dedicado + ring rtrb de 10 s; ring vacío → silencio, jamás bloqueo; limitación documentada: sin seek en ese caso raro. 7 tests Rust en total (4 del motor de audio).
+- Regresión colateral corregida: la ingesta de metadatos del índice escribía con autocommit por archivo (~136k commits) y devolvió la indexación a minutos; ahora va por lotes dentro de la transacción → biblioteca completa con metadatos en 38.6 s.
+
 ### Estado de compilación (¿listo para compilar en GitHub?)
 **Lo bueno:** el workflow CI está sólido y probado (builds verdes en los 3 pushes anteriores y el actual en progreso): tests, cargo test/check, rebuild nativo de better-sqlite3, checksums con atestación, instalador por-usuario sin admin, sin configuraciones personales, versión semver correcta.
 **Lo malo / pendiente:** (a) hay trabajo a medias sin commitear en el árbol local (paneles "DockManager": render.js, style.css, index.html, locales) cuya mitad de main.js sí viajó en un commit anterior — en el build publicado esos dos ítems de menú de orden de paneles no hacen nada y sus etiquetas pueden verse sin traducir; conviene terminar/commitear ese trabajo antes de taggear v0.9.16; (b) la firma de código solo se aplica en tags (correcto, pero el .exe de pushes normales queda sin firmar); (c) los tests no viajan al repo (tests/ git-ignorado) — CI los ejecuta como no-op, decisión consciente pero significa que el CI no corre la suite de regresión real.

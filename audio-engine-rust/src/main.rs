@@ -2852,37 +2852,187 @@ const PRELOAD_MAX_BYTES: u64 = 200 * 1024 * 1024;
 trait PreloadedRead: io::Read + io::Seek + Send + Sync {}
 impl<T: io::Read + io::Seek + Send + Sync> PreloadedRead for T {}
 
-/// Abre el lector del archivo: RAM si cabe en `preload_cap`, disco si no.
-/// Separado del decoder para poder probar el tope en tests unitarios.
-fn open_playback_reader(file_path: &str, preload_cap: u64) -> Result<(Box<dyn PreloadedRead>, bool, u64), String> {
-    let byte_len = std::fs::metadata(file_path)
-        .map_err(|err| format!("No se pudo abrir archivo: {}", err))?
-        .len();
-    if byte_len <= preload_cap {
-        let bytes = std::fs::read(file_path)
-            .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
-        Ok((Box::new(io::Cursor::new(bytes)), true, byte_len))
-    } else {
-        eprintln!(
-            "[preload] Archivo supera el tope de precarga ({} bytes): streaming desde disco. {}",
-            byte_len, file_path
-        );
-        let file = File::open(file_path)
-            .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
-        Ok((Box::new(io::BufReader::new(file)), false, byte_len))
+/// Colchón de PCM decodificado para archivos gigantes (streaming): absorbe
+/// stalls de disco de hasta este largo sin que el callback se entere.
+const STREAM_FILE_BUFFER_SECONDS: usize = 10;
+
+/// Fuente para archivos que superan el tope de precarga: un hilo decodificador
+/// dedicado (que SÍ puede bloquearse en disco sin consecuencias) llena un ring
+/// SPSC y el callback de audio solo hace `pop`. Misma filosofía que
+/// `PcmRingSource` (streams en vivo): ring vacío → silencio, nunca bloqueo.
+/// El ciclo de vida es automático: al hacer stop/skip rodio descarta la fuente,
+/// el ring queda abandonado y el hilo decodificador termina solo.
+struct StreamedFileSource {
+    consumer: rtrb::Consumer<f32>,
+    finished: Arc<AtomicBool>,
+    channels: ChannelCount,
+    sample_rate: SampleRate,
+    total_duration: Option<Duration>,
+}
+
+impl Iterator for StreamedFileSource {
+    type Item = Sample;
+
+    #[inline]
+    fn next(&mut self) -> Option<Sample> {
+        match self.consumer.pop() {
+            Ok(sample) => Some(sample),
+            Err(_) => {
+                if self.finished.load(Ordering::Acquire) && self.consumer.is_empty() {
+                    None // archivo decodificado por completo y drenado → fin
+                } else {
+                    Some(0.0) // underrun temporal (disco lento) → silencio
+                }
+            }
+        }
     }
 }
 
-/// Abre un decoder para reproducción. Devuelve (decoder, precargado_en_ram).
-fn open_playback_decoder(file_path: &str) -> Result<(Decoder<Box<dyn PreloadedRead>>, bool), String> {
-    let (reader, preloaded, byte_len) = open_playback_reader(file_path, PRELOAD_MAX_BYTES)?;
+impl Source for StreamedFileSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> ChannelCount {
+        self.channels
+    }
+    fn sample_rate(&self) -> SampleRate {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.total_duration
+    }
+    fn try_seek(&mut self, _pos: Duration) -> Result<(), SeekError> {
+        // Limitación documentada: los archivos por encima del tope de precarga
+        // no soportan seek (el decodificador va por delante en su propio hilo).
+        Err(SeekError::NotSupported {
+            underlying_source: std::any::type_name::<Self>(),
+        })
+    }
+}
+
+/// Sondea el formato en el hilo de despacho y lanza el hilo decodificador.
+fn spawn_streamed_file_source(file_path: &str, byte_len: u64) -> Result<StreamedFileSource, String> {
+    let file = File::open(file_path)
+        .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
     let decoder = Decoder::builder()
-        .with_data(reader)
+        .with_data(io::BufReader::new(file))
         .with_byte_len(byte_len)
-        .with_seekable(true)
+        .with_seekable(false)
         .build()
         .map_err(|err| format!("No se pudo decodificar audio: {}", err))?;
-    Ok((decoder, preloaded))
+    let channels = decoder.channels();
+    let sample_rate = decoder.sample_rate();
+    let total_duration = decoder.total_duration();
+    let ring_capacity = (sample_rate.get() as usize)
+        .saturating_mul(channels.get() as usize)
+        .saturating_mul(STREAM_FILE_BUFFER_SECONDS)
+        .max(44_100);
+    let (mut producer, consumer) = rtrb::RingBuffer::<f32>::new(ring_capacity);
+    let finished = Arc::new(AtomicBool::new(false));
+    let finished_for_thread = Arc::clone(&finished);
+    thread::spawn(move || {
+        for sample in decoder {
+            let mut pending = sample;
+            loop {
+                match producer.push(pending) {
+                    Ok(()) => break,
+                    Err(rtrb::PushError::Full(returned)) => {
+                        pending = returned;
+                        if producer.is_abandoned() {
+                            return; // stop/skip: la fuente fue descartada
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+        }
+        finished_for_thread.store(true, Ordering::Release);
+    });
+    Ok(StreamedFileSource {
+        consumer,
+        finished,
+        channels,
+        sample_rate,
+        total_duration,
+    })
+}
+
+/// Fuente de reproducción unificada: RAM (camino normal) o streaming con ring
+/// (archivos gigantes). Ambas mantienen el disco fuera del callback de audio.
+enum PlaybackSource {
+    Ram(Decoder<Box<dyn PreloadedRead>>),
+    Streamed(StreamedFileSource),
+}
+
+impl Iterator for PlaybackSource {
+    type Item = Sample;
+
+    #[inline]
+    fn next(&mut self) -> Option<Sample> {
+        match self {
+            PlaybackSource::Ram(inner) => inner.next(),
+            PlaybackSource::Streamed(inner) => inner.next(),
+        }
+    }
+}
+
+impl Source for PlaybackSource {
+    fn current_span_len(&self) -> Option<usize> {
+        match self {
+            PlaybackSource::Ram(inner) => inner.current_span_len(),
+            PlaybackSource::Streamed(inner) => inner.current_span_len(),
+        }
+    }
+    fn channels(&self) -> ChannelCount {
+        match self {
+            PlaybackSource::Ram(inner) => inner.channels(),
+            PlaybackSource::Streamed(inner) => inner.channels(),
+        }
+    }
+    fn sample_rate(&self) -> SampleRate {
+        match self {
+            PlaybackSource::Ram(inner) => inner.sample_rate(),
+            PlaybackSource::Streamed(inner) => inner.sample_rate(),
+        }
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            PlaybackSource::Ram(inner) => inner.total_duration(),
+            PlaybackSource::Streamed(inner) => inner.total_duration(),
+        }
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        match self {
+            PlaybackSource::Ram(inner) => inner.try_seek(pos),
+            PlaybackSource::Streamed(inner) => inner.try_seek(pos),
+        }
+    }
+}
+
+/// Abre la fuente de reproducción. Devuelve (fuente, precargado_en_ram).
+fn open_playback_decoder(file_path: &str) -> Result<(PlaybackSource, bool), String> {
+    let byte_len = std::fs::metadata(file_path)
+        .map_err(|err| format!("No se pudo abrir archivo: {}", err))?
+        .len();
+    if byte_len <= PRELOAD_MAX_BYTES {
+        let bytes = std::fs::read(file_path)
+            .map_err(|err| format!("No se pudo abrir archivo: {}", err))?;
+        let reader: Box<dyn PreloadedRead> = Box::new(io::Cursor::new(bytes));
+        let decoder = Decoder::builder()
+            .with_data(reader)
+            .with_byte_len(byte_len)
+            .with_seekable(true)
+            .build()
+            .map_err(|err| format!("No se pudo decodificar audio: {}", err))?;
+        Ok((PlaybackSource::Ram(decoder), true))
+    } else {
+        eprintln!(
+            "[preload] Archivo supera el tope de precarga ({} bytes): streaming con ring de {} s. {}",
+            byte_len, STREAM_FILE_BUFFER_SECONDS, file_path
+        );
+        let source = spawn_streamed_file_source(file_path, byte_len)?;
+        Ok((PlaybackSource::Streamed(source), false))
+    }
 }
 
 fn load_audio_player(state: &mut EngineState, player_id: &str, file_path: &str, gain: f32, paused: bool, output_id: &str, bus_id: &str, cache_dir: &str) -> Result<(), String> {
@@ -5221,29 +5371,58 @@ mod tests {
     #[test]
     fn precarga_a_ram_cuando_cabe_en_el_tope() {
         let path = test_wav_path("ram");
-        let (_, preloaded, byte_len) =
-            open_playback_reader(path.to_str().unwrap(), PRELOAD_MAX_BYTES).unwrap();
+        let (source, preloaded) = open_playback_decoder(path.to_str().unwrap()).unwrap();
         assert!(preloaded, "archivo pequeño debe precargarse a RAM");
-        assert!(byte_len > 0);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn streaming_desde_disco_cuando_supera_el_tope() {
-        let path = test_wav_path("disk");
-        let (_, preloaded, _) = open_playback_reader(path.to_str().unwrap(), 0).unwrap();
-        assert!(!preloaded, "con tope 0 debe caer al camino de disco");
+        assert!(matches!(source, PlaybackSource::Ram(_)));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn decoder_precargado_decodifica_y_reporta_duracion() {
         let path = test_wav_path("decode");
-        let (decoder, preloaded) = open_playback_decoder(path.to_str().unwrap()).unwrap();
+        let (source, preloaded) = open_playback_decoder(path.to_str().unwrap()).unwrap();
         assert!(preloaded);
-        assert!(decoder.total_duration().is_some(), "with_byte_len debe permitir total_duration");
-        let count = decoder.count();
+        assert!(source.total_duration().is_some(), "with_byte_len debe permitir total_duration");
+        let count = source.count();
         assert!(count > 0, "el decoder debe producir muestras desde RAM");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streaming_con_ring_decodifica_completo_para_archivos_grandes() {
+        let path = test_wav_path("stream");
+        let byte_len = std::fs::metadata(&path).unwrap().len();
+        // Llamada directa al camino streaming (el que usan los archivos que
+        // superan PRELOAD_MAX_BYTES): el hilo decodificador llena el ring y la
+        // fuente entrega todas las muestras reales antes de terminar.
+        let source = spawn_streamed_file_source(path.to_str().unwrap(), byte_len).unwrap();
+        assert!(source.total_duration().is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut real_samples = 0usize;
+        let mut source = source;
+        loop {
+            match source.next() {
+                None => break, // fin: decodificado y drenado
+                Some(sample) => {
+                    if sample != 0.0 {
+                        real_samples += 1;
+                    }
+                }
+            }
+            if Instant::now() > deadline {
+                panic!("la fuente streaming no terminó a tiempo");
+            }
+        }
+        assert!(real_samples > 0, "deben llegar muestras reales a través del ring");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn streaming_no_soporta_seek_y_lo_reporta() {
+        let path = test_wav_path("seek");
+        let byte_len = std::fs::metadata(&path).unwrap().len();
+        let mut source = spawn_streamed_file_source(path.to_str().unwrap(), byte_len).unwrap();
+        assert!(source.try_seek(Duration::from_secs(1)).is_err());
         let _ = std::fs::remove_file(&path);
     }
 }
