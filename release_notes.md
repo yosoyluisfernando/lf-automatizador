@@ -1,3 +1,11 @@
+## 🚀 Novedades y Mejoras en la versión 0.9.17
+
+### 🧩 Interfaz
+* **Paneles derechos reordenables:** desde Ver → Orden de Paneles puedes elegir si la Botonera de efectos va antes o después de las Playlists auxiliares, con traducciones completas.
+* **Prioridad de emisión 24/7:** la aplicación corre con prioridad elevada y queda exenta del "modo eficiencia" de Windows 11; Chromium ya no estrangula temporizadores de ninguna ventana aunque pasen horas minimizadas.
+
+(La versión 0.9.16 no llegó a publicarse; sus novedades se incluyen a continuación.)
+
 ## 🚀 Novedades y Mejoras en la versión 0.9.16
 
 ### ⚡ Rendimiento (discos mecánicos y bibliotecas grandes)
