@@ -94,12 +94,6 @@ function createLibraryIndexService(options = {}) {
         if (!metaIngestModule) metaIngestModule = require('./local_meta_ingest.js');
         return metaIngestModule;
     }
-    function ingestFileTags(filePath, tags, opts) {
-        return getMetaIngest().ingestFileTags(filePath, tags, opts);
-    }
-    function hasUsefulTagData(tags) {
-        return getMetaIngest().hasUsefulTagData(tags);
-    }
 
     const selectTrack = db.prepare('SELECT * FROM tracks WHERE file_path = ?');
     const selectRoot = db.prepare('SELECT * FROM library_index_roots WHERE root_path = ?');
@@ -288,7 +282,10 @@ function createLibraryIndexService(options = {}) {
             fileTypes: getFileTypes(),
             explicitTypes: getExplicitTypes(),
             fileTypeOptions: getFileTypeOptions(),
-            indexByPath
+            indexByPath,
+            // Ingestas de metadatos pendientes del lote en curso: se vacían
+            // dentro de la transacción de cada lote (ver syncRoot).
+            pendingIngest: []
         };
     }
 
@@ -318,16 +315,28 @@ function createLibraryIndexService(options = {}) {
             // Ingesta completa: indexar guarda en `tracks` los MISMOS metadatos
             // que "Centro de Procesamiento > Metadatos" (título/artista/feats/
             // remix/álbum/año/género + enlaces de artista, semántica "fill").
-            // Tras indexar, al archivo solo le falta el análisis de audio
-            // (inicio/mezcla/fin) para pasar de "pendiente" a "tratado".
-            if (!track && ingestTags && hasUsefulTagData(tags)) {
-                const ingested = ingestFileTags(filePath, tags, {
+            // El PARSEO ocurre aquí (fase de lectura, sin lock) y sus valores
+            // alimentan también la fila del índice; las ESCRITURAS se difieren
+            // a la transacción del lote (escribir por archivo con autocommit
+            // devolvía la indexación a los minutos).
+            if (!track && ingestTags && getMetaIngest().hasUsefulTagData(tags)) {
+                const parsed = getMetaIngest().parseTagsMeta(tags);
+                ctx.pendingIngest.push({
+                    filePath,
+                    parsed,
                     fileSize: stat.size,
                     fileMtimeMs: stat.mtimeMs
                 });
-                if (ingested) track = ingested;
+                meta = {
+                    title: parsed.title || path.basename(filePath, path.extname(filePath)),
+                    artist: parsed.artist,
+                    album: parsed.album,
+                    year: parsed.year,
+                    genre: parsed.genre
+                };
+            } else {
+                meta = parseTitleAndArtistFromFile(filePath, tags);
             }
-            meta = parseTitleAndArtistFromFile(filePath, tags);
         }
 
         const resolvedType = root.type_id
@@ -380,7 +389,7 @@ function createLibraryIndexService(options = {}) {
         // los upserts (milisegundos por lote).
         const CHUNK_SIZE = 500;
         const PROGRESS_EVERY = 50;
-        const runChunk = db.transaction((payloads) => {
+        const runChunk = db.transaction((payloads, ingests) => {
             for (const payload of payloads) {
                 try {
                     upsertTrack.run(payload);
@@ -388,6 +397,16 @@ function createLibraryIndexService(options = {}) {
                 } catch (err) {
                     failed++;
                 }
+            }
+            // Ingesta de metadatos del lote DENTRO de la misma transacción:
+            // un solo commit por lote en vez de ~8 autocommits por archivo.
+            for (const item of ingests) {
+                try {
+                    getMetaIngest().ingestParsedTags(item.filePath, item.parsed, {
+                        fileSize: item.fileSize,
+                        fileMtimeMs: item.fileMtimeMs
+                    });
+                } catch (err) {}
             }
         });
         for (let i = 0; i < files.length; i += CHUNK_SIZE) {
@@ -402,7 +421,9 @@ function createLibraryIndexService(options = {}) {
                 const processed = i + j + 1;
                 if (processed % PROGRESS_EVERY === 0) report(processed);
             }
-            runChunk(payloads);
+            const ingests = ctx.pendingIngest;
+            ctx.pendingIngest = [];
+            runChunk(payloads, ingests);
             report(Math.min(i + CHUNK_SIZE, total));
         }
         db.transaction(() => {

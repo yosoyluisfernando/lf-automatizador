@@ -68,35 +68,59 @@ function hasUsefulTagData(tags = {}) {
         || String(tags.genre || '').trim());
 }
 
-// Ingresa los tags de un archivo a `tracks` y sincroniza artistas.
-// Devuelve la fila resultante (con los datos curados que hayan prevalecido).
-function ingestFileTags(filePath, tags = {}, options = {}) {
-    if (!filePath) return null;
+// Parseo PURO de tags (sin tocar la base de datos). Separado de la escritura
+// para que el indexador pueda: (1) usar estos valores en la fila del índice y
+// (2) diferir las escrituras al interior de la transacción de cada lote.
+// Escribir por archivo con autocommit (≈8 sentencias × miles de archivos =
+// cientos de miles de commits) devolvía la indexación a los minutos.
+function parseTagsMeta(tags = {}) {
     const parsed = parseTitleAndArtist(tags.artist || '', tags.title || '');
-    const title = parsed.title || String(tags.title || '').trim();
-    const artist = parsed.artist || String(tags.artist || '').trim();
-    const featsJson = parsed.feats.length > 0 ? JSON.stringify(parsed.feats) : null;
+    return {
+        title: parsed.title || String(tags.title || '').trim(),
+        artist: parsed.artist || String(tags.artist || '').trim(),
+        featsJson: parsed.feats.length > 0 ? JSON.stringify(parsed.feats) : null,
+        isRemix: parsed.isRemix === true,
+        album: String(tags.album || '').trim(),
+        year: String(tags.year || '').trim(),
+        genre: genreFileTagToLibraryLabel(tags.genre)
+    };
+}
+
+// Escritura de un parseo ya hecho. SIN transacción propia: el llamador decide
+// (el indexador la envuelve en la transacción del lote; el worker de metadatos
+// la usa por archivo, como siempre hizo el Centro de Procesamiento).
+function ingestParsedTags(filePath, parsed, options = {}) {
+    if (!filePath || !parsed) return null;
     const stmt = options.forceOverwrite === true ? upsertLocalMetaForceStmt : upsertLocalMetaFillStmt;
     stmt.run(
         filePath,
-        title,
-        artist,
-        featsJson,
+        parsed.title,
+        parsed.artist,
+        parsed.featsJson,
         parsed.isRemix ? 1 : 0,
-        String(tags.album || '').trim(),
-        String(tags.year || '').trim(),
-        genreFileTagToLibraryLabel(tags.genre),
+        parsed.album,
+        parsed.year,
+        parsed.genre,
         Number.isFinite(Number(options.fileSize)) ? Number(options.fileSize) : null,
         Number.isFinite(Number(options.fileMtimeMs)) ? Math.round(Number(options.fileMtimeMs)) : null
     );
     const updatedRow = selectTrackByPathStmt.get(filePath);
     try {
-        syncTrackArtistLinks(filePath, updatedRow?.custom_artist || artist, updatedRow?.feat || featsJson || []);
+        syncTrackArtistLinks(filePath, updatedRow?.custom_artist || parsed.artist, updatedRow?.feat || parsed.featsJson || []);
     } catch (err) {}
     return updatedRow;
 }
 
+// Ingesta completa de un archivo (parseo + escritura). La usa el worker de
+// metadatos del Centro de Procesamiento.
+function ingestFileTags(filePath, tags = {}, options = {}) {
+    if (!filePath) return null;
+    return ingestParsedTags(filePath, parseTagsMeta(tags), options);
+}
+
 module.exports = {
+    parseTagsMeta,
+    ingestParsedTags,
     ingestFileTags,
     hasUsefulTagData,
     genreFileTagToLibraryLabel

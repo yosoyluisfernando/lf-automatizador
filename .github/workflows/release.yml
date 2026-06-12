@@ -66,6 +66,9 @@ jobs:
 
       - name: Cache Rust Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        # La caché es una optimización: si el servicio de caché falla, el build
+        # debe continuar compilando desde cero, nunca caerse.
+        continue-on-error: true
         with:
           workspaces: audio-engine-rust
 
