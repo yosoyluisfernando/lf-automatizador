@@ -368,6 +368,7 @@ function createLibraryIndexService(options = {}) {
         if (!root) return { success: false, error: 'Raiz no registrada.' };
         if (root.enabled !== 1) return { success: false, error: 'Raiz deshabilitada.' };
 
+        const startedAt = Date.now();
         const now = new Date().toISOString();
         const files = collectAudioFiles(root.root_path, root.recursive === 1);
         const ctx = buildSyncContext(root);
@@ -431,7 +432,9 @@ function createLibraryIndexService(options = {}) {
             updateRootScan.run(now, now, root.root_path);
         })();
 
-        return { success: true, rootPath: root.root_path, scanned: files.length, indexed, failed };
+        // elapsedMs: observabilidad para diagnóstico remoto — el operador puede
+        // leer cuánto tardó realmente la sincronización en CUALQUIER máquina.
+        return { success: true, rootPath: root.root_path, scanned: files.length, indexed, failed, elapsedMs: Date.now() - startedAt };
     }
 
     function syncAllRoots(onProgress = null) {
@@ -445,7 +448,8 @@ function createLibraryIndexService(options = {}) {
             roots: results,
             scanned: results.reduce((sum, item) => sum + (item.scanned || 0), 0),
             indexed: results.reduce((sum, item) => sum + (item.indexed || 0), 0),
-            failed: results.reduce((sum, item) => sum + (item.failed || 0), 0)
+            failed: results.reduce((sum, item) => sum + (item.failed || 0), 0),
+            elapsedMs: results.reduce((sum, item) => sum + (item.elapsedMs || 0), 0)
         };
     }
 

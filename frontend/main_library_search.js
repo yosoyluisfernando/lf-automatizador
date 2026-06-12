@@ -316,7 +316,8 @@ function createMainLibrarySearchController(options = {}) {
             await refreshRoots();
             await refreshActiveSearch();
             if (result?.success) {
-                const message = `Actualizacion lista. Escaneados: ${result.scanned || 0}, indexados: ${result.indexed || 0}.`;
+                const seconds = result.elapsedMs ? ` en ${(result.elapsedMs / 1000).toFixed(1)} s` : '';
+                const message = `Actualizacion lista${seconds}. Escaneados: ${result.scanned || 0}, indexados: ${result.indexed || 0}.`;
                 setModalMessage(message, 'ok');
                 setStatus(message, 'ok');
                 syncInProgress = false;
