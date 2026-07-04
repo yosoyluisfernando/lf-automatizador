@@ -1,3 +1,5 @@
+mod protocol;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, Write};
@@ -7,6 +9,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use protocol::IncomingCommand;
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::Device;

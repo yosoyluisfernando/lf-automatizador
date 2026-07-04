@@ -47,3 +47,8 @@ rtrb = "0.3"
 # encoder para mandarlos al lado JS por el canal stdout JSON. ~30% overhead
 # pero evita necesidad de pipe binario adicional y mantiene un único canal.
 base64 = "0.22"
+# Serialización tipada para el protocolo JSON stdin/stdout. Reemplaza el parser
+# manual (json.rs) con derive macros — cada comando/evento es un struct con
+# tipos garantizados por el compilador. Requisito de la migración rust-core.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
