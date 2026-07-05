@@ -1,8 +1,5 @@
 const { ipcRenderer } = require('electron');
 const { redactSensitiveText } = require('../backend/utils/log_security');
-const { getConfigDir } = require('../backend/utils/app_paths');
-const fs = require('fs');
-const path = require('path');
 const i18n = require('./i18n');
 
 // Versión real (desde package.json) en la cabecera.
@@ -17,7 +14,7 @@ try {
 } catch (err) { /* fallback: texto estático del HTML */ }
 
 // ── Configuración: entrada compartida + lista de servidores ──────────────────
-let globalCfg = { source: 'master', mic: '', tapPoint: 'postFx' };
+let globalCfg = { source: 'master', mic: '', sourceId: '', tapPoint: 'postFx' };
 let servers = [];     // ver makeServer()
 let nextServerId = 1;
 let prefsLoadWarning = '';
@@ -64,7 +61,8 @@ function loadPrefs() {
     const raw = result.prefs || {};
     prefsLoadWarning = result.warning || '';
     globalCfg.source = raw.source === 'mic' ? 'mic' : 'master';
-    globalCfg.mic = raw.mic || raw.micId || '';
+    globalCfg.mic = raw.sourceId || raw.mic || raw.micId || '';
+    globalCfg.sourceId = globalCfg.mic;
     globalCfg.tapPoint = raw.tapPoint === 'preFx' ? 'preFx' : 'postFx';
 
     if (Array.isArray(raw.servers)) {
@@ -88,6 +86,7 @@ function savePrefs() {
     const data = {
         source: globalCfg.source,
         mic: globalCfg.mic,
+        sourceId: globalCfg.sourceId || globalCfg.mic,
         tapPoint: globalCfg.tapPoint,
         servers: servers.map(s => ({
             id: s.id, name: s.name, type: s.type, ip: s.ip, port: s.port, adminPort: s.adminPort,
@@ -116,7 +115,9 @@ const summaryEl = document.getElementById('enc-summary');
 
 let micDevicesLoaded = false;
 let lastInputMeterAt = 0;
+let inputPreviewDeviceId = '';
 const SMOOTH_WINDOW = 10;
+const ENCODER_INPUT_PREVIEW_ID = 'encoder:preview';
 
 // ── Utilidades ───────────────────────────────────────────────────────────────
 function formatKbps(value) {
@@ -204,6 +205,36 @@ function mergeRustInputMeters(levels = []) {
     }, { peak: 0, db: -120 });
 }
 function getEncoderRustInputMeter(status = {}) {
+    const preview = (Array.isArray(status.inputMeters) ? status.inputMeters : [])
+        .find(meter => meter && meter.id === ENCODER_INPUT_PREVIEW_ID);
+    if ((status.encoder?.source || globalCfg.source) === 'mic' && preview) {
+        const updatedAt = Number(preview.updatedAt) || 0;
+        const fresh = updatedAt > 0 && Date.now() - updatedAt < 2500;
+        if (fresh) {
+            const peakDb = Number(preview.peakDb);
+            const rmsDb = Number(preview.rmsDb);
+            return {
+                peak: Number.isFinite(peakDb) ? Math.pow(10, peakDb / 20) : 0,
+                db: Number.isFinite(peakDb) ? peakDb : -120,
+                rmsDb: Number.isFinite(rmsDb) ? rmsDb : -120,
+                source: 'rustInputPreview'
+            };
+        }
+    }
+    if ((status.encoder?.source || globalCfg.source) === 'mic') {
+        const updatedAt = Number(status.encoder?.inputMeterUpdatedAt) || 0;
+        const fresh = updatedAt > 0 && Date.now() - updatedAt < 2500;
+        if (fresh) {
+            const peakDb = Number(status.encoder.inputPeakDb);
+            const rmsDb = Number(status.encoder.inputRmsDb);
+            return {
+                peak: Number.isFinite(peakDb) ? Math.pow(10, peakDb / 20) : 0,
+                db: Number.isFinite(peakDb) ? peakDb : -120,
+                rmsDb: Number.isFinite(rmsDb) ? rmsDb : -120,
+                source: 'rustInputRouter'
+            };
+        }
+    }
     const meters = Array.isArray(status.meters) ? status.meters : [];
     if (!meters.length) return null;
     const byBus = new Map();
@@ -220,6 +251,51 @@ function getEncoderRustInputMeter(status = {}) {
         ...(byBus.get('jingle') || []), ...(byBus.get('cartwall') || [])
     ]);
 }
+
+async function startEncoderInputPreview() {
+    if (globalCfg.source !== 'mic') {
+        await stopEncoderInputPreview();
+        return;
+    }
+    const deviceId = globalCfg.sourceId || globalCfg.mic || 'default';
+    if (inputPreviewDeviceId === deviceId) return;
+    await stopEncoderInputPreview();
+    try {
+        await ipcRenderer.invoke('audio-engine-rust-command', {
+            module: 'input',
+            cmd: 'meterStart',
+            requestId: `encoder-input-preview-${Date.now()}`,
+            consumer: ENCODER_INPUT_PREVIEW_ID,
+            sourceId: 'encoder.input.preview',
+            deviceId,
+            sampleRate: 44100,
+            channelMap: [0],
+            gain: 1.0,
+            _timeoutMs: 5000
+        });
+        inputPreviewDeviceId = deviceId;
+    } catch (err) {
+        inputPreviewDeviceId = '';
+        encLog(`Preview entrada: ${err?.message || err}`, 'warn');
+    }
+}
+
+async function stopEncoderInputPreview() {
+    if (!inputPreviewDeviceId) return;
+    const previous = inputPreviewDeviceId;
+    inputPreviewDeviceId = '';
+    try {
+        await ipcRenderer.invoke('audio-engine-rust-command', {
+            module: 'input',
+            cmd: 'meterStop',
+            requestId: `encoder-input-preview-stop-${Date.now()}`,
+            consumer: ENCODER_INPUT_PREVIEW_ID,
+            _timeoutMs: 5000
+        });
+    } catch (err) {
+        encLog(`Preview entrada (${previous}) no cerro limpio: ${err?.message || err}`, 'warn');
+    }
+}
 function updateInputMeterFromRustStatus(status = {}) {
     const now = Date.now();
     if (now - lastInputMeterAt < 20) return;
@@ -227,11 +303,26 @@ function updateInputMeterFromRustStatus(status = {}) {
     if (!meter) return;
     updateInputMeter({
         source: 'rustAudioEngine',
-        captureProvider: status.encoder?.captureProvider || status.encoder?.owner || 'rustAudioEngine',
-        peakDb: meter.db, rmsDb: meter.db,
+        captureProvider: meter.source || status.encoder?.captureProvider || status.encoder?.owner || 'rustAudioEngine',
+        peakDb: meter.db, rmsDb: Number.isFinite(Number(meter.rmsDb)) ? Number(meter.rmsDb) : meter.db,
         hasSignal: meter.peak > 0.0008,
         silentMs: meter.peak > 0.0008 ? 0 : undefined,
         updatedAt: now
+    });
+}
+
+function updateRustEncoderServersFromStatus(status = {}) {
+    const list = Array.isArray(status.encoderServers) ? status.encoderServers : [];
+    list.forEach(item => {
+        const s = getServer(item.serverId);
+        if (!s) return;
+        if (item.status && item.status !== s.status) setServerStatus(item.serverId, item.status);
+        updateServerThroughput({
+            serverId: item.serverId,
+            bitrateKbps: item.bitrateKbps,
+            speed: item.speed,
+            ffmpegTime: item.ffmpegTime
+        });
     });
 }
 
@@ -477,6 +568,7 @@ function buildServerConfig(s) {
         password: s.pass, pass: s.pass,
         mount: s.mount,
         source: globalCfg.source,
+        sourceId: globalCfg.sourceId || globalCfg.mic,
         micId: globalCfg.mic, mic: globalCfg.mic,
         codec: s.codec, bitrate: s.bitrate,
         legacy: s.legacy === true,
@@ -620,14 +712,23 @@ function removeServer(id) {
 async function loadMicrophones() {
     if (micDevicesLoaded) return;
     try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const mics = devices.filter(d => d.kind === 'audioinput');
+        const result = await ipcRenderer.invoke('audio-engine-rust-command', {
+            module: 'input',
+            cmd: 'inputDevices',
+            requestId: `encoder-input-devices-${Date.now()}`,
+            _timeoutMs: 5000
+        });
+        const message = result?.message || {};
+        const mics = Array.isArray(message.inputs) ? message.inputs : [];
         micSel.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = 'default';
+        defaultOpt.text = message.defaultInput ? `Default · ${message.defaultInput}` : 'Default';
+        micSel.appendChild(defaultOpt);
         mics.forEach(m => {
             const opt = document.createElement('option');
-            opt.value = m.deviceId;
-            opt.text = m.label || `Micrófono ${m.deviceId.substring(0, 5)}`;
+            opt.value = m.id || m.indexId || 'default';
+            opt.text = m.name || m.id || 'Entrada Rust';
             micSel.appendChild(opt);
         });
         if (globalCfg.mic && Array.from(micSel.options).some(o => o.value === globalCfg.mic)) micSel.value = globalCfg.mic;
@@ -664,10 +765,12 @@ sourceSel.addEventListener('change', async () => {
     globalCfg.source = sourceSel.value === 'mic' ? 'mic' : 'master';
     micRow.style.display = globalCfg.source === 'mic' ? 'flex' : 'none';
     if (globalCfg.source === 'mic') await loadMicrophones();
+    await startEncoderInputPreview();
     savePrefs();
 });
 micRow.style.display = globalCfg.source === 'mic' ? 'flex' : 'none';
 if (globalCfg.source === 'mic') loadMicrophones();
+if (globalCfg.source === 'mic') startEncoderInputPreview();
 
 micSel.addEventListener('change', () => {
     if (servers.some(s => s.status !== 'disconnected')) {
@@ -676,7 +779,18 @@ micSel.addEventListener('change', () => {
         return;
     }
     globalCfg.mic = micSel.value;
+    globalCfg.sourceId = micSel.value;
     savePrefs();
+    startEncoderInputPreview();
+});
+window.addEventListener('beforeunload', () => {
+    if (!inputPreviewDeviceId) return;
+    ipcRenderer.invoke('audio-engine-rust-command', {
+        module: 'input',
+        cmd: 'meterStop',
+        requestId: `encoder-input-preview-unload-${Date.now()}`,
+        consumer: ENCODER_INPUT_PREVIEW_ID
+    }).catch(() => {});
 });
 
 // Tap point: persistir + hot-swap al motor Rust (sin reiniciar el encoder).
@@ -732,18 +846,11 @@ ipcRenderer.on('encoder-capture-health', (e, report) => {
 ipcRenderer.on('audio-engine-rust-event', (e, message) => {
     if (!message || message.type !== 'status') return;
     updateInputMeterFromRustStatus(message);
+    updateRustEncoderServersFromStatus(message);
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-const configDir = getConfigDir(path.join(__dirname, '..', 'config'), __dirname);
-const generalPrefsPath = path.join(configDir, 'general_settings.json');
-let sysLang = 'es';
-try {
-    if (fs.existsSync(generalPrefsPath)) {
-        const parsed = JSON.parse(fs.readFileSync(generalPrefsPath, 'utf-8'));
-        if (parsed.language) sysLang = parsed.language;
-    }
-} catch(e) { console.warn('Error reading lang:', e); }
+const sysLang = ipcRenderer.sendSync('get-app-language') || 'es';
 
 try {
     i18n.init(sysLang);

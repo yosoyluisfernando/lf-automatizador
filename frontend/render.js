@@ -10487,6 +10487,19 @@ function applyDucking() {
     }
     applyRustPlaylistDucking();
 }
+
+function applyProgramDuckingWithParams(duckVol, fadeSecs) {
+    const safeVol = Math.max(0, Math.min(100, Number(duckVol) || 20));
+    const safeFadeSecs = Math.max(0.05, Number(fadeSecs) || 0.3);
+    activeDuckParams = { vol: safeVol, fadeSecs: safeFadeSecs };
+    if (!isRustExclusiveAudioMode()) {
+        duckingNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        duckingNode.gain.setValueAtTime(duckingNode.gain.value, audioCtx.currentTime);
+        duckingNode.gain.linearRampToValueAtTime(safeVol / 100, audioCtx.currentTime + safeFadeSecs);
+    }
+    applyRustPlaylistDucking();
+}
+
 function removeDucking() {
     const fadeSecs = Math.max(0.05, Number(activeDuckParams?.fadeSecs ?? parseFloat(generalPrefs.duckingFade)) || 0.3);
     if (!isRustExclusiveAudioMode()) {
@@ -13814,49 +13827,23 @@ ipcRenderer.on('start-audio-capture', async (e, config) => {
             ipcRenderer.send('stop-encoder');
             return;
         }
-        const captureStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                deviceId: config.micId ? { exact: config.micId } : undefined,
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false
-            }
-        });
-        if (captureGeneration !== liveEncoderCaptureGeneration) {
-            captureStream.getTracks().forEach(track => track.stop());
-            return;
-        }
-        liveMicCaptureStream = captureStream;
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
-        liveMediaRecorder = new MediaRecorder(captureStream, { mimeType });
-        liveMediaRecorder.ondataavailable = async (event) => {
-            if (event.data.size <= 0 || captureGeneration !== liveEncoderCaptureGeneration) return;
-            const chunk = Buffer.from(await event.data.arrayBuffer());
-            if (captureGeneration !== liveEncoderCaptureGeneration) return;
-            ipcRenderer.send('audio-chunk', { generation: backendCaptureGeneration, chunk });
-        };
-        liveMediaRecorder.onerror = (event) => {
-            if (captureGeneration !== liveEncoderCaptureGeneration) return;
-            const msg = event?.error?.message || 'Error desconocido de MediaRecorder';
-            logSystem(`[ERROR] Captura encoder: ${msg}`);
-            ipcRenderer.send('stop-encoder');
-        };
         liveEncoderSourceState = {
-            active: true,
-            source: 'mic',
-            owner: 'mediaInputRenderer',
-            requestedOwner: 'mediaInputRenderer',
-            captureProvider: 'mediaInputRenderer',
-            encoderProvider: 'auto',
+            ...config,
+            active: false,
+            source: requestedSource,
+            owner: 'rustAudioEngine',
+            requestedOwner: 'rustAudioEngine',
+            captureProvider: 'rustAudioEngine',
+            encoderProvider: config.encoderProvider || 'auto',
             rustPcmReady: false,
-            fallbackReason: '',
-            captureFormat: 'webm-opus',
+            fallbackReason: 'renderer-mic-capture-removed',
+            captureFormat: 'pcm_s16le',
             sampleRate: 0,
-            transport: 'ffmpeg'
+            transport: 'rust-input-router'
         };
-        liveMediaRecorder.start(250);
-        if (!isPlaybackActuallyOnAir()) setIdleBroadcastMetadata();
-        logSystem("[ENCODER] Iniciando transmision desde microfono...");
+        setEncoderIncidentStatus('error');
+        logSystem('[ENCODER] Captura renderer retirada: la entrada mic/external debe salir por InputRouter Rust.');
+        ipcRenderer.send('stop-encoder');
     } catch (err) {
         if (captureGeneration && captureGeneration !== liveEncoderCaptureGeneration) return;
         setEncoderIncidentStatus('error');
@@ -15794,6 +15781,7 @@ ipcRenderer.on('audio-engine-rust-event', (e, message) => {
         try { releaseFinishedRustPlaylistDecks(); } catch (err) {}
         try { reconcileRustCartwallRuntimeStatus(message); } catch (err) {}
         try { reconcileRustOverlayRuntimeStatus(message); } catch (err) {}
+        try { updateTalkInputPreviewFromRustStatus(message); } catch (err) {}
         try { refreshAirIncidentStatus(); } catch (err) {}
         return;
     }
@@ -16252,8 +16240,7 @@ function _buildShortcutMap(saved) {
 
     shortcutManager.registerKeyupHandlers({
         'app.talk': () => {
-            const mode = generalPrefs.talkMode || 'hold';
-            if (mode === 'hold') deactivateTalk();
+            handleTalkPressEnd();
         }
     });
 
@@ -16292,11 +16279,7 @@ function _buildShortcutMap(saved) {
         'app.open_calendar':        () => ipcRenderer.send('open-calendar'),
         'app.open_rotation':        () => openRotationModal(),
         'app.toggle_menu_bar':      () => ipcRenderer.send('toggle-menu-bar'),
-        'app.talk':                 () => {
-            const mode = generalPrefs.talkMode || 'hold';
-            if (mode === 'hold') activateTalk();
-            else toggleTalk();
-        },
+        'app.talk':                 () => handleTalkPressStart(),
         'insert.time_locution':     () => addTimeLocutionToPlaylist(),
         'insert.temperature':       () => addClimateLocutionToPlaylist('temperature'),
         'insert.humidity':          () => addClimateLocutionToPlaylist('humidity'),
@@ -16348,72 +16331,153 @@ ipcRenderer.on('dispatch-configured-shortcut', (e, actionId) => {
 
 // ====== BOTON LOCUTOR / HABLAR (PTT) ======
 let isTalkActive = false;
-let talkAnimationRaf = null;
-let originalMasterVol = null;
+let talkRustGeneration = 0;
+let talkProgramDuckActive = false;
+let talkAutoDuckingArmed = false;
+let talkConfigPreviewActive = false;
+let talkPgmAnimationRaf = null;
+let talkPgmOriginalVol = null;
+let talkPgmRestoreToken = 0;
 
-function tweenMasterVolume(startVol, targetVol, durationMs) {
-    return new Promise(resolve => {
-        if (talkAnimationRaf) cancelAnimationFrame(talkAnimationRaf);
-        const startTime = performance.now();
-        const slider = document.getElementById('master-volume');
-        
-        function step(time) {
-            const elapsed = time - startTime;
-            const progress = Math.min(elapsed / durationMs, 1.0);
-            
-            const val = startVol + (targetVol - startVol) * progress;
-            
-            if (slider) {
-                slider.value = val;
-                slider.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            
-            if (progress < 1.0) {
-                talkAnimationRaf = requestAnimationFrame(step);
-            } else {
-                talkAnimationRaf = null;
-                resolve();
-            }
+function talkDuckingVolume() {
+    return Math.max(0, Math.min(100, parseInt(generalPrefs.talkTargetVol, 10) || 20));
+}
+
+function talkDuckingFadeSecs() {
+    return Math.max(0.05, (parseInt(generalPrefs.talkFadeMs, 10) || 500) / 1000);
+}
+
+function applyTalkProgramDucking() {
+    if (talkProgramDuckActive) return;
+    talkProgramDuckActive = true;
+    const slider = document.getElementById('master-volume');
+    if (!slider) {
+        applyProgramDuckingWithParams(talkDuckingVolume(), talkDuckingFadeSecs());
+        return;
+    }
+    if (talkPgmOriginalVol === null) {
+        talkPgmOriginalVol = parseFloat(slider.value) || 0;
+    }
+    tweenTalkPgmVolume(parseFloat(slider.value) || 0, talkDuckingVolume(), talkDuckingFadeSecs() * 1000);
+}
+
+function removeTalkProgramDucking() {
+    if (!talkProgramDuckActive) return;
+    talkProgramDuckActive = false;
+    const slider = document.getElementById('master-volume');
+    if (!slider || talkPgmOriginalVol === null) {
+        removeDucking();
+        talkPgmOriginalVol = null;
+        return;
+    }
+    const restoreVol = talkPgmOriginalVol;
+    const restoreToken = ++talkPgmRestoreToken;
+    tweenTalkPgmVolume(parseFloat(slider.value) || 0, restoreVol, talkDuckingFadeSecs() * 1000, () => {
+        if (!talkProgramDuckActive && restoreToken === talkPgmRestoreToken) {
+            talkPgmOriginalVol = null;
         }
-        talkAnimationRaf = requestAnimationFrame(step);
     });
+}
+
+function tweenTalkPgmVolume(startVol, targetVol, durationMs, onComplete) {
+    if (talkPgmAnimationRaf) cancelAnimationFrame(talkPgmAnimationRaf);
+    const slider = document.getElementById('master-volume');
+    if (!slider) return;
+    const safeStart = Math.max(0, Math.min(100, Number(startVol) || 0));
+    const safeTarget = Math.max(0, Math.min(100, Number(targetVol) || 0));
+    const safeDuration = Math.max(0, Number(durationMs) || 0);
+    const startTime = performance.now();
+    const applyValue = (value) => {
+        slider.value = String(value);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    if (safeDuration <= 0) {
+        applyValue(safeTarget);
+        talkPgmAnimationRaf = null;
+        if (typeof onComplete === 'function') onComplete();
+        return;
+    }
+    function step(time) {
+        const progress = Math.min((time - startTime) / safeDuration, 1);
+        applyValue(safeStart + (safeTarget - safeStart) * progress);
+        if (progress < 1) {
+            talkPgmAnimationRaf = requestAnimationFrame(step);
+        } else {
+            talkPgmAnimationRaf = null;
+            if (typeof onComplete === 'function') onComplete();
+        }
+    }
+    talkPgmAnimationRaf = requestAnimationFrame(step);
+}
+
+function updateTalkButtonVisual() {
+    const btnTalk = document.getElementById('btn-talk');
+    if (!btnTalk) return;
+    if (isTalkActive) {
+        btnTalk.style.background = '#e74c3c';
+        btnTalk.style.borderColor = '#c0392b';
+    } else if (talkAutoDuckingArmed) {
+        btnTalk.style.background = '#c27c0e';
+        btnTalk.style.borderColor = '#a56509';
+    } else {
+        btnTalk.style.background = '';
+        btnTalk.style.borderColor = '';
+    }
+}
+
+async function sendRustTalkCommand(cmd, generation) {
+    try {
+        const payload = {
+            module: 'input',
+            cmd,
+            requestId: `ui-ptt-${cmd}-${Date.now()}`,
+            deviceId: generalPrefs.autoDuckingDevice || 'default',
+            sourceId: 'ui-ptt',
+            sampleRate: 44100,
+            channelMap: [0],
+            gain: 1.0,
+            enable: generalPrefs.talkRouteToMaster !== false,
+            target: generalPrefs.talkRouteToMaster === false ? 'preview' : 'master',
+            ringBufferSeconds: 2
+        };
+        const result = await ipcRenderer.invoke('audio-engine-rust-command', payload);
+        if (generation !== talkRustGeneration && cmd === 'pttStart') {
+            await ipcRenderer.invoke('audio-engine-rust-command', {
+                module: 'input',
+                cmd: 'pttStop',
+                requestId: `ui-ptt-stale-stop-${Date.now()}`
+            });
+            return;
+        }
+        if (result && result.ok === false) {
+            throw new Error(result.message || `${cmd} fallo en Rust`);
+        }
+    } catch (err) {
+        logSystem(`[PTT] ${cmd} Rust fallo: ${err?.message || err}`);
+        if (cmd === 'pttStart') {
+            isTalkActive = false;
+            removeTalkProgramDucking();
+            updateTalkButtonVisual();
+        }
+    }
 }
 
 function activateTalk() {
     if (isTalkActive) return;
     isTalkActive = true;
-    const btnTalk = document.getElementById('btn-talk');
-    if (btnTalk) {
-        btnTalk.style.background = '#e74c3c';
-        btnTalk.style.borderColor = '#c0392b';
-    }
-    const slider = document.getElementById('master-volume');
-    if (slider) {
-        if (originalMasterVol === null) {
-            originalMasterVol = parseFloat(slider.value);
-        }
-        const targetVol = parseFloat(generalPrefs.talkTargetVol ?? 20);
-        const duration = parseInt(generalPrefs.talkFadeMs || 500);
-        tweenMasterVolume(parseFloat(slider.value), targetVol, duration);
-    }
+    const generation = ++talkRustGeneration;
+    sendRustTalkCommand('pttStart', generation);
+    applyTalkProgramDucking();
+    updateTalkButtonVisual();
 }
 
 function deactivateTalk() {
     if (!isTalkActive) return;
     isTalkActive = false;
-    const btnTalk = document.getElementById('btn-talk');
-    if (btnTalk) {
-        btnTalk.style.background = '';
-        btnTalk.style.borderColor = '';
-    }
-    const slider = document.getElementById('master-volume');
-    if (slider && originalMasterVol !== null) {
-        const currentVol = parseFloat(slider.value) || 0;
-        const duration = parseInt(generalPrefs.talkFadeMs || 500);
-        tweenMasterVolume(currentVol, originalMasterVol, duration).then(() => {
-            originalMasterVol = null;
-        });
-    }
+    const generation = ++talkRustGeneration;
+    sendRustTalkCommand('pttStop', generation);
+    removeTalkProgramDucking();
+    updateTalkButtonVisual();
 }
 
 function toggleTalk() {
@@ -16421,11 +16485,37 @@ function toggleTalk() {
     else activateTalk();
 }
 
+function shouldUseTalkAutoDucking() {
+    return generalPrefs.autoDuckingEnable === true;
+}
+
+function handleTalkPressStart() {
+    const mode = generalPrefs.talkMode || 'hold';
+    if (shouldUseTalkAutoDucking()) {
+        if (mode === 'hold') armTalkAutoDucking();
+        else toggleTalkAutoDucking();
+        return;
+    }
+    if (mode === 'hold') activateTalk();
+    else toggleTalk();
+}
+
+function handleTalkPressEnd() {
+    const mode = generalPrefs.talkMode || 'hold';
+    if (mode !== 'hold') return;
+    if (shouldUseTalkAutoDucking()) {
+        disarmTalkAutoDucking();
+    } else {
+        deactivateTalk();
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Config defaults
     if (generalPrefs.talkTargetVol === undefined) generalPrefs.talkTargetVol = 20;
     if (generalPrefs.talkFadeMs === undefined) generalPrefs.talkFadeMs = 500;
     if (generalPrefs.talkMode === undefined) generalPrefs.talkMode = 'hold';
+    if (generalPrefs.talkRouteToMaster === undefined) generalPrefs.talkRouteToMaster = true;
     if (generalPrefs.autoDuckingEnable === undefined) generalPrefs.autoDuckingEnable = false;
     if (generalPrefs.autoDuckingThreshold === undefined) generalPrefs.autoDuckingThreshold = -30;
     if (generalPrefs.autoDuckingAttack === undefined) generalPrefs.autoDuckingAttack = 200;
@@ -16440,6 +16530,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const inputVolLabel = document.getElementById('talk-target-vol-label');
     const inputMs = document.getElementById('talk-fade-ms');
     const selMode = document.getElementById('talk-mode-select');
+    const routeMasterEnable = document.getElementById('talk-route-master-enable');
 
     const duckEnable = document.getElementById('talk-auto-ducking-enable');
     const duckThreshold = document.getElementById('talk-auto-ducking-threshold');
@@ -16452,21 +16543,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnTalk) {
         btnTalk.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return; // Only left click
-            const mode = generalPrefs.talkMode || 'hold';
-            if (mode === 'hold') activateTalk();
-            else toggleTalk();
+            handleTalkPressStart();
         });
         ['mouseup', 'mouseleave', 'touchend'].forEach(evt => {
-            btnTalk.addEventListener(evt, () => {
-                const mode = generalPrefs.talkMode || 'hold';
-                if (mode === 'hold') deactivateTalk();
-            });
+            btnTalk.addEventListener(evt, () => handleTalkPressEnd());
         });
         btnTalk.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            const mode = generalPrefs.talkMode || 'hold';
-            if (mode === 'hold') activateTalk();
-            else toggleTalk();
+            handleTalkPressStart();
         }, {passive: false});
 
         // Context Menu
@@ -16481,6 +16565,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (inputMs) inputMs.value = generalPrefs.talkFadeMs;
             if (selMode) selMode.value = generalPrefs.talkMode;
+            if (routeMasterEnable) routeMasterEnable.checked = generalPrefs.talkRouteToMaster !== false;
             
             if (duckEnable) duckEnable.checked = generalPrefs.autoDuckingEnable;
             if (duckThreshold) {
@@ -16499,18 +16584,20 @@ document.addEventListener('DOMContentLoaded', () => {
             if (configModal) configModal.style.display = 'flex';
             
             // Iniciar engine inmediatamente si está activado para poder probar el vúmetro
-            if (generalPrefs.autoDuckingEnable) {
-                startAutoDuckingEngine();
-            }
+            talkConfigPreviewActive = true;
+            startAutoDuckingEngine();
         });
     }
 
     if (duckEnable) {
         duckEnable.addEventListener('change', () => {
             if (duckEnable.checked) {
+                talkConfigPreviewActive = true;
                 startAutoDuckingEngine();
             } else {
-                stopAutoDuckingEngine();
+                talkConfigPreviewActive = false;
+                if (talkAutoDuckingArmed) disarmTalkAutoDucking();
+                else stopAutoDuckingEngine();
                 if (duckVuCover) duckVuCover.style.width = '100%';
             }
         });
@@ -16522,6 +16609,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Parar y reiniciar con el nuevo dispositivo para el preview
                 stopAutoDuckingEngine();
                 generalPrefs.autoDuckingDevice = duckDevice.value; // Temporal hasta guardar
+                talkConfigPreviewActive = true;
                 startAutoDuckingEngine();
             }
         });
@@ -16541,11 +16629,17 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (configModal) {
         configModal.addEventListener('click', (e) => {
-            if (e.target === configModal) configModal.style.display = 'none';
+            if (e.target === configModal) {
+                talkConfigPreviewActive = false;
+                if (!talkAutoDuckingArmed) stopAutoDuckingEngine();
+                configModal.style.display = 'none';
+            }
         });
     }
     if (btnCancel && configModal) {
         btnCancel.addEventListener('click', () => {
+            talkConfigPreviewActive = false;
+            if (!talkAutoDuckingArmed) stopAutoDuckingEngine();
             configModal.style.display = 'none';
         });
     }
@@ -16554,20 +16648,25 @@ document.addEventListener('DOMContentLoaded', () => {
             if (inputVol) generalPrefs.talkTargetVol = parseInt(inputVol.value);
             if (inputMs) generalPrefs.talkFadeMs = parseInt(inputMs.value) || 500;
             if (selMode) generalPrefs.talkMode = selMode.value;
+            if (routeMasterEnable) generalPrefs.talkRouteToMaster = routeMasterEnable.checked;
             
             if (duckEnable) generalPrefs.autoDuckingEnable = duckEnable.checked;
             if (duckThreshold) generalPrefs.autoDuckingThreshold = parseInt(duckThreshold.value) || -30;
             if (duckAttack) generalPrefs.autoDuckingAttack = parseInt(duckAttack.value) || 200;
             if (duckRelease) generalPrefs.autoDuckingRelease = parseInt(duckRelease.value) || 1000;
             if (duckDevice) generalPrefs.autoDuckingDevice = duckDevice.value;
+            if (!generalPrefs.autoDuckingEnable && talkAutoDuckingArmed) {
+                disarmTalkAutoDucking();
+            }
             
             if (typeof saveConfig === 'function' && typeof generalPrefsPath !== 'undefined') {
                 saveConfig(generalPrefsPath, generalPrefs);
             }
             
-            // Si estaba encendido y cambiamos de dispositivo, forzar reinicio
+            // Guardar no arma el auto-ducking; solo conserva preview si el boton ya lo tenia armado.
             stopAutoDuckingEngine();
-            if (generalPrefs.autoDuckingEnable) {
+            talkConfigPreviewActive = false;
+            if (talkAutoDuckingArmed) {
                 startAutoDuckingEngine();
             }
             
@@ -16585,36 +16684,16 @@ let autoDuckingVoiceActive = false;
 let autoDuckingTimeAbove = 0;
 let autoDuckingTimeBelow = 0;
 let autoDuckingLastCheck = 0;
+let autoDuckingInputDb = -120;
+let autoDuckingInputUpdatedAt = 0;
+const TALK_INPUT_PREVIEW_ID = 'ptt:preview';
 
 async function startAutoDuckingEngine() {
-    if (autoDuckingContext) return; // already running
     try {
-        const devId = generalPrefs.autoDuckingDevice || 'default';
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: { 
-                deviceId: devId !== 'default' ? { exact: devId } : undefined,
-                echoCancellation: false, 
-                noiseSuppression: false, 
-                autoGainControl: false 
-            } 
-        });
-        autoDuckingStream = stream;
-        autoDuckingContext = new (window.AudioContext || window.webkitAudioContext)();
-        autoDuckingAnalyser = autoDuckingContext.createAnalyser();
-        autoDuckingAnalyser.fftSize = 512;
-        const source = autoDuckingContext.createMediaStreamSource(stream);
-        source.connect(autoDuckingAnalyser);
-
-        autoDuckingVoiceActive = false;
-        autoDuckingTimeAbove = 0;
-        autoDuckingTimeBelow = 0;
-        autoDuckingLastCheck = performance.now();
-
-        autoDuckingLoop();
-        if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Motor de detección de voz iniciado.");
+        await startRustTalkInputPreview();
     } catch (err) {
-        if (typeof logSystem === 'function') logSystem(`[ERROR] No se pudo iniciar Auto-Ducking: ${err.message}`);
-        generalPrefs.autoDuckingEnable = false; 
+        if (typeof logSystem === 'function') logSystem(`[ERROR] No se pudo iniciar Auto-Ducking Rust: ${err.message}`);
+        generalPrefs.autoDuckingEnable = false;
     }
 }
 
@@ -16623,105 +16702,144 @@ function stopAutoDuckingEngine() {
         cancelAnimationFrame(autoDuckingRaf);
         autoDuckingRaf = null;
     }
-    if (autoDuckingStream) {
-        autoDuckingStream.getTracks().forEach(track => track.stop());
-        autoDuckingStream = null;
-    }
-    if (autoDuckingContext) {
-        autoDuckingContext.close();
-        autoDuckingContext = null;
-    }
+    stopRustTalkInputPreview();
+    autoDuckingContext = null;
     autoDuckingAnalyser = null;
-    
     if (autoDuckingVoiceActive) {
         autoDuckingVoiceActive = false;
         if (isTalkActive) deactivateTalk();
     }
-    if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Motor de detección de voz detenido.");
+    if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Preview de entrada Rust detenido.");
+}
+
+function armTalkAutoDucking() {
+    if (!generalPrefs.autoDuckingEnable) return;
+    talkAutoDuckingArmed = true;
+    updateTalkButtonVisual();
+    startAutoDuckingEngine();
+}
+
+function disarmTalkAutoDucking() {
+    talkAutoDuckingArmed = false;
+    autoDuckingVoiceActive = false;
+    autoDuckingTimeAbove = 0;
+    autoDuckingTimeBelow = 0;
+    if (isTalkActive) deactivateTalk();
+    if (!talkConfigPreviewActive) stopAutoDuckingEngine();
+    updateTalkButtonVisual();
+}
+
+function toggleTalkAutoDucking() {
+    if (talkAutoDuckingArmed) disarmTalkAutoDucking();
+    else armTalkAutoDucking();
 }
 
 function autoDuckingLoop() {
     if (!autoDuckingContext) return;
     autoDuckingRaf = requestAnimationFrame(autoDuckingLoop);
-
     const now = performance.now();
     const dt = now - autoDuckingLastCheck;
     autoDuckingLastCheck = now;
-
-    const dataArray = new Float32Array(autoDuckingAnalyser.frequencyBinCount);
-    autoDuckingAnalyser.getFloatTimeDomainData(dataArray);
-
-    let sumSquares = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-        sumSquares += dataArray[i] * dataArray[i];
-    }
-    const rms = Math.sqrt(sumSquares / dataArray.length);
-    const db = rms > 0 ? 20 * Math.log10(rms) : -100;
-
+    const meterFresh = autoDuckingInputUpdatedAt > 0 && Date.now() - autoDuckingInputUpdatedAt < 2500;
+    const db = meterFresh ? autoDuckingInputDb : -120;
     const threshold = generalPrefs.autoDuckingThreshold || -30;
     const attackMs = generalPrefs.autoDuckingAttack || 200;
     const releaseMs = generalPrefs.autoDuckingRelease || 1000;
-    
     const duckVuCover = document.getElementById('talk-auto-ducking-vu-cover');
     if (duckVuCover) {
         let pct = 0;
         if (db > -60) pct = Math.min(100, Math.max(0, ((db + 60) / 60) * 100));
-        // El cover tapa desde la derecha. width 100% = tapado (sin sonido). width 0% = destapado (volumen máximo).
         duckVuCover.style.width = (100 - pct) + '%';
     }
-
+    if (!talkAutoDuckingArmed || !generalPrefs.autoDuckingEnable) return;
     if (db >= threshold) {
         autoDuckingTimeBelow = 0;
         autoDuckingTimeAbove += dt;
-        
         if (!autoDuckingVoiceActive && autoDuckingTimeAbove >= attackMs) {
             autoDuckingVoiceActive = true;
-            if (!isTalkActive) {
-                activateTalk();
-            }
+            if (!isTalkActive) activateTalk();
         }
     } else {
         autoDuckingTimeAbove = 0;
         autoDuckingTimeBelow += dt;
-
         if (autoDuckingVoiceActive && autoDuckingTimeBelow >= releaseMs) {
             autoDuckingVoiceActive = false;
-            if (isTalkActive) {
-                deactivateTalk();
-            }
+            if (isTalkActive) deactivateTalk();
         }
     }
-}
-
-// Auto start if enabled after first interaction (browser policy)
-if (generalPrefs.autoDuckingEnable) {
-    document.addEventListener('click', () => {
-        if (generalPrefs.autoDuckingEnable && !autoDuckingContext) {
-            startAutoDuckingEngine();
-        }
-    }, { once: true });
 }
 
 async function populateAutoDuckingDevices() {
     const duckDevice = document.getElementById('talk-auto-ducking-device');
     if (!duckDevice) return;
     try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        const result = await ipcRenderer.invoke('audio-engine-rust-command', {
+            module: 'input',
+            cmd: 'inputDevices',
+            requestId: `talk-input-devices-${Date.now()}`,
+            _timeoutMs: 5000
+        });
+        const message = result?.message || {};
+        const audioInputs = Array.isArray(message.inputs) ? message.inputs : [];
         duckDevice.innerHTML = '<option value="default">Predeterminado</option>';
         audioInputs.forEach(d => {
-            if (d.deviceId === 'default' || d.deviceId === 'communications') return;
             const opt = document.createElement('option');
-            opt.value = d.deviceId;
-            opt.textContent = d.label || `Micrófono ${duckDevice.options.length}`;
+            opt.value = d.id || d.indexId || 'default';
+            opt.textContent = d.name || d.id || `Micrófono ${duckDevice.options.length}`;
             duckDevice.appendChild(opt);
         });
         duckDevice.value = generalPrefs.autoDuckingDevice || 'default';
-    } catch (e) { 
-        console.error("Error al poblar dispositivos para auto-ducking", e);
+    } catch (e) {
+        console.error("Error al poblar dispositivos Rust para auto-ducking", e);
     }
 }
 
+async function startRustTalkInputPreview() {
+    if (autoDuckingContext) return;
+    const devId = generalPrefs.autoDuckingDevice || 'default';
+    await ipcRenderer.invoke('audio-engine-rust-command', {
+        module: 'input',
+        cmd: 'meterStart',
+        requestId: `talk-input-preview-${Date.now()}`,
+        consumer: TALK_INPUT_PREVIEW_ID,
+        sourceId: 'talk.input.preview',
+        deviceId: devId,
+        sampleRate: 44100,
+        channelMap: [0],
+        gain: 1.0,
+        _timeoutMs: 5000
+    });
+    autoDuckingContext = { provider: 'rustInputPreview' };
+    autoDuckingVoiceActive = false;
+    autoDuckingTimeAbove = 0;
+    autoDuckingTimeBelow = 0;
+    autoDuckingLastCheck = performance.now();
+    autoDuckingInputDb = -120;
+    autoDuckingInputUpdatedAt = 0;
+    autoDuckingLoop();
+    if (typeof logSystem === 'function') logSystem("[AUTO-DUCKING] Preview de entrada Rust iniciado.");
+}
+
+async function stopRustTalkInputPreview() {
+    if (!autoDuckingContext) return;
+    await ipcRenderer.invoke('audio-engine-rust-command', {
+        module: 'input',
+        cmd: 'meterStop',
+        requestId: `talk-input-preview-stop-${Date.now()}`,
+        consumer: TALK_INPUT_PREVIEW_ID,
+        _timeoutMs: 5000
+    }).catch(() => {});
+}
+
+function updateTalkInputPreviewFromRustStatus(status = {}) {
+    const meter = (Array.isArray(status.inputMeters) ? status.inputMeters : [])
+        .find(item => item && item.id === TALK_INPUT_PREVIEW_ID);
+    if (!meter) return;
+    const rmsDb = Number(meter.rmsDb);
+    const peakDb = Number(meter.peakDb);
+    autoDuckingInputDb = Number.isFinite(rmsDb) ? rmsDb : (Number.isFinite(peakDb) ? peakDb : -120);
+    autoDuckingInputUpdatedAt = Date.now();
+}
 
 window.addEventListener('lf-panel-focus', (e) => {
     if (e.detail && e.detail.panel !== 'main') {

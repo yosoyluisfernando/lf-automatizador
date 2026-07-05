@@ -33,6 +33,15 @@ module.exports = function (context) {
         packaged: app.isPackaged === true,
     }));
 
+    ipcMain.on('get-app-language', (event) => {
+        try {
+            const prefs = JSON.parse(fs.readFileSync(generalPrefsPath, 'utf-8'));
+            event.returnValue = prefs.language || 'es';
+        } catch (_) {
+            event.returnValue = 'es';
+        }
+    });
+
     // Reconciliación al arrancar: si el usuario dejó activado el auto-arranque,
     // re-aplicamos el registro. Es idempotente y, sobre todo, refresca la ruta
     // del ejecutable (imprescindible en AppImage, cuyo path cambia en cada

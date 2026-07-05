@@ -1,3 +1,12 @@
+// Protocolo IPC: parsing de comandos JSON entrantes (stdin) y helpers de emisión.
+//
+// IncomingCommand es la struct plana con campos Option<T> que cubre todos
+// los comandos posibles del frontend. Se deserializa con serde_json; los campos
+// ausentes quedan como None. El dispatch en main.rs usa `ic.effective_module()`
+// para decidir qué módulo maneja el comando.
+//
+// Helpers compartidos: `now_ms`, `escape_json`, `request_id_field`, `emit_error`.
+
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -130,11 +139,28 @@ pub(crate) struct IncomingCommand {
     #[serde(default)]
     pub channels: Option<u16>,
     #[serde(default)]
+    pub channel_map: Option<Vec<u16>>,
+    #[serde(default)]
     pub sample_rate: Option<u32>,
     #[serde(default)]
     pub ring_buffer_seconds: Option<f32>,
     #[serde(default)]
+    pub frames: Option<u64>,
+    #[serde(default)]
     pub data: Option<String>,
+
+    // ── Input engine ──
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub consumer: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub target: Option<String>,
 
     // ── nowPlaying ──
     #[serde(default)]
@@ -197,6 +223,108 @@ pub(crate) struct IncomingCommand {
     pub owner: Option<String>,
     #[serde(default)]
     pub capture_provider: Option<String>,
+
+    // ── encoder sync (campos adicionales del comando "encoder") ──
+    #[serde(default)]
+    pub source_bus: Option<String>,
+    #[serde(default)]
+    pub requested_owner: Option<String>,
+    #[serde(default)]
+    pub encoder_provider: Option<String>,
+    #[serde(default)]
+    pub rust_pcm_ready: Option<bool>,
+    #[serde(default)]
+    pub pcm_bridge_ready: Option<bool>,
+    #[serde(default)]
+    pub pcm_bridge_mode: Option<String>,
+    #[serde(default)]
+    pub pcm_bridge_reason: Option<String>,
+    #[serde(default)]
+    pub fallback_reason: Option<String>,
+    #[serde(default)]
+    pub capture_format: Option<String>,
+    #[serde(default)]
+    pub transport: Option<String>,
+    #[serde(default)]
+    pub bitrate_kbps: Option<f32>,
+    #[serde(default)]
+    pub speed: Option<f32>,
+    #[serde(default)]
+    pub ffmpeg_time: Option<String>,
+    #[serde(default)]
+    pub max_gap_ms: Option<f32>,
+    #[serde(default)]
+    pub gap_warnings: Option<u64>,
+
+    // ── encoder module (Fase 1) ──
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub server_type: Option<String>,
+    #[serde(default, rename = "type")]
+    pub encoder_type: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub port: Option<String>,
+    #[serde(default)]
+    pub admin_port: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub pass: Option<String>,
+    #[serde(default)]
+    pub mount: Option<String>,
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub bitrate: Option<String>,
+    #[serde(default)]
+    pub legacy: Option<bool>,
+    #[serde(default)]
+    pub icy_name: Option<String>,
+    #[serde(default)]
+    pub icy_genre: Option<String>,
+    #[serde(default)]
+    pub icy_url: Option<String>,
+    #[serde(default)]
+    pub icy_public: Option<bool>,
+    #[serde(default)]
+    pub fdk_available: Option<bool>,
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub local_null: Option<bool>,
+
+    // ── recorder module ──
+    #[serde(default)]
+    pub recorder_id: Option<String>,
+    #[serde(default)]
+    pub recorder_sources: Option<Vec<String>>,
+    #[serde(default)]
+    pub recorder_source: Option<String>,
+    #[serde(default)]
+    pub output_path: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub naming: Option<String>,
+    #[serde(default)]
+    pub naming_prefix: Option<String>,
+    #[serde(default)]
+    pub split_minutes: Option<u32>,
+    #[serde(default)]
+    pub split_hours: Option<u32>,
+    #[serde(default)]
+    pub pre_roll_seconds: Option<u32>,
+    #[serde(default)]
+    pub playlist_name: Option<String>,
 }
 
 fn default_player() -> String {
@@ -246,7 +374,11 @@ impl IncomingCommand {
     }
 
     pub fn effective_module(&self) -> &str {
-        if self.module.is_empty() { "audio" } else { &self.module }
+        if self.module.is_empty() {
+            "audio"
+        } else {
+            &self.module
+        }
     }
 }
 
@@ -319,6 +451,17 @@ mod tests {
         assert_eq!(cmd.channels, Some(2));
         assert_eq!(cmd.sample_rate, Some(44100));
         assert_eq!(cmd.ring_buffer_seconds, Some(5.0));
+    }
+
+    #[test]
+    fn parse_encoder_config_fields() {
+        let json = r#"{"module":"encoder","cmd":"validateConfig","serverId":"s1","serverType":"icecast","ip":"radio.example.com","port":"8000","user":"source","password":"secret","mount":"/live","codec":"mp3","bitrate":"128"}"#;
+        let cmd = IncomingCommand::parse(json).unwrap();
+        assert_eq!(cmd.effective_module(), "encoder");
+        assert_eq!(cmd.server_id.as_deref(), Some("s1"));
+        assert_eq!(cmd.server_type.as_deref(), Some("icecast"));
+        assert_eq!(cmd.ip.as_deref(), Some("radio.example.com"));
+        assert_eq!(cmd.mount.as_deref(), Some("/live"));
     }
 
     #[test]
