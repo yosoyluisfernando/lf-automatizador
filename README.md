@@ -1,5 +1,5 @@
+# ESTE PROYECTO HA SIDO DESCONTINUADO, código fuente queda disponible para libre uso)
 # LF Automatizador  
-# (Descontinuado, código fuente queda disponible para libre uso)
 
 > "Un software diseñado por un operador de audio para operadores de audio"
 
